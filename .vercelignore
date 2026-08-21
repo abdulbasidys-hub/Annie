@@ -1,0 +1,12 @@
+# Vercel only deploys the frontend (src/, index.html, vite.config.js). These
+# are backend-only, but their presence in the repo is what made Vercel
+# auto-detect this as a Python project and try to build it as one — see
+# vercel.json's "framework": "vite" override, which is the actual fix. This
+# file is a belt-and-suspenders addition on top of that.
+app/
+requirements.txt
+.python-version
+railpack.json
+docker-compose.yml
+firestore.indexes.json
+Build.md
