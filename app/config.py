@@ -274,6 +274,22 @@ class Settings(BaseSettings):
             )
         return v.lower()
 
+    @field_validator("environment")
+    @classmethod
+    def _valid_environment(cls, v: str) -> str:
+        """Normalised so ``ENVIRONMENT=Production`` (or trailing whitespace
+        from a pasted dashboard value) doesn't silently fail the exact-match
+        check in app/auth.py and fall back to development-mode cookies —
+        which a browser then refuses to send cross-origin, with no error
+        anywhere to explain why login "succeeds" but every request 401s."""
+        normalised = v.strip().lower()
+        allowed = {"development", "production"}
+        if normalised not in allowed:
+            raise ConfigurationError(
+                f"ENVIRONMENT={v!r} is not one of {sorted(allowed)}."
+            )
+        return normalised
+
     # -- Derived --------------------------------------------------------------
 
     @property
