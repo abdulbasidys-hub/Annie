@@ -126,14 +126,6 @@ CAPABILITIES: Final[tuple[Capability, ...]] = (
         description="Permanent normalised research storage. Source of truth.",
     ),
     Capability(
-        key="jobs",
-        label="Background jobs",
-        tier=Tier.PRIMARY,
-        env_vars=("REDIS_URL",),
-        description="Scheduled ingestion, enrichment and trend runs. The app "
-        "also exposes manual trigger endpoints that work without this.",
-    ),
-    Capability(
         key="ai",
         label="AI reasoning",
         tier=Tier.PRIMARY,
@@ -225,7 +217,6 @@ class Settings(BaseSettings):
     firebase_project_id: str = ""
 
     # -- PRIMARY --------------------------------------------------------------
-    redis_url: str = ""
     openai_api_key: str = ""
     helius_api_key: str = ""
     helius_rpc_url: str = ""

@@ -220,7 +220,7 @@ Be direct about this before relying on anything.
 | **Autonomous research task runner** | **Not written.** `ResearchTask` documents can be created (manually, via the API) but nothing picks one up and works it — Annie only answers what she's asked, in the moment |
 | **Report generator** | **Not written** — §41/§42 |
 | **Narrative clustering** | **Not written** — the `narratives` collection exists but nothing populates it; trend detection uses the deterministic `token.theme` feature as a stand-in |
-| **Scheduler / background workers** | **Not written.** `REDIS_URL` is accepted but nothing reads from it. Use the manual trigger endpoints instead (`POST /api/system/run/discovery`, `/run/enrichment`, `/run/trends`) |
+| **Scheduler / background workers** | **Not written.** No queue is configured (Redis was removed — nothing consumed it, see Build.md §75). Use the manual trigger endpoints instead (`POST /api/system/run/discovery`, `/run/enrichment`, `/run/trends`) |
 | **Firestore composite indexes** | **Declared, not deployed.** `firestore.indexes.json` lists what's needed; you deploy them once — see [Setup](#step-2-deploy-firestore-indexes) |
 | **Tests** | **Not written** |
 
@@ -256,7 +256,6 @@ default.
 | `AUTH_USERNAME` / `AUTH_PASSWORD` | Your login | You choose | **Required to start** |
 | `OPENAI_API_KEY` | Annie + reasoning | platform.openai.com | Primary |
 | `HELIUS_API_KEY` + `HELIUS_RPC_URL` | Discovery + chain truth (§76) | helius.dev | Primary — **without this, nothing is ever discovered** |
-| `REDIS_URL` | Reserved for future workers | Upstash / Railway | Primary, currently unused |
 | `TAVILY_API_KEY` | Annie's web research | tavily.com | Optional |
 | `BIRDEYE_API_KEY` / `BITQUERY_API_KEY` | Extra cross-validation | birdeye.so / bitquery.io | Optional |
 | `VITE_API_BASE_URL` | Where the frontend finds the API | Your backend's URL | **Required to build** |
@@ -686,11 +685,12 @@ Each item is reachable without touching the others.
    — largely the same pattern `agent.py`'s single-turn loop already
    demonstrates, run against a stored question instead of a live chat message.
 
-3. **Background workers / scheduler.** `REDIS_URL` is accepted and unused.
-   The daily cycle is Build.md §40; today it's the three manual trigger
-   endpoints (`/api/system/run/discovery`, `/run/enrichment`, `/run/trends`).
-   A cron calling those three endpoints in order is the fastest path to
-   "automatic" without building a queue.
+3. **Background workers / scheduler.** No queue is configured — Redis was
+   removed from this deployment entirely (nothing consumed it; add it back
+   if a worker needs it). The daily cycle is Build.md §40; today it's the
+   three manual trigger endpoints (`/api/system/run/discovery`,
+   `/run/enrichment`, `/run/trends`). A cron calling those three endpoints in
+   order is the fastest path to "automatic" without building a queue.
 
 4. **Report generator.** Build.md §41-§42. `Report` documents and the API
    routes to serve them exist; nothing writes one yet.

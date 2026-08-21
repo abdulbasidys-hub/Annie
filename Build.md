@@ -2013,8 +2013,8 @@ Initial stack:
 Python
 FastAPI
 Cloud Firestore   (amended from PostgreSQL — §75)
-Redis             (reserved; not yet wired to a worker)
-Background workers (not yet built — manual trigger endpoints exist instead)
+Background workers (not yet built — manual trigger endpoints exist instead;
+                     Redis was removed rather than kept as unused config — §75)
 ```
 
 ### AI
@@ -2222,6 +2222,12 @@ server and grants it no Firestore access. See `app/db/firestore.py`.
 
 Redis remains not required for the initial version, exactly as §72.7
 originally argued — nothing about the Firestore move changes that reasoning.
+Later in this build pass it was removed from the codebase entirely rather
+than left as unused reserved config: no worker ever consumed it, and a
+capability that can never actually be enabled (no code reads `REDIS_URL`)
+is worse than no capability at all — it invites setting a value that does
+nothing. Re-add it (`app/config.py`'s capability list, the `redis_url`
+setting) the day a worker exists to use it, not before.
 
 ---
 
