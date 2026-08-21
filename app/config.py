@@ -239,12 +239,6 @@ class Settings(BaseSettings):
     discord_bot_token: str = ""
 
     # -- Application ----------------------------------------------------------
-    # "development" | "production". Governs session-cookie attributes only
-    # (Secure + SameSite=None needs HTTPS, which local dev does not have) —
-    # nothing else in the app branches on this. Set to "production" on every
-    # real deployment; the default is deliberately the safer-for-localhost one.
-    environment: str = "development"
-
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     cors_origins: str = ""
@@ -274,21 +268,6 @@ class Settings(BaseSettings):
             )
         return v.lower()
 
-    @field_validator("environment")
-    @classmethod
-    def _valid_environment(cls, v: str) -> str:
-        """Normalised so ``ENVIRONMENT=Production`` (or trailing whitespace
-        from a pasted dashboard value) doesn't silently fail the exact-match
-        check in app/auth.py and fall back to development-mode cookies —
-        which a browser then refuses to send cross-origin, with no error
-        anywhere to explain why login "succeeds" but every request 401s."""
-        normalised = v.strip().lower()
-        allowed = {"development", "production"}
-        if normalised not in allowed:
-            raise ConfigurationError(
-                f"ENVIRONMENT={v!r} is not one of {sorted(allowed)}."
-            )
-        return normalised
 
     # -- Derived --------------------------------------------------------------
 

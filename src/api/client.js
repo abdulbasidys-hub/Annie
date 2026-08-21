@@ -6,9 +6,32 @@
  * information the UI needs to be useful: which capability, and which
  * environment variables are missing. Collapsing that into "Request failed"
  * would turn a fixable configuration problem into a mystery.
+ *
+ * Auth is a bearer token in `localStorage`, not a cookie — see app/auth.py's
+ * module docstring for why. This file owns reading/writing it and attaching
+ * it to every request; nothing else in the app touches storage directly.
  */
 
 import { config } from '../config.js'
+
+const TOKEN_KEY = 'annie.token'
+
+function getToken() {
+  try {
+    return localStorage.getItem(TOKEN_KEY)
+  } catch {
+    return null // private browsing / storage disabled — session just won't persist
+  }
+}
+
+function setToken(token) {
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token)
+    else localStorage.removeItem(TOKEN_KEY)
+  } catch {
+    /* same as above */
+  }
+}
 
 export class ApiError extends Error {
   constructor(message, { status, capability, missingEnvVars, detail } = {}) {
@@ -48,12 +71,16 @@ function buildUrl(path, params) {
 
 async function request(method, path, { params, body, signal } = {}) {
   let response
+  const headers = {}
+  if (body) headers['Content-Type'] = 'application/json'
+  const token = getToken()
+  if (token) headers['Authorization'] = `Bearer ${token}`
+
   try {
     response = await fetch(buildUrl(path, params), {
       method,
       signal,
-      credentials: 'include',
-      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      headers: Object.keys(headers).length ? headers : undefined,
       body: body ? JSON.stringify(body) : undefined,
     })
   } catch (error) {
@@ -77,6 +104,9 @@ async function request(method, path, { params, body, signal } = {}) {
   }
 
   if (!response.ok) {
+    // A stale/expired token is worse than none — drop it so the next check
+    // shows the login screen instead of silently failing every request.
+    if (response.status === 401) setToken(null)
     throw new ApiError(payload?.error || `Request failed (${response.status}).`, {
       status: response.status,
       capability: payload?.capability,
@@ -135,7 +165,15 @@ export const api = {
   settings: () => request('GET', '/api/system/settings'),
   updateSetting: (key, value) => request('PATCH', `/api/system/settings/${key}`, { body: { value } }),
 
-  login: (username, password) => request('POST', '/api/auth/login', { body: { username, password } }),
-  logout: () => request('POST', '/api/auth/logout'),
+  login: async (username, password) => {
+    const result = await request('POST', '/api/auth/login', { body: { username, password } })
+    setToken(result?.token ?? null)
+    return result
+  },
+  logout: () => {
+    setToken(null)
+    return request('POST', '/api/auth/logout').catch(() => null) // stateless server-side; failure here is fine
+  },
   me: () => request('GET', '/api/auth/me'),
+  hasToken: () => Boolean(getToken()),
 }

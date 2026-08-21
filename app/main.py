@@ -154,7 +154,10 @@ app.add_middleware(
     # Explicit origins only. `cors_origin_list` returns [] when unset, which
     # blocks all cross-origin calls rather than defaulting to "*".
     allow_origins=settings.cors_origin_list,
-    allow_credentials=True,
+    # No cookies cross-origin (§66 — auth is a bearer token, see app/auth.py),
+    # so no credentialed CORS needed; the Authorization header carries the
+    # session instead and just needs to be an allowed header, below.
+    allow_credentials=False,
     allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )

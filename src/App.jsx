@@ -157,14 +157,21 @@ function Sidebar({ pendingTasks }) {
 /**
  * Auth gate (§66).
  *
- * Checks the session cookie once on mount. `authed === null` means "still
- * checking" — rendered as a blank loading state rather than flashing the
- * login form for every returning visitor while `/api/auth/me` resolves.
+ * Checks once on mount. `authed === null` means "still checking" — rendered
+ * as a blank loading state rather than flashing the login form for every
+ * returning visitor. No stored token means no session, full stop — skips
+ * the network round trip and goes straight to the login screen. A stored
+ * token still gets verified against `/api/auth/me`, since it may have
+ * expired since the last visit.
  */
 export default function AuthGate() {
   const [authed, setAuthed] = useState(null)
 
   const check = useCallback(() => {
+    if (!api.hasToken()) {
+      setAuthed(false)
+      return
+    }
     api
       .me()
       .then(() => setAuthed(true))
