@@ -1,0 +1,34 @@
+# ---- Web ----------------------------------------------------------------
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.0
+python-multipart==0.0.20
+
+# ---- Auth ---------------------------------------------------------------
+# Session JWTs only (app/auth.py) — no argon2/password hashing. AUTH_PASSWORD
+# is a literal credential, not a hash to verify against; see that module's
+# docstring for why hashing it would be theatre, not security.
+pyjwt==2.10.1
+
+# ---- Database (Firestore) -------------------------------------------------
+google-cloud-firestore==2.20.1
+google-auth==2.37.0
+
+# ---- Providers ----------------------------------------------------------
+httpx==0.28.1
+tenacity==9.0.0
+openai==1.59.3
+
+# ---- Bots (§62) -----------------------------------------------------------
+# Telegram uses plain httpx (already above) — no separate SDK needed.
+# Discord needs a persistent Gateway (websocket) connection; discord.py is
+# the standard client for that, handling heartbeats/reconnects/rate limits.
+discord.py==2.7.1
+
+# ---- Analysis -----------------------------------------------------------
+numpy==2.2.1
+scipy==1.15.0
+
+# ---- Logging ------------------------------------------------------------
+structlog==24.4.0

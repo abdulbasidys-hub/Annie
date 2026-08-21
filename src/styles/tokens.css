@@ -1,0 +1,220 @@
+/* =============================================================================
+   Design tokens
+   =============================================================================
+   The interface splits in two, deliberately.
+
+   The DATA SURFACES — tables, trend cards, evidence panels, health rows — are
+   restrained and near-monochrome. They are read daily, densely, often at
+   speed, and colour in them is reserved for meaning: a trend's direction, a
+   value's verification status, a warning about sample size. Nothing is
+   coloured for decoration, so when something is coloured it matters.
+
+   ANNIE'S SURFACE is the one place with warmth. She gets a single accent used
+   nowhere else in the app, so her presence is legible at a glance without the
+   research screens turning chatty.
+
+   Dark is the default because this is a tool people leave open. Light is fully
+   supported, not an afterthought.
+   ============================================================================= */
+
+:root {
+  /* ---- Type -------------------------------------------------------------- */
+  --font-ui: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas,
+    'Liberation Mono', monospace;
+
+  /* Compact scale. This is a dense tool; 14px is the body size, not 16. */
+  --text-2xs: 0.6875rem; /* 11px — table meta, denominators */
+  --text-xs: 0.75rem;    /* 12px — labels, badges */
+  --text-sm: 0.8125rem;  /* 13px — table cells */
+  --text-base: 0.875rem; /* 14px — body */
+  --text-md: 1rem;       /* 16px — chat, prose */
+  --text-lg: 1.125rem;   /* 18px — card titles */
+  --text-xl: 1.375rem;   /* 22px — page titles */
+  --text-2xl: 1.75rem;   /* 28px — stat figures */
+  --text-3xl: 2.25rem;   /* 36px — hero stat */
+
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.65;
+
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  /* ---- Space ------------------------------------------------------------- */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+
+  --radius-sm: 3px;
+  --radius: 6px;
+  --radius-lg: 10px;
+  --radius-full: 999px;
+
+  /* ---- Layout ------------------------------------------------------------ */
+  --sidebar-width: 216px;
+  --header-height: 52px;
+  --content-max: 1440px;
+
+  --transition: 120ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* ---- Semantic hues ----------------------------------------------------- */
+  /* Defined once as hue/sat pairs so light and dark stay in the same family
+     and only lightness changes. Prevents the usual drift where dark-mode green
+     ends up a different green from light-mode green. */
+  --hue-rise: 152;
+  --hue-fall: 28;
+  --hue-new: 205;
+  --hue-alert: 4;
+  --hue-annie: 322;
+}
+
+/* -----------------------------------------------------------------------------
+   Dark (default)
+   -------------------------------------------------------------------------- */
+:root,
+:root[data-theme='dark'] {
+  --bg: hsl(220 16% 8%);
+  --bg-raised: hsl(220 15% 11%);
+  --bg-panel: hsl(220 14% 13%);
+  --bg-inset: hsl(220 18% 6%);
+  --bg-hover: hsl(220 14% 16%);
+  --bg-active: hsl(220 14% 19%);
+
+  --border: hsl(220 12% 20%);
+  --border-strong: hsl(220 11% 28%);
+  --border-subtle: hsl(220 13% 16%);
+
+  --text: hsl(220 16% 93%);
+  --text-secondary: hsl(220 10% 68%);
+  --text-muted: hsl(220 9% 50%);
+  --text-faint: hsl(220 9% 38%);
+  --text-inverse: hsl(220 20% 8%);
+
+  /* Accent for the app chrome: cool, quiet, technical. */
+  --accent: hsl(190 70% 55%);
+  --accent-hover: hsl(190 72% 62%);
+  --accent-bg: hsl(190 60% 55% / 0.12);
+  --accent-border: hsl(190 60% 55% / 0.32);
+
+  /* Annie only. Never used on a data surface. */
+  --annie: hsl(var(--hue-annie) 62% 68%);
+  --annie-bg: hsl(var(--hue-annie) 60% 62% / 0.12);
+  --annie-border: hsl(var(--hue-annie) 55% 62% / 0.3);
+
+  --rise: hsl(var(--hue-rise) 58% 52%);
+  --rise-bg: hsl(var(--hue-rise) 55% 45% / 0.15);
+  --fall: hsl(var(--hue-fall) 78% 58%);
+  --fall-bg: hsl(var(--hue-fall) 75% 50% / 0.15);
+  --new: hsl(var(--hue-new) 72% 62%);
+  --new-bg: hsl(var(--hue-new) 70% 55% / 0.15);
+  --alert: hsl(var(--hue-alert) 70% 60%);
+  --alert-bg: hsl(var(--hue-alert) 68% 52% / 0.15);
+  --neutral: hsl(220 8% 52%);
+  --neutral-bg: hsl(220 8% 50% / 0.14);
+
+  --shadow-sm: 0 1px 2px hsl(220 30% 2% / 0.4);
+  --shadow: 0 2px 8px hsl(220 30% 2% / 0.45);
+  --shadow-lg: 0 8px 28px hsl(220 30% 2% / 0.55);
+
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+  color-scheme: dark;
+}
+
+/* -----------------------------------------------------------------------------
+   Light
+   -------------------------------------------------------------------------- */
+:root[data-theme='light'] {
+  --bg: hsl(220 20% 98%);
+  --bg-raised: hsl(0 0% 100%);
+  --bg-panel: hsl(0 0% 100%);
+  --bg-inset: hsl(220 22% 95%);
+  --bg-hover: hsl(220 20% 95%);
+  --bg-active: hsl(220 20% 92%);
+
+  --border: hsl(220 15% 88%);
+  --border-strong: hsl(220 13% 78%);
+  --border-subtle: hsl(220 18% 92%);
+
+  --text: hsl(220 25% 14%);
+  --text-secondary: hsl(220 12% 38%);
+  --text-muted: hsl(220 10% 52%);
+  --text-faint: hsl(220 10% 64%);
+  --text-inverse: hsl(0 0% 100%);
+
+  --accent: hsl(192 78% 34%);
+  --accent-hover: hsl(192 80% 28%);
+  --accent-bg: hsl(192 70% 40% / 0.1);
+  --accent-border: hsl(192 65% 40% / 0.3);
+
+  --annie: hsl(var(--hue-annie) 58% 44%);
+  --annie-bg: hsl(var(--hue-annie) 60% 50% / 0.09);
+  --annie-border: hsl(var(--hue-annie) 50% 50% / 0.26);
+
+  --rise: hsl(var(--hue-rise) 62% 32%);
+  --rise-bg: hsl(var(--hue-rise) 55% 42% / 0.12);
+  --fall: hsl(var(--hue-fall) 78% 40%);
+  --fall-bg: hsl(var(--hue-fall) 75% 50% / 0.13);
+  --new: hsl(var(--hue-new) 72% 42%);
+  --new-bg: hsl(var(--hue-new) 70% 50% / 0.12);
+  --alert: hsl(var(--hue-alert) 68% 46%);
+  --alert-bg: hsl(var(--hue-alert) 68% 52% / 0.12);
+  --neutral: hsl(220 8% 46%);
+  --neutral-bg: hsl(220 8% 50% / 0.11);
+
+  --shadow-sm: 0 1px 2px hsl(220 25% 30% / 0.07);
+  --shadow: 0 2px 8px hsl(220 25% 30% / 0.09);
+  --shadow-lg: 0 8px 28px hsl(220 25% 30% / 0.13);
+
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+  color-scheme: light;
+}
+
+/* -----------------------------------------------------------------------------
+   Status mapping
+   -------------------------------------------------------------------------- */
+/* Trend lifecycle and verification statuses resolve to colour in exactly one
+   place. A status word that arrives from the API without a mapping here falls
+   through to neutral rather than to an arbitrary colour — an unrecognised
+   status should look unremarkable, not alarming. */
+
+[data-status='rising']   { --status-fg: var(--rise);    --status-bg: var(--rise-bg); }
+[data-status='new']      { --status-fg: var(--new);     --status-bg: var(--new-bg); }
+[data-status='declining']{ --status-fg: var(--fall);    --status-bg: var(--fall-bg); }
+[data-status='stable']   { --status-fg: var(--text-secondary); --status-bg: var(--neutral-bg); }
+[data-status='dead']     { --status-fg: var(--text-faint); --status-bg: transparent; }
+
+[data-status='verified'],
+[data-status='cross_verified'],
+[data-status='ok'],
+[data-status='available'] { --status-fg: var(--rise); --status-bg: var(--rise-bg); }
+
+[data-status='unverified'],
+[data-status='pending'],
+[data-status='degraded']  { --status-fg: var(--fall); --status-bg: var(--fall-bg); }
+
+[data-status='disputed'],
+[data-status='down'],
+[data-status='failed']    { --status-fg: var(--alert); --status-bg: var(--alert-bg); }
+
+[data-status='disabled'],
+[data-status='rejected']  { --status-fg: var(--text-faint); --status-bg: var(--neutral-bg); }
+
+/* Claim types (§32). A *decreasing* visual weight rather than four hues: the
+   ladder from fact to speculation is one dimension, and colouring it would
+   imply four unrelated categories.
+
+   The ramp is deliberately gentle. These values apply to whole paragraphs, and
+   an earlier, steeper version bolded entire answers and dimmed hypotheses
+   below comfortable reading contrast — which punished the honest label. The
+   badge carries the explicit signal; this only tilts the emphasis. */
+[data-claim='fact']        { --claim-fg: var(--text); --claim-weight: 500; --claim-style: normal; }
+[data-claim='inference']   { --claim-fg: var(--text); --claim-weight: 400; --claim-style: normal; }
+[data-claim='hypothesis']  { --claim-fg: var(--text-secondary); --claim-weight: 400; --claim-style: normal; }
+[data-claim='speculation'] { --claim-fg: var(--text-secondary); --claim-weight: 400; --claim-style: italic; }

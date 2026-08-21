@@ -1,0 +1,22 @@
+{
+  "name": "annie-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Research control centre for the Annie Solana memecoin intelligence system.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "fixtures": "node tools/fixture-server/server.js"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^6.0.7"
+  }
+}

@@ -1,0 +1,8 @@
+# SPA fallback for Netlify and Cloudflare Pages.
+#
+# The app uses client-side routing, so a hard refresh on /trends asks the host
+# for a file that does not exist. Without this, that returns 404 — and it only
+# shows up after deploy, because the dev server handles it automatically.
+#
+# Vercel infers this for Vite projects and ignores the file. Harmless there.
+/*  /index.html  200

@@ -1,0 +1,50 @@
+{
+  "indexes": [
+    { "collectionGroup": "tokens", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "is_qualified", "order": "ASCENDING" },
+      { "fieldPath": "created_at", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "tokens", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "launchpad_slug", "order": "ASCENDING" },
+      { "fieldPath": "created_at", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "tokens", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "creator_wallet", "order": "ASCENDING" },
+      { "fieldPath": "created_at", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "tokens", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "launchpad_slug", "order": "ASCENDING" },
+      { "fieldPath": "is_qualified", "order": "ASCENDING" },
+      { "fieldPath": "created_at", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "tokens", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "is_qualified", "order": "ASCENDING" },
+      { "fieldPath": "qualified_at", "order": "ASCENDING" }
+    ]},
+    { "collectionGroup": "trends", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "status", "order": "ASCENDING" },
+      { "fieldPath": "last_observed_at", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "research_tasks", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "status", "order": "ASCENDING" },
+      { "fieldPath": "created_at", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "research_notes", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "is_current", "order": "ASCENDING" },
+      { "fieldPath": "created_at", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "conversations", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "archived", "order": "ASCENDING" },
+      { "fieldPath": "last_message_at", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "reports", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "kind", "order": "ASCENDING" },
+      { "fieldPath": "period_end", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "anomalies", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "acknowledged", "order": "ASCENDING" },
+      { "fieldPath": "detected_at", "order": "DESCENDING" }
+    ]}
+  ],
+  "fieldOverrides": []
+}
