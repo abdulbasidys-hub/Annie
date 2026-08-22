@@ -134,8 +134,12 @@ app/
   providers/
     helius.py                + discovery: known-launchpad scanning (extended)
     dexscreener.py            Unchanged — now the default market-data source
-    bitquery.py, birdeye.py, tavily.py, openai_provider.py   Unchanged
+    tavily.py, openai_provider.py   Unchanged
     registry.py               market_primary -> DexScreener, launches -> Helius (rewired)
+
+  bots/
+    telegram_bot.py           Long-polling bot, shares app/annie/service.py (new)
+    discord_bot.py             Gateway client, same shared service (new)
 
   pipeline/
     qualification.py         Unchanged — was already provider-only, no DB coupling
@@ -207,7 +211,7 @@ Be direct about this before relying on anything.
 | Area | State |
 |---|---|
 | Firestore persistence, repository layer | **Complete, verified against a live project** |
-| Provider adapters, registry, failover | Complete. Helius + DexScreener **verified reachable**; Bitquery/Birdeye adapters exist, unverified live |
+| Provider adapters, registry, failover | Complete. Helius + DexScreener **verified reachable** — the only two adapters this deployment has; Bitquery/Birdeye were removed entirely rather than kept unused (§75) |
 | Statistical engine, trend lifecycle | Complete, unchanged from original — pure functions |
 | Qualification | Complete, unchanged — provider-only, no DB coupling |
 | Discovery (Stage 1) | **Working, narrow.** Scans Pump.fun only (§76). No automatic discovery of *unknown* launchpads |
@@ -257,7 +261,7 @@ default.
 | `OPENAI_API_KEY` | Annie + reasoning | platform.openai.com | Primary |
 | `HELIUS_API_KEY` + `HELIUS_RPC_URL` | Discovery + chain truth (§76) | helius.dev | Primary — **without this, nothing is ever discovered** |
 | `TAVILY_API_KEY` | Annie's web research | tavily.com | Optional |
-| `BIRDEYE_API_KEY` / `BITQUERY_API_KEY` | Extra cross-validation | birdeye.so / bitquery.io | Optional |
+| `TELEGRAM_BOT_TOKEN` / `DISCORD_BOT_TOKEN` | Chat with Annie from either | BotFather / Discord Developer Portal | Optional |
 | `VITE_API_BASE_URL` | Where the frontend finds the API | Your backend's URL | **Required to build** |
 
 **DexScreener needs no account and no key** — it's this deployment's default
@@ -343,12 +347,12 @@ Use a **different** `AUTH_SECRET` in production than locally.
    OPENAI_API_KEY=sk-proj-...
    ```
 
-### Step 6 — Optional providers
+### Step 6 — Optional: Tavily and the bots
 
 ```env
 TAVILY_API_KEY=tvly-...       # https://tavily.com
-BIRDEYE_API_KEY=...           # https://bds.birdeye.so
-BITQUERY_API_KEY=...          # https://bitquery.io — joins cross-validation automatically, see §76
+TELEGRAM_BOT_TOKEN=...        # BotFather on Telegram -> /newbot
+DISCORD_BOT_TOKEN=...         # Discord Developer Portal -> your app -> Bot page
 ```
 
 ### Step 7 — Fill in `.env`
@@ -499,13 +503,11 @@ cross-origin — the cookie gets set but the browser won't send it back.
    | `FIREBASE_SERVICE_ACCOUNT_JSON` | the service-account file's exact contents, one line |
    | `AUTH_SECRET` | a **new** random string, not your local one |
    | `AUTH_USERNAME` / `AUTH_PASSWORD` | your login |
-   | `ENVIRONMENT` | `production` |
    | `OPENAI_API_KEY` | Step 5 |
    | `HELIUS_API_KEY` / `HELIUS_RPC_URL` | Step 4 |
-   | `TAVILY_API_KEY` / `BIRDEYE_API_KEY` / `BITQUERY_API_KEY` | optional |
+   | `TAVILY_API_KEY` | optional |
+   | `TELEGRAM_BOT_TOKEN` / `DISCORD_BOT_TOKEN` | optional |
    | `CORS_ORIGINS` | your frontend URL, e.g. `https://annie.vercel.app` |
-   | `API_HOST` | `0.0.0.0` |
-   | `LOG_LEVEL` | `info` |
 
 6. Note the public URL — that is your `VITE_API_BASE_URL`.
 

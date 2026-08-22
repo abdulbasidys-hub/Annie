@@ -105,15 +105,18 @@ class DexScreenerAdapter(HttpProvider):
         DexScreener has no public OHLCV endpoint. Returning an empty list would
         be indistinguishable from "no trading activity" and would corrupt any
         peak-market-cap calculation that fell back to it, so this refuses
-        instead. Bitquery covers OHLCV (§10).
+        instead. No adapter in this deployment covers OHLCV (§10) — add one
+        if that data becomes necessary.
         """
         raise NotImplementedError(
-            "DexScreener exposes no public OHLCV endpoint; use the Bitquery adapter."
+            "DexScreener exposes no public OHLCV endpoint, and no other "
+            "market-data adapter is configured in this deployment."
         )
 
     async def get_peak_market_cap(self, *_: Any, **__: Any) -> None:
         raise NotImplementedError(
-            "DexScreener cannot answer historical peaks; use the Bitquery adapter."
+            "DexScreener cannot answer historical peaks, and no other "
+            "market-data adapter is configured in this deployment."
         )
 
     # -- DexDataProvider ------------------------------------------------------
@@ -143,8 +146,9 @@ class DexScreenerAdapter(HttpProvider):
 
     async def get_new_pairs(self, *_: Any, **__: Any) -> list[MarketQuote]:
         raise NotImplementedError(
-            "DexScreener's new-pairs feed is not part of the documented public API; "
-            "use the Bitquery adapter for launch discovery."
+            "DexScreener's new-pairs feed is not part of the documented public "
+            "API. Discovery in this deployment runs through Helius instead — "
+            "see app/pipeline/discovery.py."
         )
 
     # -- parsing --------------------------------------------------------------

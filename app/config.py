@@ -150,21 +150,6 @@ CAPABILITIES: Final[tuple[Capability, ...]] = (
         "engine's default market-data source in this deployment.",
     ),
     Capability(
-        key="market_birdeye",
-        label="Cross-validation (Birdeye)",
-        tier=Tier.OPTIONAL,
-        env_vars=("BIRDEYE_API_KEY",),
-        description="Secondary market statistics and historical market information.",
-    ),
-    Capability(
-        key="market_bitquery",
-        label="Market & launch data (Bitquery)",
-        tier=Tier.OPTIONAL,
-        env_vars=("BITQUERY_API_KEY",),
-        description="Not this deployment's discovery source (that's Helius). "
-        "If configured, used as an extra cross-validation reading.",
-    ),
-    Capability(
         key="web_research",
         label="Web research (Tavily)",
         tier=Tier.OPTIONAL,
@@ -223,8 +208,6 @@ class Settings(BaseSettings):
 
     # -- OPTIONAL -------------------------------------------------------------
     dexscreener_api_key: str = ""
-    birdeye_api_key: str = ""
-    bitquery_api_key: str = ""
     tavily_api_key: str = ""
     telegram_bot_token: str = ""
     discord_bot_token: str = ""

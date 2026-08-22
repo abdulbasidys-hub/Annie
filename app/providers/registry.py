@@ -30,8 +30,6 @@ import structlog
 
 from app.config import CapabilityStatus, Settings, get_settings
 from app.db.enums import VerificationStatus
-from app.providers.birdeye import BirdeyeAdapter
-from app.providers.bitquery import BitqueryAdapter
 from app.providers.dexscreener import DexScreenerAdapter
 from app.providers.helius import HeliusAdapter
 from app.providers.interfaces import ProviderError, ProviderUnavailable
@@ -87,12 +85,8 @@ class ProviderRegistry:
         s = self._settings
         if key == "helius":
             return HeliusAdapter(s.helius_api_key, s.helius_rpc_url)
-        if key == "bitquery":
-            return BitqueryAdapter(s.bitquery_api_key)
         if key == "dexscreener":
             return DexScreenerAdapter(s.dexscreener_api_key)
-        if key == "birdeye":
-            return BirdeyeAdapter(s.birdeye_api_key)
         if key == "tavily":
             return TavilyAdapter(s.tavily_api_key)
         if key == "openai_images":
@@ -115,12 +109,11 @@ class ProviderRegistry:
     # stays in one place.
     #
     # This deployment (Build.md §9.2 amendment) runs discovery and market data
-    # off Helius + DexScreener rather than Bitquery: DexScreener needs no
-    # credential and Helius is already the highest-trust chain source, so
-    # between them nothing paid is required to boot. BitqueryAdapter is still
-    # built and still usable — set BITQUERY_API_KEY and it joins
-    # ``market_secondaries`` automatically for extra cross-validation — but it
-    # is not what either property below returns by default.
+    # off Helius + DexScreener only: DexScreener needs no credential and
+    # Helius is already the highest-trust chain source, so between them
+    # nothing paid is required to boot. Bitquery and Birdeye were removed
+    # entirely rather than kept as unused optional adapters — see Build.md's
+    # Redis removal note for the same reasoning applied here.
 
     @property
     def blockchain(self) -> HeliusAdapter:
@@ -144,8 +137,14 @@ class ProviderRegistry:
 
     @property
     def market_secondaries(self) -> list[Any]:
-        """Ordered fallbacks / cross-validators, each skipped if unconfigured."""
-        return [self.get("birdeye"), self.get("bitquery")]
+        """Ordered fallbacks / cross-validators, each skipped if unconfigured.
+
+        Empty in this deployment — Bitquery and Birdeye were removed rather
+        than kept as unused optional adapters. `resolve_market_cap` handles
+        an empty list correctly (no cross-validation, DexScreener alone
+        decides); add a new secondary here if one is ever wanted again.
+        """
+        return []
 
     @property
     def web_research(self) -> TavilyAdapter:
@@ -243,8 +242,6 @@ class ProviderRegistry:
         checks = {
             "helius": "blockchain",
             "dexscreener": "market_primary",
-            "bitquery": "market_bitquery",
-            "birdeye": "market_birdeye",
             "tavily": "web_research",
             "openai_images": "ai",
         }
