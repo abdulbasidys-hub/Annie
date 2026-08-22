@@ -22,6 +22,7 @@ import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 import structlog
 
@@ -61,11 +62,24 @@ class HeliusAdapter(HttpProvider):
         self._api_key = (api_key or "").strip()
         self._rpc_url = (rpc_url or "").strip()
 
-        # Base URL is the RPC endpoint; the enhanced API is called with an
-        # absolute URL through the same instrumented client so both surfaces
-        # appear under one provider on the health page.
+        # The RPC URL Helius issues carries the key as a query string
+        # (?api-key=...). That query string is split off here and sent as an
+        # explicit request param instead of left in base_url: httpx's
+        # base_url + relative-path joining mishandles a query string already
+        # present in base_url when the request path is "" or "/" — it
+        # silently appends a stray "/" *inside* the query value, corrupting
+        # the key into "...<key>/" and turning every single call into a 401.
+        # Confirmed by comparing an identical request made directly (worked)
+        # against one made through this adapter (401'd) — see git history.
+        parsed = urlsplit(self._rpc_url) if self._rpc_url else None
+        origin = f"{parsed.scheme}://{parsed.netloc}{parsed.path}" if parsed and parsed.netloc else ""
+        self._rpc_params: dict[str, str] = dict(parse_qsl(parsed.query)) if parsed and parsed.query else {}
+
+        # Base URL is the RPC endpoint (query-string-free); the enhanced API
+        # is called with an absolute URL through the same instrumented
+        # client so both surfaces appear under one provider on the health page.
         super().__init__(
-            base_url=self._rpc_url or "https://mainnet.helius-rpc.com",
+            base_url=origin or "https://mainnet.helius-rpc.com",
             headers={"Content-Type": "application/json"},
             rate_per_second=10.0,
             burst=20,
@@ -98,7 +112,9 @@ class HeliusAdapter(HttpProvider):
             "method": method,
             "params": params,
         }
-        data = await self.request("POST", "", operation=operation, json=body)
+        data = await self.request(
+            "POST", "", operation=operation, json=body, params=self._rpc_params or None
+        )
         if data is None:
             return None
         if "error" in data:

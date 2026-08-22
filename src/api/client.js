@@ -165,6 +165,12 @@ export const api = {
   settings: () => request('GET', '/api/system/settings'),
   updateSetting: (key, value) => request('PATCH', `/api/system/settings/${key}`, { body: { value } }),
 
+  // Manual pipeline triggers (§20) — there is no scheduler yet, so these are
+  // the only way discovery/enrichment/trends ever run.
+  runDiscovery: (hours) => request('POST', '/api/system/run/discovery', { params: { hours } }),
+  runEnrichment: (batchSize) => request('POST', '/api/system/run/enrichment', { params: { batch_size: batchSize } }),
+  runTrends: () => request('POST', '/api/system/run/trends'),
+
   login: async (username, password) => {
     const result = await request('POST', '/api/auth/login', { body: { username, password } })
     setToken(result?.token ?? null)

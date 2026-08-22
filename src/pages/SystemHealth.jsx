@@ -1,7 +1,109 @@
+import { useState } from 'react'
+
 import { api } from '../api/client.js'
 import { useApi } from '../api/useApi.js'
-import { Async, Badge, Empty, Panel, Sample, Stat } from '../components/primitives.jsx'
+import { Async, Badge, Empty, ErrorState, Panel, Sample, Stat } from '../components/primitives.jsx'
 import { count, duration, humanise, percent, relative, usd } from '../lib/format.js'
+
+/**
+ * One manual pipeline trigger (§20). No scheduler exists yet — this is
+ * currently the only way discovery/enrichment/trends ever run. Each stage
+ * owns its own run/result/error state rather than sharing one, since they
+ * run independently and a slow discovery run must not block the trends
+ * button from being usable.
+ */
+function PipelineAction({ label, hint, onRun, formatResult }) {
+  const [state, setState] = useState('idle') // idle | running | done | error
+  const [result, setResult] = useState(null)
+  const [error, setError] = useState(null)
+
+  async function run() {
+    setState('running')
+    setError(null)
+    try {
+      const data = await onRun()
+      setResult(data)
+      setState('done')
+    } catch (err) {
+      setError(err)
+      setState('error')
+    }
+  }
+
+  return (
+    <div
+      className="stack gap-2"
+      style={{ paddingBottom: 'var(--space-3)', borderBottom: '1px solid var(--border-subtle)' }}
+    >
+      <div className="row between wrap gap-2">
+        <div className="stack" style={{ gap: 0 }}>
+          <strong style={{ fontSize: 'var(--text-sm)' }}>{label}</strong>
+          <span className="faint" style={{ fontSize: 'var(--text-2xs)' }}>{hint}</span>
+        </div>
+        <button className="btn btn--sm btn--primary" onClick={run} disabled={state === 'running'}>
+          {state === 'running' ? 'Running…' : 'Run now'}
+        </button>
+      </div>
+      {state === 'done' && result && (
+        <div className="secondary" style={{ fontSize: 'var(--text-xs)' }}>{formatResult(result)}</div>
+      )}
+      {state === 'error' && <ErrorState error={error} />}
+    </div>
+  )
+}
+
+function Pipeline({ onRan }) {
+  return (
+    <Panel
+      title="Pipeline"
+      meta="no scheduler yet — each stage runs when you click it"
+    >
+      <div className="stack gap-4">
+        <PipelineAction
+          label="1. Discovery"
+          hint="Scan known launchpad programs (Helius) for new mints from the last 24 hours."
+          onRun={async () => {
+            const r = await api.runDiscovery(24)
+            onRan()
+            return r
+          }}
+          formatResult={(r) =>
+            `${r.launches_seen ?? 0} launch(es) seen, ${r.tokens_created ?? 0} new token(s) created, ` +
+            `${r.tokens_already_known ?? 0} already known.` +
+            (r.errors?.length ? ` ${r.errors.length} error(s) — see server logs.` : '')
+          }
+        />
+        <PipelineAction
+          label="2. Enrichment"
+          hint="Qualify and enrich up to 50 newly discovered tokens (metadata, creator wallet, features)."
+          onRun={async () => {
+            const r = await api.runEnrichment(50)
+            onRan()
+            return r
+          }}
+          formatResult={(r) =>
+            `${r.evaluated ?? 0} evaluated, ${r.qualified ?? 0} qualified, ${r.enriched ?? 0} enriched.` +
+            (r.errors?.length ? ` ${r.errors.length} error(s) — see server logs.` : '')
+          }
+        />
+        <PipelineAction
+          label="3. Trend analysis"
+          hint="Compare qualified-token cohorts against their historical baselines."
+          onRun={async () => {
+            const r = await api.runTrends()
+            onRan()
+            return r
+          }}
+          formatResult={(r) =>
+            `${r.trends_created ?? 0} new trend(s), ${r.trends_updated ?? 0} updated, ` +
+            `${r.status_changes ?? 0} status change(s).` +
+            (r.skipped_windows?.length ? ` Skipped: ${r.skipped_windows.join(', ')}.` : '')
+          }
+        />
+      </div>
+    </Panel>
+  )
+}
 
 /**
  * System Health (§50).
@@ -25,6 +127,8 @@ export default function SystemHealth() {
           trend comparisons rather than averaged over.
         </p>
       </div>
+
+      <Pipeline onRan={quality.reload} />
 
       <Async state={capabilities}>
         {(caps) => {
