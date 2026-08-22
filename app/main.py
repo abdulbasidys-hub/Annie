@@ -25,7 +25,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.routes import annie, auth, catalogue, intelligence, system
+from app.api.routes import annie, auth, catalogue, intelligence, system, webhooks
 from app.auth import require_auth
 from app.config import CapabilityUnavailable, Settings, get_settings, startup_banner
 from app.db.firestore import dispose_client, get_client
@@ -196,10 +196,13 @@ async def provider_handler(request: Request, exc: ProviderError):
 
 
 # Every data/AI route requires a valid session (§66) — applied at the router
-# level so a route added later is protected by default. /api/auth/* and the
-# bare /health liveness check below are the only unauthenticated surface.
+# level so a route added later is protected by default. /api/auth/*, the
+# bare /health liveness check, and /api/webhooks/* (Helius calls this
+# directly server-to-server, authenticated by its own shared secret instead
+# — see app/api/routes/webhooks.py) are the only unauthenticated surface.
 _protected = [Depends(require_auth)]
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+app.include_router(webhooks.router, prefix="/api/webhooks", tags=["webhooks"])
 app.include_router(system.router, prefix="/api/system", tags=["system"], dependencies=_protected)
 app.include_router(catalogue.router, prefix="/api", tags=["catalogue"], dependencies=_protected)
 app.include_router(intelligence.router, prefix="/api", tags=["intelligence"], dependencies=_protected)

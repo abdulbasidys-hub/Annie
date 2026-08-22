@@ -206,6 +206,13 @@ class Settings(BaseSettings):
     helius_api_key: str = ""
     helius_rpc_url: str = ""
 
+    # Shared secret Helius echoes back in every webhook call (the `authHeader`
+    # given at webhook-creation time), verified in app/api/routes/webhooks.py.
+    # Not a Capability — nothing shows this as "degraded" on System Health if
+    # unset, because absence just means the webhook route rejects everything,
+    # which is the safe failure mode, not a broken one.
+    helius_webhook_secret: str = ""
+
     # -- OPTIONAL -------------------------------------------------------------
     dexscreener_api_key: str = ""
     tavily_api_key: str = ""
