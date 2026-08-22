@@ -227,7 +227,6 @@ class Settings(BaseSettings):
     auth_username: str = ""
     auth_password: str = ""
     log_level: str = "info"
-    autonomous_research_enabled: bool = False
 
     # -- Model selection ------------------------------------------------------
     # Pinned to gpt-5.6-luna everywhere, deliberately — reasoning, vision and

@@ -3,11 +3,19 @@
 See app/pipeline/discovery.py's module docstring for why: Pump.fun's real
 transaction volume (~150+ tx/sec, confirmed by direct measurement — 1000
 signatures covered 6 seconds) makes signature polling structurally unable
-to cover a real time window. Helius pushes a ``TOKEN_MINT`` event here the
+to cover a real time window. Helius pushes a ``CREATE`` event here the
 instant one happens instead. The webhook itself is registered once against
 Helius's REST API (a one-time setup call, not something this route does —
-see README for how), filtered to ``transactionTypes: ["TOKEN_MINT"]`` and
+see README for how), filtered to ``transactionTypes: ["CREATE"]`` and
 scoped to the launchpad program IDs in ``KNOWN_LAUNCHPAD_PROGRAMS``.
+
+Confirmed against a real Helius delivery on 2026-08-22: a genuine Pump.fun
+create transaction classifies as ``type: "CREATE"``, ``source: "PUMP_FUN"``
+in Helius's enhanced parser — not ``TOKEN_MINT``, which was the initial
+(wrong) guess and produced zero deliveries. The mint always showed up in
+``tokenTransfers[0].mint`` on the real payload, so the extraction order
+below (``tokenTransfers`` first, ``accountData`` fallback) needed no change
+once the filter was corrected.
 
 **Authenticated by a shared secret, not a session.** Helius calls this
 directly — there is no logged-in user, so this route is deliberately NOT
@@ -17,8 +25,9 @@ created; anyone who doesn't send it back gets a 401 without their payload
 being read.
 
 **Payload parsing is defensive, not confident.** Helius's enhanced-webhook
-schema for `TOKEN_MINT` specifically isn't pinned down in one authoritative
-place the way `getSignaturesForAddress` is. This checks the most likely
+schema for `CREATE` isn't pinned down in one authoritative place the way
+`getSignaturesForAddress` is — confirmed correct against one real delivery,
+not an official spec. This checks the most likely
 locations for a mint address in order (`tokenTransfers`, then
 `accountData[].tokenBalanceChanges`) and logs — never crashes — on a shape
 it doesn't recognise. If mints stop appearing despite the webhook visibly

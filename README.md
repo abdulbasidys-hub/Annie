@@ -42,9 +42,13 @@ original spec and why.
 
 Six stages, cheap work before expensive work:
 
-1. **Discovery** — scan known launchpad programs for new mints (currently
-   Pump.fun; see [What is not built](#what-is-not-built) for the honest scope
-   of this).
+1. **Discovery** — a Helius webhook pushes a `CREATE` event the instant a new
+   mint happens on a known launchpad program (currently Pump.fun; see
+   [What is not built](#what-is-not-built) for the honest scope of this).
+   Signature polling exists too, but only as a backfill — it structurally
+   cannot keep up with Pump.fun's real transaction volume (measured directly:
+   1000 signatures covered 6 seconds of chain time), which is why the webhook
+   is the primary mechanism.
 2. **Qualification** — did it cross $100k / $250k / $500k / $1M market cap?
    Record *why* we believe so, from which provider, and whether anything
    disagreed.
@@ -214,7 +218,7 @@ Be direct about this before relying on anything.
 | Provider adapters, registry, failover | Complete. Helius + DexScreener **verified reachable** — the only two adapters this deployment has; Bitquery/Birdeye were removed entirely rather than kept unused (§75) |
 | Statistical engine, trend lifecycle | Complete, unchanged from original — pure functions |
 | Qualification | Complete, unchanged — provider-only, no DB coupling |
-| Discovery (Stage 1) | **Working, narrow.** Scans Pump.fun only (§76). No automatic discovery of *unknown* launchpads |
+| Discovery (Stage 1) | **Working, narrow — webhook-driven.** A Helius webhook (`transactionTypes: ["CREATE"]`) pushes new Pump.fun mints in real time; signature polling remains only as a backfill (§76). No automatic discovery of *unknown* launchpads |
 | Enrichment (Stage 2/3) | **Working.** Metadata, creator wallet, deterministic features |
 | Trend engine | **Rewritten for Firestore, logically unchanged.** Not yet run against real qualified-token volume |
 | **Annie's chat agent** | **Built and verified against live OpenAI** — the one piece the original session left entirely unwritten |
@@ -231,11 +235,24 @@ Be direct about this before relying on anything.
 Two specific things to know before trusting output:
 
 - **Discovery only sees Pump.fun right now.** `app/providers/helius.py`'s
-  `KNOWN_LAUNCHPAD_PROGRAMS` is a short, explicit list. A launch on a program
-  not in that list is invisible — not filtered out, not deprioritized,
-  *invisible*. This directly limits Build.md §5's "must not be limited to
-  Pump.fun" goal until either more program IDs are added or Bitquery is
-  reinstated as the discovery source (§76 explains the trade).
+  `KNOWN_LAUNCHPAD_PROGRAMS` is a short, explicit list, and the Helius webhook
+  (see `app/api/routes/webhooks.py`) is registered against exactly that list's
+  program IDs. A launch on a program not in that list is invisible — not
+  filtered out, not deprioritized, *invisible*. This directly limits Build.md
+  §5's "must not be limited to Pump.fun" goal until either more program IDs
+  are added (and the webhook's `accountAddresses` updated to match) or
+  Bitquery is reinstated as the discovery source (§76 explains the trade).
+- **The webhook's `transactionTypes` filter matters and isn't documented
+  anywhere authoritative.** A real Pump.fun create transaction classifies as
+  `type: "CREATE"`, `source: "PUMP_FUN"` in Helius's enhanced parser —
+  confirmed empirically against a real delivery on 2026-08-22, not from
+  Helius's docs (the initial guess, `TOKEN_MINT`, silently produced zero
+  deliveries for hours). If discovery ever goes quiet again, checking the
+  registered webhook's `transactionTypes` against a fresh empirical sample
+  (fetch a known-new mint from `frontend-api-v3.pump.fun/coins`, walk its
+  signature history back to genesis, diff the raw tx logs against Helius's
+  enhanced parse of that same signature) is the reliable way to re-derive the
+  correct value — not re-reading Helius's docs.
 - **Without Firestore's composite indexes deployed, list/dashboard queries
   will 500** with a `FAILED_PRECONDITION: The query requires an index` error.
   This is normal, expected Firestore behavior, not a bug — see the setup step
@@ -260,6 +277,7 @@ default.
 | `AUTH_USERNAME` / `AUTH_PASSWORD` | Your login | You choose | **Required to start** |
 | `OPENAI_API_KEY` | Annie + reasoning | platform.openai.com | Primary |
 | `HELIUS_API_KEY` + `HELIUS_RPC_URL` | Discovery + chain truth (§76) | helius.dev | Primary — **without this, nothing is ever discovered** |
+| `HELIUS_WEBHOOK_SECRET` | Authenticates Helius's webhook calls to `/api/webhooks/helius` | You choose, then pass the same value as `authHeader` when registering the webhook (Setup Step 4) | Primary — **without this, discovery silently gets nothing** even with a valid `HELIUS_API_KEY` |
 | `TAVILY_API_KEY` | Annie's web research | tavily.com | Optional |
 | `TELEGRAM_BOT_TOKEN` / `DISCORD_BOT_TOKEN` | Chat with Annie from either | BotFather / Discord Developer Portal | Optional |
 | `VITE_API_BASE_URL` | Where the frontend finds the API | Your backend's URL | **Required to build** |
@@ -336,6 +354,25 @@ Use a **different** `AUTH_SECRET` in production than locally.
    ```
    The key appearing twice is correct — setting only one reports `DEGRADED`,
    not `AVAILABLE`.
+3. **Register the discovery webhook** — a one-time REST call against Helius's
+   API, not something the app does for you. Pick a `HELIUS_WEBHOOK_SECRET`
+   (any long random string) and set it in `.env` first, then:
+   ```bash
+   curl -X POST "https://api.helius.xyz/v0/webhooks?api-key=<HELIUS_API_KEY>" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "webhookURL": "https://<your-railway-domain>/api/webhooks/helius",
+       "transactionTypes": ["CREATE"],
+       "accountAddresses": ["6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"],
+       "webhookType": "enhanced",
+       "authHeader": "<HELIUS_WEBHOOK_SECRET>"
+     }'
+   ```
+   `transactionTypes` must be `["CREATE"]`, not the more obvious-sounding
+   `TOKEN_MINT` — see [What is not built](#what-is-not-built) for how that was
+   confirmed. The response includes a `webhookID`; save it, you'll need it to
+   update `accountAddresses` later if you add launchpads. Free tier includes
+   exactly one webhook.
 
 ### Step 5 — OpenAI (primary — Annie herself)
 
@@ -676,9 +713,12 @@ only use of `--annie`. Personality lives in her voice, not in your charts.
 Each item is reachable without touching the others.
 
 1. **Broaden discovery beyond Pump.fun.** Add program IDs to
-   `KNOWN_LAUNCHPAD_PROGRAMS` in `app/providers/helius.py` as you identify
-   them, or reinstate Bitquery as the discovery source (§76) for indexed,
-   ecosystem-wide coverage instead of a fixed list.
+   `KNOWN_LAUNCHPAD_PROGRAMS` in `app/providers/helius.py`, then update the
+   registered webhook's `accountAddresses` to match (`PUT
+   https://api.helius.xyz/v0/webhooks/<webhookID>?api-key=...` with the full
+   new list — see Step 4 in Setup) as you identify them, or reinstate Bitquery
+   as the discovery source (§76) for indexed, ecosystem-wide coverage instead
+   of a fixed list.
 
 2. **The autonomous research task runner.** `ResearchTask` documents exist and
    `budget_exhausted` is implemented on the dataclass; nothing polls the

@@ -298,13 +298,16 @@ HeliusAdapter
 The rest of the application must never depend directly on Helius-specific code.
 
 **§9.2 Amendment — Helius also serves discovery in this deployment.** With
-Bitquery not used by default (§10's amendment below), Stage 1 discovery scans
-known launchpad program IDs via Helius RPC (`getSignaturesForAddress` +
-parsed-transaction inspection) instead of an indexed launch feed. This is
-narrower than an indexer: only programs explicitly listed in
-`KNOWN_LAUNCHPAD_PROGRAMS` (currently Pump.fun) are seen. See
-`app/providers/helius.py` and README's "What is not built" for the honest
-scope of this.
+Bitquery not used by default (§10's amendment below), Stage 1 discovery's
+primary path is a Helius **webhook** (`app/api/routes/webhooks.py`,
+`transactionTypes: ["CREATE"]`) pushing new mints on known launchpad program
+IDs in real time; RPC polling (`getSignaturesForAddress` +
+parsed-transaction inspection) survives only as a backfill, since it
+measurably can't keep pace with Pump.fun's real transaction volume — see
+§76's fuller account of why. Either way this is narrower than an indexer:
+only programs explicitly listed in `KNOWN_LAUNCHPAD_PROGRAMS` (currently
+Pump.fun) are seen. See `app/providers/helius.py` and README's "What is not
+built" for the honest scope of this.
 
 ---
 
@@ -2240,12 +2243,27 @@ not this deployment's default. Instead:
 
 * **Discovery (§5, §20)** runs on Helius, scanning known launchpad program
   IDs (`app/providers/helius.py`'s `KNOWN_LAUNCHPAD_PROGRAMS`, currently just
-  Pump.fun) via `getSignaturesForAddress` and parsed-transaction inspection.
-  This is a real, working discovery path — and a narrower one than an
-  indexer: a launchpad not in that list is invisible to it, and §5's goal of
-  *automatically* noticing brand-new, previously-unknown launchpads is not
-  met by this approach. That gap is closed either by adding known program IDs
-  as they're identified, or by reinstating Bitquery (set `BITQUERY_API_KEY`,
+  Pump.fun). §20's original design assumed polling
+  (`getSignaturesForAddress` + parsed-transaction inspection) would be
+  enough; in practice it isn't — measured directly, 1000 signatures covered
+  only 6 seconds of real chain time against Pump.fun's actual volume, so a
+  poll loop can never see more than a sliver of what happened. The primary
+  mechanism is now a **Helius webhook** (`app/api/routes/webhooks.py`,
+  `POST /api/webhooks/helius`): Helius pushes an enhanced transaction the
+  instant one matching the filter happens, instead of this app asking and
+  hoping. The filter is `transactionTypes: ["CREATE"]` — confirmed
+  empirically against a real delivery (not from Helius's docs, which don't
+  pin this down for Pump.fun specifically): a genuine Pump.fun create
+  transaction classifies as `type: "CREATE"`, `source: "PUMP_FUN"` in
+  Helius's enhanced parser. Polling remains in the codebase as a backfill
+  path, not the primary one. This is still a real, working discovery path —
+  and a narrower one than an indexer: a launchpad not in
+  `KNOWN_LAUNCHPAD_PROGRAMS` (and therefore not in the webhook's
+  `accountAddresses`) is invisible to it, and §5's goal of *automatically*
+  noticing brand-new, previously-unknown launchpads is not met by this
+  approach. That gap is closed either by adding known program IDs as
+  they're identified (updating both the dict and the webhook's registered
+  `accountAddresses`), or by reinstating Bitquery (set `BITQUERY_API_KEY`,
   point the registry's `launches` property back at it).
 * **Market data / qualification (§4, §11)** runs on DexScreener by default —
   it needs no credential, so it's the one provider guaranteed available in
@@ -2271,14 +2289,30 @@ user table:
 * `AUTH_USERNAME` / `AUTH_PASSWORD` are literal credentials in configuration,
   compared in constant time (`hmac.compare_digest`), not hashed — hashing a
   secret that already lives in plaintext in the environment would be
-  theatre. `AUTH_SECRET` signs a session JWT stored in an httpOnly cookie.
-* Every API route requires a valid session except `/api/auth/*` and the bare
-  `/health` liveness check (`app/main.py`'s router-level `dependencies`, so a
-  route added later is protected by default rather than by remembering to
-  add a check).
+  theatre. `AUTH_SECRET` signs a session JWT.
+* Every API route requires a valid session except `/api/auth/*`,
+  `/api/webhooks/*` (Helius calls that one server-to-server, authenticated by
+  its own shared secret instead — §76), and the bare `/health` liveness
+  check (`app/main.py`'s router-level `dependencies`, so a route added later
+  is protected by default rather than by remembering to add a check).
 * This guards the routes that spend money (`/api/annie/chat` calls OpenAI)
   and see the research data — both need to sit behind a login before this
   system is reachable from the public internet.
+
+**Revised mid-build: the session token is a Bearer token, not an httpOnly
+cookie.** The original design above shipped as a cookie first, then broke in
+production — cross-origin httpOnly cookies are unreliable by default across
+unrelated domains in 2026 (Safari blocks third-party cookies unconditionally;
+Firefox partitions them), and the frontend (Vercel) and backend (Railway) are
+exactly that: unrelated domains, not subdomains of one site. The fix was to
+stop relying on the browser's cookie jar entirely — the JWT `AUTH_SECRET`
+still signs, `/api/auth/login` still verifies the same credentials, but the
+token now comes back in the response body, is stored client-side
+(`localStorage`), and is sent back as `Authorization: Bearer <token>` on every
+request instead of riding along automatically. CORS
+(`app/main.py`) runs with `allow_credentials=False` accordingly — nothing
+about this design needs credentialed cross-origin cookies, so nothing asks
+for them.
 
 See `app/auth.py`.
 
@@ -2294,8 +2328,11 @@ here would just give it a chance to go stale in two places. As of this build
 pass: Firestore persistence, provider adapters (Helius discovery + chain
 truth, DexScreener market data, OpenAI + Tavily), the qualification engine,
 the trend engine, Annie's chat agent with a bounded tool-calling loop, and
-single-operator authentication are all real and have been exercised against
-a live Firestore project and a live OpenAI call — not merely written. Not yet
+single-operator (Bearer-token) authentication are all real and have been
+exercised against a live Firestore project and a live OpenAI call — not
+merely written. Discovery specifically has been verified end-to-end against
+a real, unprompted Helius webhook delivery in production (§76), not just a
+hand-simulated payload. Not yet
 built: the research-task runner that lets Annie pursue a queued question
 autonomously (§35-§36), report generation (§41-§42), narrative clustering
 (§16's dedicated stage — trend detection currently uses the deterministic

@@ -7,7 +7,7 @@ Two entry points write to the same place through :func:`record_launch`:
   its docstring for why polling alone can't cover a program at Pump.fun's
   transaction volume.
 * :mod:`app.api.routes.webhooks` — the primary mechanism. Helius pushes a
-  ``TOKEN_MINT`` event the moment one happens, instead of this app polling
+  ``CREATE`` event the moment one happens, instead of this app polling
   and hoping to catch one in a tiny recent slice of an extremely busy
   program. See that module's docstring for the full reasoning (Build.md §76
   amendment).
