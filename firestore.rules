@@ -1,0 +1,21 @@
+rules_version = '2';
+
+// Deny every client-side read and write, unconditionally.
+//
+// This does NOT affect the Python backend (app/db/firestore.py) — it
+// authenticates with a service account via the Admin SDK, which always
+// bypasses these rules by design. This file exists solely to close off
+// *direct* browser/client access, since the Firebase web config (apiKey,
+// authDomain, ...) is not a secret and nothing prevents someone who has it
+// from calling Firestore directly if these rules allow it. Nothing in this
+// app currently uses that client config — it should stay this locked down
+// unless a future feature deliberately needs browser-side Firestore access,
+// at which point these rules get scoped to exactly what that feature needs,
+// never opened broadly.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
