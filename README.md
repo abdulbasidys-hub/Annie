@@ -17,7 +17,11 @@ original spec and why.
 
 **Contents**
 
-- [What Annie actually is](#what-annie-actually-is)
+- [What Annie is](#what-annie-is)
+- [What Annie can do](#what-annie-can-do)
+- [How the system works](#how-the-system-works)
+- [What makes her not a chatbot](#what-makes-her-not-a-chatbot)
+- [The web app](#the-web-app)
 - [What's actually built and working](#whats-actually-built-and-working)
 - [What is not built](#what-is-not-built)
 - [What I need from you](#what-i-need-from-you)
@@ -30,15 +34,93 @@ original spec and why.
 
 ---
 
-## What Annie actually is
+## What Annie is
 
-### The question the whole system exists to answer
+Solana produces thousands of new tokens a day, almost all of them on Pump.fun,
+almost all of them worthless. A handful reach real market caps. Annie exists to
+answer one question about that handful, continuously, as new data arrives:
 
-> What can we learn from Solana tokens that reach meaningful market-cap
-> milestones, what do they repeatedly share, and what new patterns are emerging
-> right now?
+> What do Solana tokens that reach meaningful market-cap milestones repeatedly
+> have in common, how is that changing right now, and what's worth
+> investigating next?
 
-### How the system answers it
+She is the conversational front end of a larger pipeline that watches the
+chain, records what actually happened, and runs statistics over it. She does
+not decide what counts as a pattern — the database and the statistical engine
+do that. Her job is to read what they found and explain it to you in plain
+language, correctly hedged, with the numbers to back it up.
+
+Think of her less like a chatbot with opinions and more like a research
+assistant who has read every file in the cabinet, remembers where everything
+is, and will tell you "I don't know" instead of making something up to sound
+useful.
+
+---
+
+## What Annie can do
+
+**Ask her anything about the data the system has collected.** Concretely, in
+one conversation she can:
+
+- Give you a live summary — tokens collected, tokens qualified, how many
+  trends are currently rising, new, or declining.
+- Search and filter tokens: qualified only, by launchpad, by minimum
+  market-cap tier ($100k / $250k / $500k / $1M).
+- Pull the full record on one token by its mint address — launch info,
+  creator wallet, qualification evidence, peak market cap, verification
+  status, and its milestone history ($100k reached at, migrated at, and so on).
+- List and rank trends by how much they've moved recently, filtered by status
+  (new / rising / stable / declining / dead), and pull full detail on any one
+  of them — sample size, statistical significance, effect size, how long it's
+  persisted, and its caveats.
+- List creator wallets and flag repeat winners — wallets with more than one
+  token that reached $100k or $1M.
+- Pull detail on a launchpad: lifecycle stage, how many tokens it's launched,
+  how many qualified, its success rate, and its growth over the last 7 days.
+- Check prior research findings before answering, so she doesn't re-derive
+  something already established, and cite it if it applies.
+- Search the public web for outside context (news, an event, a narrative) —
+  only if `TAVILY_API_KEY` is configured, and always clearly separated from
+  what the database itself says.
+
+**What she deliberately will not do:** state a number that didn't come from
+one of the tool calls above in that same conversation, give trading advice,
+suggest an entry point or a price target, imply a finding will make you money,
+or quietly average away a disagreement between two data providers. If a tool
+fails or isn't configured, she says so rather than guessing — this has been
+verified against a live run, not just written into the prompt: asked "how many
+tokens have you collected" with the underlying query failing, she answered *"I
+couldn't get that — the system's not set up for that right now"* rather than
+inventing a number.
+
+**Where you can talk to her:**
+
+- **The web app's Annie page** — a chat interface like any other assistant.
+- **Telegram** — DM the bot directly, no `/commands` needed; just talk. Each
+  chat keeps its own conversation history.
+- **Discord** — DMs are always answered; in a server channel she answers when
+  @mentioned. Same underlying agent, same rules, same data.
+
+All three run through the same code (`app/annie/service.py`) — a conversation
+started on Telegram and continued on the web app would get the same answers,
+because there both is only one Annie, not three. There is currently no access
+restriction on either bot: anyone who has the bot's Telegram handle or is in
+its Discord server can chat with Annie, at your OpenAI cost. If you need that
+locked down, that is a change to make before pointing a bot token at a public
+group.
+
+**What the website lets *you* (the operator) do**, separately from chatting
+with Annie: the **System Health** page has "Run now" buttons for Discovery,
+Enrichment, and Trend analysis — the same three operations that would
+otherwise need a terminal and a `curl` command against
+`/api/system/run/discovery`, `/run/enrichment`, `/run/trends`. This is the
+whole point of that page existing: once this system is deployed and working,
+day-to-day operation — checking on it, nudging the pipeline forward, reading
+what it found — should not require opening the codebase at all.
+
+---
+
+## How the system works
 
 Six stages, cheap work before expensive work:
 
@@ -65,7 +147,9 @@ Six stages, cheap work before expensive work:
 
 Annie sits at the end and explains what the system found.
 
-### What makes her not a chatbot
+---
+
+## What makes her not a chatbot
 
 **She is not the source of truth.** The chain, the providers, the database and
 the statistical engine are. She interprets what they produced.
@@ -76,11 +160,7 @@ The rules are enforced in her system prompt
 
 - **Every number she states comes from a tool call in that conversation.** She
   has no memory of market caps or percentages. If a tool fails or isn't
-  configured, she says so rather than guessing — this has been verified
-  against a live run, not just written: asked "how many tokens have you
-  collected," with the underlying query failing, she answered *"I couldn't get
-  that — the system's not set up for that right now"* with `claim_type`
-  automatically downgraded to `speculation`, rather than inventing a number.
+  configured, she says so rather than guessing.
 - **The final answer is forced through a JSON schema** requiring
   `claim_type` / `confidence` / `citations` — a second, structured OpenAI
   call that restates the reasoning-loop's conclusion. A prompt asking a model
@@ -93,8 +173,6 @@ The rules are enforced in her system prompt
   creator, one week?
 - **Every tool call is logged** (`tool_calls` collection) with its arguments,
   success/failure, and which conversation it belongs to (§47).
-
-### The system's own epistemics
 
 The data model enforces the same discipline the prompt asks for:
 
@@ -115,96 +193,111 @@ The data model enforces the same discipline the prompt asks for:
 
 ---
 
+## The web app
+
+Twelve destinations in the sidebar, grouped by what you're doing rather than
+by data model:
+
+| Group | Pages |
+|---|---|
+| — | **Dashboard** (overview + freshness), **Annie** (chat) |
+| Intelligence | Trends, Research, Reports |
+| Catalogue | Tokens, Launchpads, Creators, Narratives |
+| System | Data Sources, System Health, Settings |
+
+Tokens, Trends, Launchpads and Creators each open onto a detail page for one
+record (`/tokens/:mint`, `/trends/:slug`, and so on) — not separate nav
+destinations, but real pages with their own URLs. **System Health** is where
+you check whether every provider is reachable and configured, and where the
+three pipeline stages (Discovery / Enrichment / Trend analysis) can be run
+on demand. Six of the twelve destinations also appear in a mobile tab bar.
+
+Logging in requires the single operator credential you set as
+`AUTH_USERNAME` / `AUTH_PASSWORD` — see [Design decisions worth
+knowing](#design-decisions-worth-knowing) for how sessions actually work.
+
+---
+
 ## What's actually built and working
 
 Verified by actually running it — a real Firestore project, a real OpenAI
-call, not just code that looks plausible in review.
+call, a real Helius webhook delivery — not just code that looks plausible in
+review.
 
 ### Backend — Python / FastAPI / Firestore
 
 ```
 app/
-  config.py               Tiered capability config, now with Firestore + auth
-  auth.py                 Session cookie issuance/verification (new)
+  config.py               Tiered capability config — Firestore + auth + all providers
+  auth.py                 Bearer-token session issuance/verification
   main.py                 App entry, lifespan, router-level auth guard
 
   db/
-    firestore.py           Async Firestore client + service-account auth (new)
+    firestore.py           Async Firestore client + service-account auth
     base.py                 Money/slug helpers, generic dataclass<->doc conversion
-    enums.py                 Unchanged from the original design — already engine-agnostic
-    repo.py                  The Firestore repository — every read/write (new)
-    models/                  Plain dataclasses, one per collection (rewritten from ORM)
+    enums.py                 Engine-agnostic enums
+    repo.py                  The Firestore repository — every read/write
+    models/                  Plain dataclasses, one per collection
 
   providers/
-    helius.py                + discovery: known-launchpad scanning (extended)
-    dexscreener.py            Unchanged — now the default market-data source
-    tavily.py, openai_provider.py   Unchanged
-    registry.py               market_primary -> DexScreener, launches -> Helius (rewired)
+    helius.py                RPC + discovery backfill; KNOWN_LAUNCHPAD_PROGRAMS
+    dexscreener.py            Default market-data source, no key required
+    tavily.py, openai_provider.py
+    registry.py               market_primary -> DexScreener, launches -> Helius
 
   bots/
-    telegram_bot.py           Long-polling bot, shares app/annie/service.py (new)
-    discord_bot.py             Gateway client, same shared service (new)
+    telegram_bot.py           Long-polling bot, shares app/annie/service.py
+    discord_bot.py             Gateway client, same shared service
 
   pipeline/
-    qualification.py         Unchanged — was already provider-only, no DB coupling
-    discovery.py              Stage 1, Firestore-backed (new)
-    enrichment.py              Stage 2/3, Firestore-backed (new)
+    qualification.py         Provider-only, no DB coupling
+    discovery.py              Stage 1 — webhook-primary, polling backfill
+    enrichment.py              Stage 2/3, Firestore-backed
 
   trends/
-    lifecycle.py              Unchanged — pure functions, no DB coupling
-    engine.py                  Rewritten: Firestore cohort queries, same statistics
+    lifecycle.py              Pure functions, no DB coupling
+    engine.py                  Firestore cohort queries + the same statistics
 
   annie/
-    persona.py                Unchanged
-    agent.py                   The chat agent loop — THE piece that didn't exist before (new)
+    persona.py                System prompt and voice
+    agent.py                   The chat agent loop — tool-calling + schema-forced answers
 
   api/
-    schemas.py                IDs changed int -> str (mint/slug/wallet, not autoincrement)
+    schemas.py                IDs are strings (mint/slug/wallet, not autoincrement)
     routes/
-      auth.py                  Login/logout/session check (new)
-      system.py, catalogue.py, intelligence.py, annie.py   Rewritten for Firestore
+      auth.py                  Login/logout/session check
+      webhooks.py               Helius's server-to-server callback (§76)
+      system.py, catalogue.py, intelligence.py, annie.py
 ```
 
-### Frontend — Vite + React (unchanged from the original build, plus login)
+### Frontend — Vite + React
 
-The 12-page interface from the original build session is untouched — same
-components, same design system, same `<Sample>` / `<Value>` discipline. One
-addition: [`src/pages/Login.jsx`](src/pages/Login.jsx) and an auth gate in
-`App.jsx` wrapping the whole app, since the backend now actually enforces
-sessions.
+The 12-destination interface described [above](#the-web-app), plus
+[`src/pages/Login.jsx`](src/pages/Login.jsx) and an auth gate in `App.jsx`
+wrapping the whole app.
 
-**Frontend location note:** despite this README's section structure, the
-frontend is **not** in a `frontend/` directory — it lives at the repository
-root (`index.html`, `vite.config.js`, `package.json`, `src/`). The backend is
-at `app/`, also at the root, not under `backend/`. A stray, empty `frontend/`
-directory from an earlier reorganization was removed during this pass. If you
-have local notes or scripts referencing `backend/app/...` or
-`frontend/src/...`, update the paths.
+**Frontend location note:** the frontend is **not** in a `frontend/`
+directory — it lives at the repository root (`index.html`, `vite.config.js`,
+`package.json`, `src/`). The backend is at `app/`, also at the root, not under
+`backend/`.
 
-### Verified end-to-end, this session
+### Verified end-to-end
 
 - Backend boots cleanly against a live Firestore project (service account
   auth confirmed working).
-- Login sets a session cookie; every protected route correctly 401s without
-  one and 200s with one.
-- A real write (`POST /api/research/tasks`) round-tripped through Firestore
-  and came back with a generated document ID.
-- A real chat turn (`POST /api/annie/chat`) ran the full tool-calling loop
-  against live OpenAI, logged the tool call, and produced a correctly-labeled
-  answer when the underlying query failed (see above) — cost and latency were
-  recorded (`$0.01462`, `7666ms` for that turn). That test ran against
-  `gpt-4o` before the model was pinned to `gpt-5.6-luna` (see below) — cost
-  and latency will differ now, but the mechanism proven there (tool call →
-  failure → honest, downgraded answer) does not depend on which model is
-  configured.
-
-### What was NOT re-verified
-
-The frontend was not re-rendered/screenshotted in this pass (the original
-session's `shoot.js` harness still exists and still works the same way — see
-[Verifying frontend changes](#verifying-frontend-changes)). The `Login`
-addition and its interaction with the existing pages has not been visually
-confirmed in a browser.
+- Login issues a Bearer token; every protected route correctly 401s without
+  one and 200s with a valid one, cross-origin, across two unrelated domains
+  (Vercel + Railway).
+- A real chat turn ran the full tool-calling loop against live OpenAI, logged
+  the tool call, and produced a correctly-labeled answer when the underlying
+  query failed — cost and latency were recorded per turn.
+- A real Helius webhook delivery — not a simulated payload — landed in
+  Firestore as a fully-parsed token (mint, creator wallet, launchpad, launch
+  signature) roughly 6 seconds after the on-chain event. See
+  [What is not built](#what-is-not-built) for how the correct webhook filter
+  was found.
+- Both Telegram and Discord bots hold a conversation across multiple
+  messages, sharing the same underlying agent as the web chat.
 
 ---
 
@@ -216,23 +309,23 @@ Be direct about this before relying on anything.
 |---|---|
 | Firestore persistence, repository layer | **Complete, verified against a live project** |
 | Provider adapters, registry, failover | Complete. Helius + DexScreener **verified reachable** — the only two adapters this deployment has; Bitquery/Birdeye were removed entirely rather than kept unused (§75) |
-| Statistical engine, trend lifecycle | Complete, unchanged from original — pure functions |
-| Qualification | Complete, unchanged — provider-only, no DB coupling |
-| Discovery (Stage 1) | **Working, narrow — webhook-driven.** A Helius webhook (`transactionTypes: ["CREATE"]`) pushes new Pump.fun mints in real time; signature polling remains only as a backfill (§76). No automatic discovery of *unknown* launchpads |
+| Statistical engine, trend lifecycle | Complete — pure functions |
+| Qualification | Complete — provider-only, no DB coupling |
+| Discovery (Stage 1) | **Working, narrow — webhook-driven.** A Helius webhook (`transactionTypes: ["CREATE"]`) pushes new Pump.fun mints in real time, verified against a real delivery; signature polling remains only as a backfill (§76). No automatic discovery of *unknown* launchpads |
 | Enrichment (Stage 2/3) | **Working.** Metadata, creator wallet, deterministic features |
-| Trend engine | **Rewritten for Firestore, logically unchanged.** Not yet run against real qualified-token volume |
-| **Annie's chat agent** | **Built and verified against live OpenAI** — the one piece the original session left entirely unwritten |
-| Single-operator authentication | **Built and verified** — login/session/route-guarding all confirmed working |
+| Trend engine | **Working.** Not yet run against real qualified-token volume |
+| **Annie's chat agent** | **Built and verified against live OpenAI**, on web, Telegram and Discord |
+| Single-operator authentication | **Built and verified** — Bearer-token login/session/route-guarding confirmed working cross-origin |
 | API routes | Complete for all read paths + the routes above |
-| Frontend (12 pages + login) | Pages unchanged from original build (verified then, not re-verified now); login page new, not yet visually checked |
+| Frontend (12 destinations + login) | Built; `npm run build` and the visual-check harness (`tools/shoot.js`) have not been re-run recently — see [Picking up the unfinished work](#picking-up-the-unfinished-work) |
 | **Autonomous research task runner** | **Not written.** `ResearchTask` documents can be created (manually, via the API) but nothing picks one up and works it — Annie only answers what she's asked, in the moment |
 | **Report generator** | **Not written** — §41/§42 |
 | **Narrative clustering** | **Not written** — the `narratives` collection exists but nothing populates it; trend detection uses the deterministic `token.theme` feature as a stand-in |
-| **Scheduler / background workers** | **Not written.** No queue is configured (Redis was removed — nothing consumed it, see Build.md §75). Use the manual trigger endpoints instead (`POST /api/system/run/discovery`, `/run/enrichment`, `/run/trends`) |
-| **Firestore composite indexes** | **Declared, not deployed.** `firestore.indexes.json` lists what's needed; you deploy them once — see [Setup](#step-2-deploy-firestore-indexes) |
+| **Scheduler / background workers** | **Not written.** No queue is configured (Redis was removed — nothing consumed it, see Build.md §75). Use the manual trigger endpoints instead (`POST /api/system/run/discovery`, `/run/enrichment`, `/run/trends`), or the same buttons on System Health |
+| **Firestore composite indexes** | Declared in `firestore.indexes.json`; deploy them once — see [Setup](#step-2-deploy-firestore-indexes) |
 | **Tests** | **Not written** |
 
-Two specific things to know before trusting output:
+Three specific things to know before trusting output:
 
 - **Discovery only sees Pump.fun right now.** `app/providers/helius.py`'s
   `KNOWN_LAUNCHPAD_PROGRAMS` is a short, explicit list, and the Helius webhook
@@ -245,14 +338,14 @@ Two specific things to know before trusting output:
 - **The webhook's `transactionTypes` filter matters and isn't documented
   anywhere authoritative.** A real Pump.fun create transaction classifies as
   `type: "CREATE"`, `source: "PUMP_FUN"` in Helius's enhanced parser —
-  confirmed empirically against a real delivery on 2026-08-22, not from
-  Helius's docs (the initial guess, `TOKEN_MINT`, silently produced zero
-  deliveries for hours). If discovery ever goes quiet again, checking the
-  registered webhook's `transactionTypes` against a fresh empirical sample
-  (fetch a known-new mint from `frontend-api-v3.pump.fun/coins`, walk its
-  signature history back to genesis, diff the raw tx logs against Helius's
-  enhanced parse of that same signature) is the reliable way to re-derive the
-  correct value — not re-reading Helius's docs.
+  confirmed empirically against a real delivery, not from Helius's docs (the
+  initial guess, `TOKEN_MINT`, silently produced zero deliveries for hours).
+  If discovery ever goes quiet again, checking the registered webhook's
+  `transactionTypes` against a fresh empirical sample (fetch a known-new mint
+  from `frontend-api-v3.pump.fun/coins`, walk its signature history back to
+  genesis, diff the raw tx logs against Helius's enhanced parse of that same
+  signature) is the reliable way to re-derive the correct value — not
+  re-reading Helius's docs.
 - **Without Firestore's composite indexes deployed, list/dashboard queries
   will 500** with a `FAILED_PRECONDITION: The query requires an index` error.
   This is normal, expected Firestore behavior, not a bug — see the setup step
@@ -340,7 +433,8 @@ AUTH_SECRET=<the long random string>
 AUTH_USERNAME=<pick something>
 AUTH_PASSWORD=<pick a real password>
 ```
-Use a **different** `AUTH_SECRET` in production than locally.
+Use a **different** `AUTH_SECRET` in production than locally — it signs every
+session token, and a leaked local one shouldn't grant access to production.
 
 ### Step 4 — Helius (primary — discovery and chain truth)
 
@@ -373,6 +467,11 @@ Use a **different** `AUTH_SECRET` in production than locally.
    confirmed. The response includes a `webhookID`; save it, you'll need it to
    update `accountAddresses` later if you add launchpads. Free tier includes
    exactly one webhook.
+4. **Watch your credit usage.** Helius bills webhook deliveries by credit, and
+   this webhook fires on every real Pump.fun token creation — a real, ongoing
+   volume, not a one-off. Check `dashboard.helius.dev`'s usage page after a
+   day of live traffic and confirm it fits your plan before assuming it's
+   free forever.
 
 ### Step 5 — OpenAI (primary — Annie herself)
 
@@ -392,6 +491,10 @@ TELEGRAM_BOT_TOKEN=...        # BotFather on Telegram -> /newbot
 DISCORD_BOT_TOKEN=...         # Discord Developer Portal -> your app -> Bot page
 ```
 
+Both bots need the **Message Content Intent** enabled in their respective
+developer portals to read what's said to them, and both run as background
+tasks inside the same backend process — no separate deployment needed.
+
 ### Step 7 — Fill in `.env`
 
 ```bash
@@ -403,7 +506,6 @@ without it. Two application settings matter as much as the keys:
 ```env
 CORS_ORIGINS=http://localhost:5180
 VITE_API_BASE_URL=http://localhost:8000
-ENVIRONMENT=development   # "production" on every real deploy — governs cookie security, see app/auth.py
 ```
 
 ### Step 8 — First run
@@ -427,7 +529,7 @@ npm run dev
 ```
 
 Open **http://localhost:5180** → you'll land on the login screen first (the
-`AUTH_USERNAME` / `AUTH_PASSWORD` you set in Step 3) → **System Health**.
+`AUTH_USERNAME` / `AUTH_PASSWORD` you set in Step 3) → **Dashboard**.
 
 ---
 
@@ -499,15 +601,16 @@ binds by name, and Windows resolves `localhost` to `::1` first.
 cd tools && node shoot.js ./shots
 ```
 Renders every route at 1440px and 390px, both themes, and fails on console
-errors, page exceptions, failed requests or horizontal overflow. Not re-run in
-this session (see [What was NOT re-verified](#what-was-not-re-verified)) — run
-it before trusting a frontend change, especially around the new login flow.
+errors, page exceptions, failed requests or horizontal overflow. Run it before
+trusting a frontend change.
 
 ---
 
 ## Deploying
 
-Two pieces: a **Python API** and a **static frontend**.
+Two pieces: a **Python API** and a **static frontend**, deployable to entirely
+different hosts on entirely different domains — nothing about this system
+needs them to share a domain.
 
 ### ⚠ Read this before deploying the frontend
 
@@ -517,11 +620,17 @@ requires a rebuild and redeploy, not just a restart.
 
 ### ⚠ Read this before deploying the backend
 
-**`ENVIRONMENT=production` is not optional in production.** It's what makes
-the login cookie `Secure` + `SameSite=None`, which is required the moment your
-frontend and backend are on different domains (Vercel + Railway, for
-instance). Leave it at the default `development` and login will silently fail
-cross-origin — the cookie gets set but the browser won't send it back.
+**`CORS_ORIGINS` must be the exact frontend origin**, `https://` included, no
+trailing slash — a mismatch here is the single most common cause of "Can't
+reach the API" once both pieces are actually deployed.
+
+There is no cookie/`SameSite` configuration to get right, deliberately: the
+session is a **Bearer token** in the `Authorization` header, not a cookie
+(see [Design decisions worth knowing](#design-decisions-worth-knowing)), so a
+frontend and backend on two completely unrelated domains (a Vercel domain and
+a Railway domain, say) work the same way a same-domain deployment would. CORS
+runs with `allow_credentials=False` accordingly — there is nothing
+credential-related for a browser to block.
 
 ### Backend — Railway
 
@@ -541,12 +650,18 @@ cross-origin — the cookie gets set but the browser won't send it back.
    | `AUTH_SECRET` | a **new** random string, not your local one |
    | `AUTH_USERNAME` / `AUTH_PASSWORD` | your login |
    | `OPENAI_API_KEY` | Step 5 |
-   | `HELIUS_API_KEY` / `HELIUS_RPC_URL` | Step 4 |
+   | `HELIUS_API_KEY` / `HELIUS_RPC_URL` / `HELIUS_WEBHOOK_SECRET` | Step 4 |
    | `TAVILY_API_KEY` | optional |
    | `TELEGRAM_BOT_TOKEN` / `DISCORD_BOT_TOKEN` | optional |
    | `CORS_ORIGINS` | your frontend URL, e.g. `https://annie.vercel.app` |
 
 6. Note the public URL — that is your `VITE_API_BASE_URL`.
+7. **Set Replicas to 1.** More than one replica means more than one process
+   long-polling Telegram (or holding a Discord Gateway connection)
+   simultaneously with the same bot token — Telegram in particular rejects
+   the second poller with a `409 Conflict` loop.
+8. Once deployed, register the Helius webhook (Setup Step 4.3) against this
+   service's public URL, not `localhost`.
 
 ### Backend — Render
 
@@ -557,7 +672,7 @@ cross-origin — the cookie gets set but the browser won't send it back.
 | Start command | `uvicorn app.main:app --host 0.0.0.0 --port $PORT` |
 | Environment | Python 3 |
 
-Same variables as above.
+Same variables and same single-instance note as above.
 
 ### Frontend — Vercel
 
@@ -576,9 +691,8 @@ Environment variable — exactly one, under **Build**:
 
 No trailing slash. Include `https://`.
 
-Then **go back to the backend, set `CORS_ORIGINS` to the Vercel URL and
-`ENVIRONMENT=production`, and redeploy the backend.** Until you do, the
-browser blocks every call and login silently fails.
+Then **go back to the backend, set `CORS_ORIGINS` to the Vercel URL, and
+redeploy the backend.** Until you do, the browser blocks every call.
 
 ### Frontend — Netlify / Cloudflare Pages
 
@@ -590,21 +704,19 @@ routing. Vercel infers this and ignores the file.
 
 ### Wiring checklist
 
-All five must be true:
+All four must be true:
 
 - [ ] Backend deployed, and its `/health` returns `{"status":"ok"}`
 - [ ] Firestore composite indexes deployed or clicked-through (Setup Step 2)
 - [ ] Frontend's `VITE_API_BASE_URL` is the exact backend URL, no trailing
       slash, **and the frontend was rebuilt after setting it**
-- [ ] Backend's `CORS_ORIGINS` contains the exact frontend origin, and
-      `ENVIRONMENT=production` — **and the backend was restarted after
-      setting both**
-- [ ] Both `https://` in production
+- [ ] Backend's `CORS_ORIGINS` contains the exact frontend origin, and the
+      backend was restarted after setting it
 
 If the app loads but every panel says "Can't reach the API," it's almost
-always CORS or a stale frontend build. If it loads and *login itself* fails
-cross-origin with no clear error, it's almost always a missing
-`ENVIRONMENT=production`.
+always CORS or a stale frontend build. If login itself returns a clean error
+response rather than hanging, read the error — with Bearer tokens there is no
+silent cross-origin cookie failure mode left to debug.
 
 ---
 
@@ -617,7 +729,8 @@ cross-origin with no clear error, it's almost always a missing
                      (Pump.fun today)
                            │
                         HELIUS
-                    (discovery + truth)
+                 (webhook: CREATE events,
+                  + RPC backfill/truth)
                            │
                            ▼
                     DATA INGESTION
@@ -653,9 +766,11 @@ cross-origin with no clear error, it's almost always a missing
                          ANNIE
                     (agent.py loop)
                            │
-                    session-authenticated
+              Bearer-token authenticated
                            │
-                    REACT FRONTEND
+          ┌────────────────┼────────────────┐
+          ↓                ↓                ↓
+   REACT FRONTEND      TELEGRAM          DISCORD
 ```
 
 Providers sit behind adapters (§70). Swapping DexScreener for Bitquery as
@@ -697,10 +812,19 @@ tool-calling loop can produce anything; the finishing call cannot skip
 `claim_type`/`confidence`/`citations` — the API rejects a response that omits
 them. See `app/annie/agent.py`.
 
-**Auth is one router-level dependency, not per-route discipline.** A new
-route added to `catalogue.py` or `intelligence.py` is protected automatically
-because the guard is attached where the router is mounted (`app/main.py`),
-not copy-pasted into each handler.
+**Auth is a Bearer token, not a cookie — and that's one router-level
+dependency, not per-route discipline.** The frontend and backend run on two
+unrelated domains, where cross-origin cookies are unreliable by default in
+every major browser. The `Authorization` header sidesteps that entirely; the
+frontend stores the token in `localStorage` and attaches it itself
+(`src/api/client.js`). A route added later is protected automatically because
+the guard is attached where the router is mounted (`app/main.py`), not
+copy-pasted into each handler. See `app/auth.py`'s module docstring for the
+full reasoning.
+
+**Discovery is push, not pull.** A Helius webhook, not a poll loop, is the
+primary way new tokens are found — Pump.fun's real transaction volume is high
+enough that polling structurally cannot keep up. See Build.md §76.
 
 **Design split.** Data surfaces are near-monochrome and colour means status,
 verification or direction. Annie's chat is the only warm surface and owns the
@@ -731,8 +855,9 @@ Each item is reachable without touching the others.
    removed from this deployment entirely (nothing consumed it; add it back
    if a worker needs it). The daily cycle is Build.md §40; today it's the
    three manual trigger endpoints (`/api/system/run/discovery`,
-   `/run/enrichment`, `/run/trends`). A cron calling those three endpoints in
-   order is the fastest path to "automatic" without building a queue.
+   `/run/enrichment`, `/run/trends`), also exposed as buttons on System
+   Health. A cron calling those three endpoints in order is the fastest path
+   to "automatic" without building a queue.
 
 4. **Report generator.** Build.md §41-§42. `Report` documents and the API
    routes to serve them exist; nothing writes one yet.
@@ -742,13 +867,11 @@ Each item is reachable without touching the others.
    clusters the deterministic `theme` features into named narratives (§16)
    would populate it.
 
-6. **Re-verify the frontend.** `npm run build` and `tools/shoot.js` were not
-   re-run this session. Do this before trusting the login flow or any visual
-   claim above.
+6. **Re-verify the frontend.** `npm run build` and `tools/shoot.js` — run
+   these before trusting a visual claim about the app.
 
 7. **Tests.** Start with `app/analysis/stats.py` and `app/trends/lifecycle.py`
-   — pure functions, unchanged from the original design, and where a subtle
-   error does the most damage.
+   — pure functions, and where a subtle error does the most damage.
 
 ---
 
