@@ -6,10 +6,11 @@ host. Started as a background asyncio task from `app/main.py`'s lifespan, in
 the same process as the API — see README's deploy notes for the trade-off
 against running this as a separate service.
 
-**No access restriction is applied.** Every Telegram user who finds this bot
-can chat with Annie, at your OpenAI cost — a deliberate choice made when this
-was built, not an oversight. To restrict it, check `message["from"]["id"]`
-against an allowlist in `_handle` before calling `ask_annie`.
+**Access is controlled by an operator-editable allowlist**
+(`app/bots/access_control.py`), not code — an empty allowlist (the default)
+means every Telegram user who finds this bot can chat with Annie, at your
+OpenAI cost, same as this system's original design. Add IDs to the
+`telegram_allowlist` setting to restrict it.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ import httpx
 import structlog
 
 from app.annie.service import ask_annie
+from app.bots.access_control import is_allowed
 from app.config import Settings
 from app.db.repo import FirestoreRepo
 from app.providers.registry import ProviderRegistry
@@ -82,6 +84,12 @@ class TelegramBot:
     async def _handle(self, message: dict[str, Any]) -> None:
         chat_id = message["chat"]["id"]
         text = message["text"]
+        sender_id = (message.get("from") or {}).get("id")
+
+        if not await is_allowed(self._repo, "telegram", sender_id):
+            log.info("telegram_message_rejected", sender_id=sender_id)
+            await self._send(chat_id, "This bot is restricted right now — you're not on the allowed list.")
+            return
 
         try:
             await self._client.post(

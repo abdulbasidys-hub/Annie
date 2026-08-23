@@ -6,8 +6,9 @@ service. Responds to direct messages always, and to messages in a server
 channel only when @mentioned, so it doesn't answer every message in every
 channel it happens to be invited into.
 
-**No access restriction is applied** — the same deliberate choice as the
-Telegram bot; see that module's docstring.
+**Access is controlled by an operator-editable allowlist**
+(`app/bots/access_control.py`) — same mechanism and same open-by-default
+behavior as the Telegram bot; see that module's docstring.
 
 **Requires "Message Content Intent" enabled for this bot in the Discord
 Developer Portal** (Application -> Bot page). Without it, `message.content`
@@ -22,6 +23,7 @@ import discord
 import structlog
 
 from app.annie.service import ask_annie
+from app.bots.access_control import is_allowed
 from app.config import Settings
 from app.db.repo import FirestoreRepo
 from app.providers.registry import ProviderRegistry
@@ -52,6 +54,11 @@ def build_discord_client(
         is_dm = isinstance(message.channel, discord.DMChannel)
         mentioned = client.user is not None and client.user in message.mentions
         if not is_dm and not mentioned:
+            return
+
+        if not await is_allowed(repo, "discord", message.author.id):
+            log.info("discord_message_rejected", sender_id=message.author.id)
+            await _send(message.channel, "This bot is restricted right now — you're not on the allowed list.")
             return
 
         text = message.content

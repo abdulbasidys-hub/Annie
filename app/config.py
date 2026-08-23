@@ -161,8 +161,9 @@ CAPABILITIES: Final[tuple[Capability, ...]] = (
         label="Telegram bot",
         tier=Tier.OPTIONAL,
         env_vars=("TELEGRAM_BOT_TOKEN",),
-        description="Chat with Annie from Telegram (§62). No access restriction "
-        "is applied — anyone who messages the bot can chat with Annie, at your "
+        description="Chat with Annie from Telegram (§62). Open to anyone who "
+        "messages the bot until you add IDs to the telegram_allowlist setting "
+        "(Settings page), at which point only those IDs can chat, at your "
         "OpenAI cost.",
     ),
     Capability(
@@ -171,8 +172,8 @@ CAPABILITIES: Final[tuple[Capability, ...]] = (
         tier=Tier.OPTIONAL,
         env_vars=("DISCORD_BOT_TOKEN",),
         description="Chat with Annie from Discord (§62): DMs always answered, "
-        "server channels answered when @mentioned. No access restriction — see "
-        "the Telegram capability's note.",
+        "server channels answered when @mentioned. Same allowlist mechanism as "
+        "Telegram (discord_allowlist setting) — open by default.",
     ),
 )
 
