@@ -41,6 +41,24 @@ async def _daily_qualification(
     }
 
 
+async def _research_task_sweep(
+    registry: ProviderRegistry, repo: FirestoreRepo, settings
+) -> dict[str, Any]:
+    """Catch any ResearchTask still ``queued`` — normally a task starts
+    within seconds of creation (the fire-and-forget trigger in
+    ``app/api/routes/intelligence.py``'s ``create_task``); this only matters
+    for one orphaned by a process restart in that window. See
+    ``app/research/runner.py``'s module docstring.
+    """
+    from app.db.enums import ResearchTaskStatus
+    from app.research.runner import run_research_task
+
+    tasks, _ = await repo.list_research_tasks(status=ResearchTaskStatus.QUEUED, limit=20)
+    for task in tasks:
+        await run_research_task(task.id, repo=repo, registry=registry, settings=settings)
+    return {"swept": len(tasks)}
+
+
 #: Every job the scheduler runs. Each entry's ``settings_key`` is what shows
 #: up as an editable row on the Settings page — change the trigger time/
 #: timezone/enabled flag there, no redeploy needed.
@@ -50,6 +68,14 @@ JOBS: list[ScheduledJob] = [
         settings_key="scheduler_daily_qualification",
         run=_daily_qualification,
         default_hour=2,
+        default_minute=0,
+        default_timezone="UTC",
+    ),
+    ScheduledJob(
+        name="research_task_sweep",
+        settings_key="scheduler_research_task_sweep",
+        run=_research_task_sweep,
+        default_hour=3,
         default_minute=0,
         default_timezone="UTC",
     ),

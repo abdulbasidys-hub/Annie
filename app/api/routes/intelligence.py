@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
@@ -24,6 +25,7 @@ from app.config import Settings, get_settings
 from app.db.enums import ResearchTaskStatus, TrendMaturity, TrendStatus
 from app.db.models.intelligence import Trend
 from app.db.repo import FirestoreRepo, get_repo
+from app.providers.registry import ProviderRegistry, get_registry
 
 router = APIRouter()
 
@@ -335,7 +337,12 @@ async def list_tasks(
 
 
 @router.post("/research/tasks", response_model=ResearchTaskSummary, status_code=201)
-async def create_task(body: dict[str, Any], repo: FirestoreRepo = Depends(get_repo)) -> Any:
+async def create_task(
+    body: dict[str, Any],
+    repo: FirestoreRepo = Depends(get_repo),
+    registry: ProviderRegistry = Depends(get_registry),
+    settings: Settings = Depends(get_settings),
+) -> Any:
     from app.db.models.research import ResearchTask
 
     question = (body.get("question") or "").strip()
@@ -352,6 +359,19 @@ async def create_task(body: dict[str, Any], repo: FirestoreRepo = Depends(get_re
         priority=0.75,
     )
     created = await repo.create_research_task(task)
+
+    # Fire-and-forget: work the task in the background rather than making
+    # the caller wait for a multi-round research loop. Same pattern the bots
+    # use for a slow Annie reply (app/bots/telegram_bot.py's `_handle`). The
+    # daily scheduled sweep (app/scheduling/jobs.py) is the safety net if
+    # this task never gets a chance to run before a restart.
+    from app.research.runner import run_research_task
+
+    asyncio.create_task(
+        run_research_task(created.id, repo=repo, registry=registry, settings=settings),
+        name=f"research_task_{created.id}",
+    )
+
     return {
         "id": created.id, "question": created.question, "reason": created.reason,
         "origin": created.origin, "status": created.status, "priority": created.priority,

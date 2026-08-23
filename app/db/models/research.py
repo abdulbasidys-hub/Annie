@@ -1,13 +1,14 @@
-"""Research Memory, the task queue, hypotheses, reports, and Annie's chat
-(§29, §36, §44, §46, §62).
+"""Research Memory, the task queue, hypotheses, reports, Annie's work memory,
+and Annie's chat (§29, §36, §44, §46, §62).
 
 Firestore layout — all top-level, Firestore auto-generated IDs (no natural
-key exists for a task, a note, a conversation or a message):
+key exists for a task, a note, a memory, a conversation or a message):
 
 * ``research_tasks/{auto_id}``
 * ``research_notes/{auto_id}``
 * ``research_hypotheses/{slug}`` — slugified from the statement; natural key
 * ``reports/{kind}_{period_start_iso}``
+* ``memories/{auto_id}`` — Annie's long-term/daily-log work memory; see ``Memory``
 * ``conversations/{auto_id}``
 * ``conversations/{auto_id}/messages/{auto_id}``
 
@@ -15,6 +16,16 @@ The budget fields on ``ResearchTask`` are the mechanism by which §36's "Annie
 must not recursively research forever" is enforced — see ``budget_exhausted``.
 Persisted per task rather than held in the agent loop so a worker restart
 cannot reset a task's spend to zero.
+
+**"Research Memory" (the operator-facing concept) is ``ResearchTask`` +
+``ResearchNote`` together, not a separate collection.** A note's ``task_id``
+links it back to the task that produced it; the claim-type/confidence/
+evidence vocabulary here is exactly what a "memory" needs and already
+exists, so Annie's newer, broader work memory (``Memory``, below) is
+deliberately a distinct, narrower concept: durable cross-cutting knowledge
+and daily activity logs, not a second copy of research findings. A memory
+can *point at* a research note or task (``related_research_ids``) instead of
+duplicating what it found.
 """
 
 from __future__ import annotations
@@ -28,6 +39,8 @@ from app.db.enums import (
     ClaimType,
     Confidence,
     HypothesisStatus,
+    MemoryStatus,
+    MemoryType,
     ReportKind,
     ResearchTaskOrigin,
     ResearchTaskStatus,
@@ -120,6 +133,41 @@ class ResearchNote:
 
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+@dataclass(slots=True)
+class Memory:
+    """Annie's durable work memory — long-term knowledge and daily activity
+    logs. See this module's docstring for how this differs from
+    ``ResearchNote`` (findings) and ``Conversation``/``Message`` (chat
+    history), which this is deliberately not a replacement for.
+
+    ``status`` mirrors ``ResearchNote``'s ``is_current``/``superseded_by_id``
+    pattern but as an explicit enum (``MemoryStatus``) since a memory has
+    more than two states worth distinguishing — see app/scheduling for the
+    consolidation job that transitions these.
+    """
+
+    id: str = ""
+    type: str = MemoryType.LONG_TERM
+    title: str = ""
+    content: str = ""
+    structured_data: dict[str, Any] = field(default_factory=dict)
+
+    source_type: str | None = None  # e.g. "consolidation" | "research_task" | "pipeline" | "manual"
+    source_id: str | None = None
+
+    confidence: str = Confidence.LOW
+    importance: float | None = None  # 0-1; higher surfaces first in retrieval
+    status: str = MemoryStatus.ACTIVE
+
+    tags: list[str] = field(default_factory=list)
+    related_memory_ids: list[str] = field(default_factory=list)
+    related_research_ids: list[str] = field(default_factory=list)
+
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    last_used_at: datetime | None = None
 
 
 @dataclass(slots=True)

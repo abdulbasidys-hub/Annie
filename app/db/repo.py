@@ -47,6 +47,7 @@ from app.db.models.intelligence import Anomaly, Trend, TrendHistory, TrendObserv
 from app.db.models.ops import AuditLog, DataQuality, ProviderHealth, Setting, ToolCall
 from app.db.models.research import (
     Conversation,
+    Memory,
     Message,
     Report,
     ResearchHypothesis,
@@ -549,6 +550,14 @@ class FirestoreRepo:
         return from_doc(ResearchTask, snap.id, snap.to_dict() or {}, id=snap.id)
 
     async def update_research_task(self, task_id: str, **updates: Any) -> None:
+        # Generic merge-write, not routed through to_doc() (there's no
+        # ResearchTask instance here, just field names) — so any Decimal
+        # (cost_usd, max_cost_usd) is converted by hand here instead. Without
+        # this, a raw Decimal would hit Firestore directly, which has no
+        # native Decimal type — silently breaking the "money is an exact
+        # string in Firestore" rule this codebase otherwise enforces
+        # everywhere else (see app/db/base.py's module docstring).
+        updates = {k: (money_to_doc(v) if isinstance(v, Decimal) else v) for k, v in updates.items()}
         updates["updated_at"] = utcnow()
         await self.db.collection("research_tasks").document(task_id).set(updates, merge=True)
 
@@ -584,6 +593,23 @@ class FirestoreRepo:
             from_doc(ResearchNote, s.id, s.to_dict() or {}, id=s.id) async for s in query.stream()
         ]
 
+    async def get_research_note(self, note_id: str) -> ResearchNote | None:
+        snap = await self.db.collection("research_notes").document(note_id).get()
+        if not snap.exists:
+            return None
+        return from_doc(ResearchNote, snap.id, snap.to_dict() or {}, id=snap.id)
+
+    async def supersede_research_note(self, old_note_id: str, new_note_id: str) -> None:
+        """Mark a note superseded by a newer one — the pattern
+        ``superseded_by_id``/``is_current`` exist for, previously unused by
+        any repo method. The old note is never deleted (§4/§49: evidence is
+        never discarded), just no longer surfaced by
+        ``list_research_notes(current_only=True)``."""
+        await self.db.collection("research_notes").document(old_note_id).set(
+            {"is_current": False, "superseded_by_id": new_note_id, "updated_at": utcnow()},
+            merge=True,
+        )
+
     async def upsert_hypothesis(self, hyp: ResearchHypothesis) -> None:
         hyp.updated_at = utcnow()
         await self.db.collection("research_hypotheses").document(doc_id_safe(hyp.slug)).set(
@@ -596,6 +622,71 @@ class FirestoreRepo:
             from_doc(ResearchHypothesis, s.id, s.to_dict() or {}, slug=s.id)
             async for s in query.stream()
         ]
+
+    # -- memory (Annie's work memory — distinct from research notes and chat) --
+
+    async def create_memory(self, memory: Memory) -> Memory:
+        ref = self.db.collection("memories").document()
+        memory.id = ref.id
+        memory.created_at = utcnow()
+        memory.updated_at = utcnow()
+        await ref.set(to_doc(memory))
+        return memory
+
+    async def get_memory(self, memory_id: str) -> Memory | None:
+        snap = await self.db.collection("memories").document(memory_id).get()
+        if not snap.exists:
+            return None
+        return from_doc(Memory, snap.id, snap.to_dict() or {}, id=snap.id)
+
+    async def update_memory(self, memory_id: str, **updates: Any) -> None:
+        updates["updated_at"] = utcnow()
+        await self.db.collection("memories").document(memory_id).set(updates, merge=True)
+
+    async def touch_memory_used(self, memory_id: str) -> None:
+        """Record that a memory was actually surfaced to Annie — feeds
+        consolidation's sense of which long-term memories are still earning
+        their place versus quietly going stale."""
+        await self.db.collection("memories").document(memory_id).set(
+            {"last_used_at": utcnow()}, merge=True
+        )
+
+    async def list_memories(
+        self,
+        *,
+        type_: str | None = None,
+        status: str | None = None,
+        tag: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[Memory], int]:
+        query = self.db.collection("memories")
+        if type_:
+            query = query.where(filter=FieldFilter("type", "==", type_))
+        if status:
+            query = query.where(filter=FieldFilter("status", "==", status))
+        if tag:
+            query = query.where(filter=FieldFilter("tags", "array_contains", tag))
+        query = query.order_by("created_at", direction=Query.DESCENDING)
+        all_docs = [s async for s in query.stream()]
+        page = all_docs[offset : offset + limit]
+        return [
+            from_doc(Memory, s.id, s.to_dict() or {}, id=s.id) for s in page
+        ], len(all_docs)
+
+    async def active_memories_by_importance(self, *, type_: str | None = None, limit: int = 20) -> list[Memory]:
+        """Retrieval-oriented read: active memories ranked by importance,
+        used by Annie's memory-search tool and consolidation — not the
+        chronological listing `list_memories` gives the frontend."""
+        query = self.db.collection("memories").where(
+            filter=FieldFilter("status", "==", "active")
+        )
+        if type_:
+            query = query.where(filter=FieldFilter("type", "==", type_))
+        docs = [s async for s in query.stream()]
+        memories = [from_doc(Memory, s.id, s.to_dict() or {}, id=s.id) for s in docs]
+        memories.sort(key=lambda m: m.importance if m.importance is not None else 0.0, reverse=True)
+        return memories[:limit]
 
     async def upsert_report(self, report: Report) -> Report:
         report.id = report.doc_id

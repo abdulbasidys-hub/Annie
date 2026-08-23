@@ -44,6 +44,19 @@
     { "collectionGroup": "anomalies", "queryScope": "COLLECTION", "fields": [
       { "fieldPath": "acknowledged", "order": "ASCENDING" },
       { "fieldPath": "detected_at", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "memories", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "type", "order": "ASCENDING" },
+      { "fieldPath": "created_at", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "memories", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "status", "order": "ASCENDING" },
+      { "fieldPath": "created_at", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "memories", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "type", "order": "ASCENDING" },
+      { "fieldPath": "status", "order": "ASCENDING" },
+      { "fieldPath": "created_at", "order": "DESCENDING" }
     ]}
   ],
   "fieldOverrides": []

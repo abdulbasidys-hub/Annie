@@ -131,6 +131,21 @@ class ResearchTaskOrigin(StrEnum):
     ANNIE = "annie"
 
 
+class MemoryType(StrEnum):
+    """Annie's work/research memory (distinct from conversation history) —
+    see app/db/models/research.py's Memory model."""
+
+    LONG_TERM = "long_term"
+    DAILY_LOG = "daily_log"
+
+
+class MemoryStatus(StrEnum):
+    ACTIVE = "active"
+    UNCERTAIN = "uncertain"
+    SUPERSEDED = "superseded"
+    ARCHIVED = "archived"
+
+
 class LaunchpadLifecycle(StrEnum):
     """Build.md §18."""
 

@@ -18,6 +18,7 @@ from app.db.models.ops import (
 )
 from app.db.models.research import (
     Conversation,
+    Memory,
     Message,
     Report,
     ResearchHypothesis,
@@ -53,6 +54,7 @@ __all__ = [
     "TrendObservation",
     # research
     "Conversation",
+    "Memory",
     "Message",
     "Report",
     "ResearchHypothesis",
