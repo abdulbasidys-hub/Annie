@@ -493,6 +493,28 @@ async def _tool_live_token_lookup(agent: AnnieAgent, args: dict[str, Any]) -> di
     }
 
 
+async def _tool_search_memories(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """Annie's durable work memory — not conversation history, not research
+    findings (use list_research_notes for those). "Store extensively,
+    retrieve selectively": this is called on demand, never pre-loaded into
+    every turn, same discipline as every other tool here."""
+    limit = min(int(args.get("limit") or 5), 15)
+    type_ = args.get("type")
+    memories = await agent.repo.active_memories_by_importance(type_=type_, limit=limit)
+    for m in memories:
+        await agent.repo.touch_memory_used(m.id)
+    return {
+        "memories": [
+            {
+                "id": m.id, "type": m.type, "title": m.title, "content": m.content,
+                "confidence": m.confidence, "importance": m.importance, "tags": m.tags,
+                "created_at": _iso(m.created_at),
+            }
+            for m in memories
+        ]
+    }
+
+
 async def _tool_web_research(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
     if not agent.settings.is_available("web_research"):
         return {"error": "Tavily is not configured in this deployment (TAVILY_API_KEY)."}
@@ -520,6 +542,7 @@ _TOOL_HANDLERS = {
     "list_creators": _tool_list_creators,
     "get_launchpad": _tool_get_launchpad,
     "list_research_notes": _tool_list_research_notes,
+    "search_memories": _tool_search_memories,
     "web_research": _tool_web_research,
 }
 
@@ -590,6 +613,16 @@ def _tool_specs(settings: Settings) -> list[dict[str, Any]]:
             "list_research_notes", "Prior findings from Research Memory (§29) — check before calling something new.",
             {"type": "object", "additionalProperties": False,
              "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 20}}},
+        ),
+        _spec(
+            "search_memories", "Annie's own accumulated work memory — durable lessons, recurring "
+            "observations, and daily activity logs (distinct from research findings above). Check "
+            "this for context on patterns you've noticed before or how the ecosystem has behaved.",
+            {"type": "object", "additionalProperties": False,
+             "properties": {
+                 "type": {"type": "string", "enum": ["long_term", "daily_log"], "description": "Omit for both."},
+                 "limit": {"type": "integer", "minimum": 1, "maximum": 15},
+             }},
         ),
     ]
     if settings.is_available("web_research"):
