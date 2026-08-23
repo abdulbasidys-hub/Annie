@@ -448,6 +448,51 @@ async def _tool_list_research_notes(agent: AnnieAgent, args: dict[str, Any]) -> 
     }
 
 
+async def _tool_live_token_lookup(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """Live, on-demand market data for any mint — qualified or not.
+
+    Separate from search_tokens/get_token on purpose: those only ever see
+    what's already in the research database, which since the discovery
+    redesign only contains tokens that migrated *and* cleared a $100k+ tier.
+    A user dropping a random CA and asking "what's this worth right now" is
+    asking about the chain, not the database — this calls the market
+    provider directly instead of returning "not found" for every token that
+    hasn't been through the daily qualification run yet.
+    """
+    mint = str(args.get("mint") or "").strip()
+    if not mint:
+        return {"error": "mint is required"}
+
+    resolved = await agent.registry.resolve_market_cap(mint, cross_validate=True)
+    if resolved.quote is None:
+        return {
+            "found": False,
+            "mint": mint,
+            "note": (
+                "No live market data available. Most likely this token hasn't "
+                "migrated off its bonding curve to a real DEX pool yet — this "
+                "deployment's market data comes from DexScreener, which only "
+                "indexes real pools. Could also mean the mint is wrong."
+            ),
+            "errors": resolved.errors,
+        }
+
+    quote = resolved.quote
+    return {
+        "found": True,
+        "mint": mint,
+        "source": "live_lookup",
+        "note": "Live chain/market data, not a claim from the qualified research database.",
+        "provider": resolved.provider,
+        "verification_status": resolved.verification_status,
+        "disputed": resolved.conflict is not None,
+        "price_usd": _money(quote.price_usd),
+        "market_cap": _money(quote.market_cap),
+        "liquidity_usd": _money(quote.liquidity_usd),
+        "volume_24h_usd": _money(quote.volume_24h_usd),
+    }
+
+
 async def _tool_web_research(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
     if not agent.settings.is_available("web_research"):
         return {"error": "Tavily is not configured in this deployment (TAVILY_API_KEY)."}
@@ -469,6 +514,7 @@ _TOOL_HANDLERS = {
     "dashboard_summary": _tool_dashboard_summary,
     "search_tokens": _tool_search_tokens,
     "get_token": _tool_get_token,
+    "live_token_lookup": _tool_live_token_lookup,
     "list_trends": _tool_list_trends,
     "get_trend": _tool_get_trend,
     "list_creators": _tool_list_creators,
@@ -497,7 +543,16 @@ def _tool_specs(settings: Settings) -> list[dict[str, Any]]:
             },
         ),
         _spec(
-            "get_token", "Full detail for one token by mint address.",
+            "get_token", "Full detail for one token by mint address, FROM THE RESEARCH DATABASE ONLY "
+            "(qualified tokens that migrated and cleared a $100k+ tier). Returns not-found for anything "
+            "still pending the daily qualification run — use live_token_lookup for that instead.",
+            {"type": "object", "required": ["mint"], "additionalProperties": False,
+             "properties": {"mint": {"type": "string"}}},
+        ),
+        _spec(
+            "live_token_lookup", "Live, right-now market data (price, market cap, liquidity) for ANY "
+            "mint/contract address, whether or not it's in the research database yet. Use this whenever "
+            "someone drops a CA and asks what it's worth, or asks about a token get_token doesn't find.",
             {"type": "object", "required": ["mint"], "additionalProperties": False,
              "properties": {"mint": {"type": "string"}}},
         ),

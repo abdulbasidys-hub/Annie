@@ -77,6 +77,39 @@ async def run_enrichment(
     return run
 
 
+async def run_enrichment_all(
+    registry: ProviderRegistry,
+    repo: FirestoreRepo,
+    *,
+    batch_size: int = 200,
+    max_batches: int = 200,
+) -> EnrichmentRun:
+    """Drain the entire discovery-stage backlog, not just one batch.
+
+    Used by the daily scheduled qualification job
+    (:mod:`app.scheduling.jobs`) — the manual ``/api/system/run/enrichment``
+    endpoint still calls :func:`run_enrichment` directly for one bounded
+    batch, since an operator clicking "Run now" wants a fast result, not a
+    run that could process thousands of tokens before responding.
+
+    ``max_batches`` is a safety cap (200 x 200 = 40,000/day), not a tuned
+    limit — real daily discovery volume should be far below it; it exists so
+    a bug that makes ``list_tokens_for_qualification`` never shrink can't
+    turn this into an unbounded loop.
+    """
+    total = EnrichmentRun(started_at=datetime.now(timezone.utc))
+    for _ in range(max_batches):
+        run = await run_enrichment(registry, repo, batch_size=batch_size)
+        total.evaluated += run.evaluated
+        total.qualified += run.qualified
+        total.enriched += run.enriched
+        total.errors.extend(run.errors)
+        if run.evaluated < batch_size:
+            break
+    total.finished_at = datetime.now(timezone.utc)
+    return total
+
+
 async def _enrich_one(registry: ProviderRegistry, repo: FirestoreRepo, mint: str) -> None:
     metadata = None
     if registry.settings.is_available("blockchain"):

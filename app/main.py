@@ -71,6 +71,21 @@ async def _start_bots(settings: Settings) -> None:
         log.info("discord_bot_enabled")
 
 
+async def _start_scheduler(settings: Settings) -> None:
+    """Start the daily job scheduler (see app/scheduling/) as a background
+    task in this same process — same reasoning as `_start_bots` above."""
+    from app.db.repo import FirestoreRepo
+    from app.providers.registry import get_registry
+    from app.scheduling.jobs import JOBS
+    from app.scheduling.scheduler import Scheduler
+
+    scheduler = Scheduler(
+        registry=get_registry(), repo=FirestoreRepo(get_client()), settings=settings, jobs=JOBS
+    )
+    _bot_tasks.append(asyncio.create_task(scheduler.run(), name="scheduler"))
+    log.info("scheduler_enabled", jobs=[j.name for j in JOBS])
+
+
 def _configure_logging(level: str) -> None:
     logging.basicConfig(format="%(message)s", level=getattr(logging, level.upper()))
     structlog.configure(
@@ -126,6 +141,7 @@ async def lifespan(app: FastAPI):
     log.info("annie_api_started", port=settings.api_port)
 
     await _start_bots(settings)
+    await _start_scheduler(settings)
 
     yield
 

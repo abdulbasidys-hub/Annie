@@ -113,10 +113,11 @@ async def run_discovery_now(
     repo: FirestoreRepo = Depends(get_repo),
     registry: ProviderRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
-    """Manually trigger Stage 1 (§20). No scheduler is wired up yet in this
-    deployment — see README's "picking up the unfinished work" — so this is
-    presently the only way new tokens get discovered. Safe to call repeatedly;
-    already-known mints are skipped, not duplicated."""
+    """Manually trigger Stage 1 discovery backfill (§20) — the Helius webhook
+    (app/api/routes/webhooks.py) is the primary, real-time discovery path;
+    this polling backfill and this endpoint exist for catching up a gap, not
+    as the everyday mechanism. Safe to call repeatedly; already-known mints
+    are skipped, not duplicated."""
     from app.pipeline.discovery import run_discovery
 
     since = datetime.now(timezone.utc) - timedelta(hours=hours)

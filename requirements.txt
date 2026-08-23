@@ -30,5 +30,13 @@ discord.py==2.7.1
 numpy==2.2.1
 scipy==1.15.0
 
+# ---- Scheduling (app/scheduling/) ------------------------------------------
+# zoneinfo (stdlib) needs an IANA tz database and Windows ships none at all —
+# without this, ZoneInfo("UTC") itself raises ZoneInfoNotFoundError, not just
+# less-common zones. Explicit rather than relying on the host OS's database
+# (which not every deploy target has either) is the approach Python's own
+# zoneinfo docs recommend.
+tzdata==2026.3
+
 # ---- Logging ------------------------------------------------------------
 structlog==24.4.0
