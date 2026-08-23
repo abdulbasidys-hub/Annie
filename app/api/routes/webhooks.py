@@ -34,6 +34,20 @@ it doesn't recognise. If mints stop appearing despite the webhook visibly
 firing (check `requests_24h` for "helius" on System Health), the fix is
 almost certainly here: log a raw payload once and adjust the extraction to
 match what Helius is actually sending.
+
+**A Firestore failure on one event must not fail the whole delivery.** Once
+the ``CREATE`` filter above started actually working, real production volume
+hit Firestore for the first time — and surfaced a ``RESOURCE_EXHAUSTED /
+429 Quota exceeded`` from ``create_discovered_token``'s read, which was an
+unhandled exception that 500'd the entire request (dropping every other
+event in that delivery, not just the one that failed). Each event's write is
+now wrapped individually, logged as ``helius_webhook_write_failed`` rather
+than crashing. Repeated occurrences of that log line mean Firestore's plan
+quota was hit (Firebase Console -> Firestore Database -> Usage tab shows
+today's reads/writes against the plan's cap) — not a bug in this handler.
+The Spark (free) plan's fixed daily caps do not fit a webhook that fires on
+every real Pump.fun creation; Blaze (pay-as-you-go) removes the cap, and the
+actual per-operation cost at this volume is cents, not dollars.
 """
 
 from __future__ import annotations
@@ -84,6 +98,7 @@ async def helius_webhook(
 
     created = 0
     unparsed = 0
+    failed = 0
     for event in events:
         if not isinstance(event, dict):
             continue
@@ -96,11 +111,24 @@ async def helius_webhook(
                 keys=sorted(event.keys()),
             )
             continue
-        if await record_launch(repo, launch):
-            created += 1
+        try:
+            if await record_launch(repo, launch):
+                created += 1
+        except Exception:
+            # A Firestore-side failure (quota, transient outage) on one event
+            # must not crash the whole batch or bubble up as an unhandled 500 —
+            # that would both drop every other event in this delivery and give
+            # Helius an ambiguous failure signal to retry against. Logged, not
+            # silent: check for repeated `helius_webhook_write_failed` entries,
+            # which almost always means Firestore quota was exceeded (Firebase
+            # Console -> Firestore -> Usage) rather than a code bug here.
+            failed += 1
+            log.error("helius_webhook_write_failed", signature=launch.signature, exc_info=True)
 
-    log.info("helius_webhook_received", events=len(events), created=created, unparsed=unparsed)
-    return {"received": len(events), "created": created, "unparsed": unparsed}
+    log.info(
+        "helius_webhook_received", events=len(events), created=created, unparsed=unparsed, failed=failed
+    )
+    return {"received": len(events), "created": created, "unparsed": unparsed, "failed": failed}
 
 
 def _parse_token_mint(event: dict[str, Any]) -> TokenLaunch | None:
