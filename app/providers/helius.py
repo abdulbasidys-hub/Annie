@@ -34,21 +34,47 @@ log = structlog.get_logger(__name__)
 
 ENHANCED_API_BASE = "https://api.helius.xyz"
 
-#: Launchpad program IDs this adapter scans for new mints, keyed to the slug
-#: recorded on the resulting :class:`TokenLaunch`. Verified against public
-#: sources (Solscan) on 2026-08-21 — see Build.md §9.2.
+#: Launchpad program IDs the Helius webhook (app/api/routes/webhooks.py) is
+#: registered against, keyed to the slug recorded on the resulting Token.
+#: The webhook receiver's parsing (``_parse_token_mint``) is already
+#: type-agnostic — it just looks for a mint in ``tokenTransfers``/
+#: ``accountData``, whatever the event's ``type`` says — so adding a program
+#: ID here is only half the job. The other half, done once via Helius's REST
+#: API and not tracked in code, is adding that launchpad's confirmed
+#: ``type`` value to the *registered webhook's* ``transactionTypes`` array
+#: (Pump.fun: ``"CREATE"``; Raydium LaunchLab: ``"CREATE_POOL"``) — a
+#: program listed here whose type was never added to the live webhook is
+#: silently invisible despite looking configured. See README's "picking up
+#: the unfinished work" for the exact empirical procedure to re-derive a
+#: launchpad's real classification.
 #:
-#: This is a **starter list, not ecosystem coverage**. A program not listed
-#: here is invisible to :meth:`HeliusAdapter.discover_launches` no matter how
-#: many tokens it launches. Build.md §5 asks the system to notice new
-#: launchpads automatically; doing that from raw RPC alone would mean
-#: watching all SPL Token Program mint-creation activity network-wide, which
-#: is an indexer's job (Bitquery, in the original design) rather than
-#: something a polling adapter can do cheaply. Add a program ID here to
-#: extend coverage; see README's "picking up the unfinished work" for the
-#: larger fix.
+#: **This is a starter list, not ecosystem coverage.** A program not listed
+#: here is invisible no matter how many tokens it launches — Build.md §5's
+#: "must not be limited to Pump.fun" goal is only partially met.
+#:
+#: Pump.fun (verified 2026-08-22): bonding-curve internal to its own
+#: program; DexScreener has literally no quote for a token until it migrates
+#: out, which is what makes qualification double as a migration gate for
+#: free (§79).
+#:
+#: Raydium LaunchLab (verified 2026-08-24, via `getSignaturesForAddress` on
+#: the program + Helius's enhanced parse of 3 real `InitializeV2`+
+#: `BuyExactIn` creation transactions): the shared launchpad program behind
+#: Bonk.fun/LetsBonk.fun — Helius's own `source` label is
+#: ``RAYDIUM_LAUNCHLAB``, not a per-frontend brand, and observed mints used
+#: both ``.bonk`` and ``.pump`` vanity suffixes, confirming it's shared
+#: infrastructure rather than one exclusive frontend. **Does not have
+#: Pump.fun's bonding-curve gate** — a freshly-created token already has a
+#: real DexScreener quote (checked directly: 3/3 fresh creates had 1 pair
+#: each, market caps ~$2.6k-$4k, `liquidity_usd` unreported rather than
+#: below-floor). Qualification's $100k threshold still works correctly
+#: here — these are all correctly rejected as too small — but the "invisible
+#: until proven" filtering Pump.fun gets for free does not carry over; this
+#: launchpad's daily qualification volume will include every creation, not
+#: only ones that already cleared a migration step.
 KNOWN_LAUNCHPAD_PROGRAMS: dict[str, str] = {
     "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P": "pump-fun",
+    "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj": "raydium-launchlab",
 }
 
 

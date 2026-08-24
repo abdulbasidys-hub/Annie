@@ -3,19 +3,29 @@
 See app/pipeline/discovery.py's module docstring for why: Pump.fun's real
 transaction volume (~150+ tx/sec, confirmed by direct measurement — 1000
 signatures covered 6 seconds) makes signature polling structurally unable
-to cover a real time window. Helius pushes a ``CREATE`` event here the
-instant one happens instead. The webhook itself is registered once against
-Helius's REST API (a one-time setup call, not something this route does —
-see README for how), filtered to ``transactionTypes: ["CREATE"]`` and
-scoped to the launchpad program IDs in ``KNOWN_LAUNCHPAD_PROGRAMS``.
+to cover a real time window. Helius pushes an event here the instant one
+happens instead. The webhook itself is registered once against Helius's
+REST API (a one-time setup call, not something this route does — see
+README for how), scoped to the launchpad program IDs in
+``KNOWN_LAUNCHPAD_PROGRAMS`` (app/providers/helius.py) with a
+``transactionTypes`` filter that's a *different, empirically-confirmed
+value per launchpad* — the two configured today are ``"CREATE"``
+(Pump.fun) and ``"CREATE_POOL"`` (Raydium LaunchLab). Adding a launchpad
+here means both listing its program ID and adding its confirmed type to
+the live webhook's ``transactionTypes`` array — see
+``KNOWN_LAUNCHPAD_PROGRAMS``'s docstring for the exact empirical procedure.
 
-Confirmed against a real Helius delivery on 2026-08-22: a genuine Pump.fun
-create transaction classifies as ``type: "CREATE"``, ``source: "PUMP_FUN"``
-in Helius's enhanced parser — not ``TOKEN_MINT``, which was the initial
-(wrong) guess and produced zero deliveries. The mint always showed up in
-``tokenTransfers[0].mint`` on the real payload, so the extraction order
-below (``tokenTransfers`` first, ``accountData`` fallback) needed no change
-once the filter was corrected.
+Confirmed against real deliveries/parses: a genuine Pump.fun create
+transaction classifies as ``type: "CREATE"``, ``source: "PUMP_FUN"``
+(2026-08-22, live webhook delivery) — not ``TOKEN_MINT``, which was the
+initial (wrong) guess and produced zero deliveries. A genuine Raydium
+LaunchLab create classifies as ``type: "CREATE_POOL"``, ``source:
+"RAYDIUM_LAUNCHLAB"`` (2026-08-24, confirmed via Helius's enhanced-parse
+API against 3 real on-chain `InitializeV2`+`BuyExactIn` transactions, not
+yet against a live webhook delivery — Railway was down at the time this
+was added, so end-to-end confirmation is still open). Both put the mint in
+``tokenTransfers[0].mint``, so the extraction order below (``tokenTransfers``
+first, ``accountData`` fallback) needed no change for either.
 
 **Authenticated by a shared secret, not a session.** Helius calls this
 directly — there is no logged-in user, so this route is deliberately NOT
