@@ -25,7 +25,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.routes import annie, auth, catalogue, intelligence, system, webhooks
+from app.api.routes import annie, auth, catalogue, intelligence, memory, personality, system, webhooks
 from app.auth import require_auth
 from app.config import CapabilityUnavailable, Settings, get_settings, startup_banner
 from app.db.firestore import dispose_client, get_client
@@ -223,6 +223,8 @@ app.include_router(system.router, prefix="/api/system", tags=["system"], depende
 app.include_router(catalogue.router, prefix="/api", tags=["catalogue"], dependencies=_protected)
 app.include_router(intelligence.router, prefix="/api", tags=["intelligence"], dependencies=_protected)
 app.include_router(annie.router, prefix="/api/annie", tags=["annie"], dependencies=_protected)
+app.include_router(memory.router, prefix="/api", tags=["memory"], dependencies=_protected)
+app.include_router(personality.router, prefix="/api", tags=["personality"], dependencies=_protected)
 
 
 @app.get("/health", include_in_schema=False)

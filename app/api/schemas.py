@@ -594,6 +594,37 @@ class SettingOut(ApiModel):
     updated_at: datetime | None = None
 
 
+class MemoryOut(ApiModel):
+    id: str
+    type: str
+    title: str
+    content: str
+    structured_data: dict[str, Any] = Field(default_factory=dict)
+    source_type: str | None = None
+    source_id: str | None = None
+    confidence: str
+    importance: float | None = None
+    status: str
+    tags: list[str] = Field(default_factory=list)
+    related_memory_ids: list[str] = Field(default_factory=list)
+    related_research_ids: list[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime | None = None
+    last_used_at: datetime | None = None
+
+
+class PersonalityConfigOut(ApiModel):
+    name: str
+    description: str
+    tone: str
+    communication_style: str
+    skepticism_level: str
+    pushback_degree: str
+    explanation_style: str
+    updated_at: datetime | None = None
+    updated_by: str | None = None
+
+
 class ErrorOut(ApiModel):
     """Uniform error envelope.
 

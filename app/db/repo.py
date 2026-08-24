@@ -50,6 +50,7 @@ from app.db.models.research import (
     Conversation,
     Memory,
     Message,
+    PersonalityConfig,
     Report,
     ResearchHypothesis,
     ResearchNote,
@@ -644,6 +645,12 @@ class FirestoreRepo:
         updates["updated_at"] = utcnow()
         await self.db.collection("memories").document(memory_id).set(updates, merge=True)
 
+    async def delete_memory(self, memory_id: str) -> None:
+        """Genuine deletion — see app/api/routes/memory.py's DELETE route
+        docstring for why this differs from research notes, which are
+        never deleted, only marked superseded."""
+        await self.db.collection("memories").document(memory_id).delete()
+
     async def touch_memory_used(self, memory_id: str) -> None:
         """Record that a memory was actually surfaced to Annie — feeds
         consolidation's sense of which long-term memories are still earning
@@ -916,6 +923,22 @@ class FirestoreRepo:
             {"provider": provider, "external_id": external_id, "conversation_id": conversation_id},
             merge=True,
         )
+
+    # -- personality (operator-editable voice knobs, one singleton doc) ------
+
+    async def get_personality_config(self) -> PersonalityConfig | None:
+        snap = await self.db.collection("personality").document("config").get()
+        if not snap.exists:
+            return None
+        return from_doc(PersonalityConfig, snap.id, snap.to_dict() or {})
+
+    async def upsert_personality_config(
+        self, config: PersonalityConfig, *, actor: str = "operator"
+    ) -> PersonalityConfig:
+        config.updated_at = utcnow()
+        config.updated_by = actor
+        await self.db.collection("personality").document("config").set(to_doc(config), merge=True)
+        return config
 
     # -- Discord workspace channels ------------------------------------------
 

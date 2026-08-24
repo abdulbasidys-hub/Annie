@@ -126,11 +126,13 @@ class AnnieAgent:
 
         capabilities_note = _capabilities_note(self.settings)
         channel_note = _channel_note(self.platform_context)
+        personality_overrides = await _personality_overrides(self.repo)
         messages: list[dict[str, Any]] = [
             {
                 "role": "system",
                 "content": persona.system_prompt(
-                    capabilities_note=capabilities_note + channel_note
+                    capabilities_note=capabilities_note + channel_note,
+                    personality_overrides=personality_overrides,
                 ),
             },
         ]
@@ -689,6 +691,22 @@ def _tool_specs(settings: Settings, platform_context: PlatformContext | None = N
 
 def _spec(name: str, description: str, parameters: dict[str, Any]) -> dict[str, Any]:
     return {"type": "function", "function": {"name": name, "description": description, "parameters": parameters}}
+
+
+async def _personality_overrides(repo: FirestoreRepo) -> dict[str, str] | None:
+    """Loaded fresh each turn — a Firestore read is cheap next to the OpenAI
+    call it precedes, and this changes rarely enough that caching it would
+    be solving a problem that doesn't exist yet."""
+    config = await repo.get_personality_config()
+    if config is None:
+        return None
+    return {
+        "tone": config.tone,
+        "communication_style": config.communication_style,
+        "skepticism_level": config.skepticism_level,
+        "pushback_degree": config.pushback_degree,
+        "explanation_style": config.explanation_style,
+    }
 
 
 def _capabilities_note(settings: Settings) -> str:

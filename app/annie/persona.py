@@ -192,13 +192,25 @@ FORMATTING = dedent(
 ).strip()
 
 
-def system_prompt(*, autonomous: bool = False, capabilities_note: str = "") -> str:
+def system_prompt(
+    *,
+    autonomous: bool = False,
+    capabilities_note: str = "",
+    personality_overrides: dict[str, str] | None = None,
+) -> str:
     """Assemble Annie's system prompt.
 
     ``capabilities_note`` carries the live capability report so Annie knows
     what she cannot do in this deployment. Telling her the web research tool is
     unconfigured is far better than letting her call it and improvise around
     the failure.
+
+    ``personality_overrides`` (from ``PersonalityConfig``, the Personality
+    page's editable fields) adds an operator-configured voice section — it
+    never replaces SOURCE_OF_TRUTH, CLAIM_DISCIPLINE, EVIDENCE_STANDARD or
+    MONEY below, which are unconditional regardless of what's configured.
+    An operator can change how she sounds; they cannot configure away the
+    rules that keep her honest.
     """
     sections = [
         CORE_IDENTITY,
@@ -211,6 +223,11 @@ def system_prompt(*, autonomous: bool = False, capabilities_note: str = "") -> s
         MONEY,
         FORMATTING,
     ]
+
+    if personality_overrides:
+        configured = _personality_override_section(personality_overrides)
+        if configured:
+            sections.append(configured)
 
     if autonomous:
         sections.append(
@@ -235,6 +252,31 @@ def system_prompt(*, autonomous: bool = False, capabilities_note: str = "") -> s
         sections.append(f"# This deployment\n\n{capabilities_note}")
 
     return "\n\n---\n\n".join(sections)
+
+
+_OVERRIDE_LABELS = {
+    "tone": "Tone",
+    "communication_style": "Communication style",
+    "skepticism_level": "Skepticism",
+    "pushback_degree": "How much to push back",
+    "explanation_style": "How to explain things",
+}
+
+
+def _personality_override_section(overrides: dict[str, str]) -> str:
+    """Renders whichever PersonalityConfig fields the operator actually
+    filled in — an empty field is omitted rather than injecting an empty
+    instruction. This adjusts voice on top of the PERSONALITY section
+    above, not instead of it; an operator who leaves everything blank gets
+    exactly the original built-in voice."""
+    lines = []
+    for key, label in _OVERRIDE_LABELS.items():
+        value = (overrides.get(key) or "").strip()
+        if value:
+            lines.append(f"- {label}: {value}")
+    if not lines:
+        return ""
+    return "# Operator-configured voice (adjusts tone, not the rules above)\n\n" + "\n".join(lines)
 
 
 #: Shown in the chat panel before the user's first message.

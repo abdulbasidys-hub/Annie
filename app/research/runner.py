@@ -38,7 +38,7 @@ from typing import Any
 import structlog
 
 from app.annie import persona
-from app.annie.agent import AnnieAgent, _capabilities_note, _tool_specs
+from app.annie.agent import AnnieAgent, _capabilities_note, _personality_overrides, _tool_specs
 from app.config import Settings
 from app.db.enums import ResearchTaskStatus
 from app.db.models.ops import ToolCall
@@ -106,7 +106,9 @@ async def _execute(
         {
             "role": "system",
             "content": persona.system_prompt(
-                autonomous=True, capabilities_note=_capabilities_note(settings)
+                autonomous=True,
+                capabilities_note=_capabilities_note(settings),
+                personality_overrides=await _personality_overrides(repo),
             ),
         },
         {"role": "user", "content": brief},
