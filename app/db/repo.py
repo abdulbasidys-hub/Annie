@@ -798,12 +798,21 @@ class FirestoreRepo:
             return None
         return from_doc(Setting, snap.id, snap.to_dict() or {}, key=snap.id)
 
-    async def upsert_setting(self, key: str, value: Any, *, actor: str = "operator") -> Setting:
+    async def upsert_setting(
+        self, key: str, value: Any, *, description: str | None = None, actor: str = "operator"
+    ) -> Setting:
         ref = self.db.collection("settings").document(doc_id_safe(key))
         before_snap = await ref.get()
-        before = (before_snap.to_dict() or {}).get("value")
+        before_doc = before_snap.to_dict() or {}
+        before = before_doc.get("value")
+        # A plain value-only save (the Settings page's PATCH, or a job's
+        # last_run_date update) must never blank out a description someone
+        # set earlier — only overwrite it when the caller actually passed one.
+        resolved_description = description if description is not None else before_doc.get("description")
 
-        setting = Setting(key=key, value=value, updated_by=actor, updated_at=utcnow())
+        setting = Setting(
+            key=key, value=value, description=resolved_description, updated_by=actor, updated_at=utcnow()
+        )
         await ref.set(to_doc(setting), merge=True)
 
         await self.db.collection("audit_log").document().set(

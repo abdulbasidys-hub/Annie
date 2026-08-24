@@ -41,6 +41,27 @@ async def is_allowed(repo: FirestoreRepo, provider: str, user_id: object) -> boo
     return str(user_id) in allowlist
 
 
+async def ensure_visible(repo: FirestoreRepo, provider: str) -> None:
+    """Write an empty allowlist the first time this provider's bot starts,
+    so `telegram_allowlist`/`discord_allowlist` show up as an editable row
+    on the Settings page immediately — same reasoning as the scheduler's
+    `_ensure_defaults_visible` (app/scheduling/scheduler.py). Without this,
+    the setting simply doesn't exist until the first write, so there'd be
+    nothing to click on the Settings page to lock a bot down."""
+    key = f"{provider}_allowlist"
+    existing = await repo.get_setting(key)
+    if existing is None:
+        await repo.upsert_setting(
+            key,
+            [],
+            description=(
+                f"{provider.title()} user IDs allowed to chat with Annie. "
+                "Empty = open to everyone (default). Add an ID to restrict."
+            ),
+            actor="system",
+        )
+
+
 async def _get_allowlist(repo: FirestoreRepo, provider: str) -> list[str]:
     key = f"{provider}_allowlist"
     now = time.monotonic()

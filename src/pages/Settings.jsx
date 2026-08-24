@@ -26,6 +26,10 @@ const GROUPS = {
     title: 'Autonomous research',
     note: 'Hard caps on what Annie may spend without being asked. Enforced per task, and persisted so a worker restart cannot reset a task’s spend.',
   },
+  bots: {
+    title: 'Bots & scheduler',
+    note: 'Who can reach Annie on Telegram/Discord, and when the daily background jobs run. Editing a job’s time/timezone/enabled here takes effect on its next check — no redeploy.',
+  },
   other: { title: 'Other', note: null },
 }
 
@@ -33,6 +37,7 @@ function groupFor(key) {
   if (key.startsWith('qualification') || key.includes('tier') || key.includes('threshold')) return 'qualification'
   if (key.startsWith('trend') || key.includes('sample') || key.includes('alpha')) return 'trends'
   if (key.startsWith('autonomous') || key.includes('budget') || key.includes('max_')) return 'autonomous'
+  if (key.endsWith('_allowlist') || key.startsWith('scheduler_')) return 'bots'
   return 'other'
 }
 

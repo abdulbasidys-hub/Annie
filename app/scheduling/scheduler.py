@@ -110,6 +110,10 @@ class Scheduler:
                         "last_run_at": None,
                         "last_result": None,
                     },
+                    description=(
+                        f"Scheduled job '{job.name}'. Edit hour/minute/timezone/enabled as JSON "
+                        f"to change when it runs — no redeploy needed."
+                    ),
                     actor="scheduler",
                 )
 

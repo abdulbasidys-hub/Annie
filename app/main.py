@@ -54,9 +54,12 @@ async def _start_bots(settings: Settings) -> None:
     repo = FirestoreRepo(get_client())
     registry = get_registry()
 
+    from app.bots.access_control import ensure_visible
+
     if settings.is_available("telegram"):
         from app.bots.telegram_bot import TelegramBot
 
+        await ensure_visible(repo, "telegram")
         bot = TelegramBot(settings.telegram_bot_token, repo, registry, settings)
         _bot_tasks.append(asyncio.create_task(bot.run(), name="telegram_bot"))
         log.info("telegram_bot_enabled")
@@ -64,6 +67,7 @@ async def _start_bots(settings: Settings) -> None:
     if settings.is_available("discord"):
         from app.bots.discord_bot import build_discord_client
 
+        await ensure_visible(repo, "discord")
         client = build_discord_client(repo, registry, settings)
         _bot_tasks.append(
             asyncio.create_task(client.start(settings.discord_bot_token), name="discord_bot")
