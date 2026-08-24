@@ -122,6 +122,7 @@ export const api = {
   get: (path, options) => request('GET', path, options),
   post: (path, body, options) => request('POST', path, { ...options, body }),
   patch: (path, body, options) => request('PATCH', path, { ...options, body }),
+  del: (path, options) => request('DELETE', path, options),
 
   // -- Endpoints ------------------------------------------------------------
   // Named methods rather than raw paths at call sites, so the surface the
@@ -155,6 +156,14 @@ export const api = {
   reports: (params) => request('GET', '/api/reports', { params }),
   report: (id) => request('GET', `/api/reports/${id}`),
 
+  memories: (params) => request('GET', '/api/memory', { params }),
+  memory: (id) => request('GET', `/api/memory/${id}`),
+  updateMemory: (id, body) => request('PATCH', `/api/memory/${id}`, { body }),
+  deleteMemory: (id) => request('DELETE', `/api/memory/${id}`),
+
+  personality: () => request('GET', '/api/personality'),
+  updatePersonality: (body) => request('PATCH', '/api/personality', { body }),
+
   conversations: () => request('GET', '/api/annie/conversations'),
   conversation: (id) => request('GET', `/api/annie/conversations/${id}`),
   chat: (body) => request('POST', '/api/annie/chat', { body }),
@@ -165,8 +174,9 @@ export const api = {
   settings: () => request('GET', '/api/system/settings'),
   updateSetting: (key, value) => request('PATCH', `/api/system/settings/${key}`, { body: { value } }),
 
-  // Manual pipeline triggers (§20) — there is no scheduler yet, so these are
-  // the only way discovery/enrichment/trends ever run.
+  // Manual pipeline triggers (§20) — a daily scheduler now runs qualification
+  // automatically (app/scheduling/); these remain for an on-demand check
+  // between scheduled runs, not as the only way these stages ever run.
   runDiscovery: (hours) => request('POST', '/api/system/run/discovery', { params: { hours } }),
   runEnrichment: (batchSize) => request('POST', '/api/system/run/enrichment', { params: { batch_size: batchSize } }),
   runTrends: () => request('POST', '/api/system/run/trends'),
