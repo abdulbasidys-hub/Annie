@@ -18,10 +18,12 @@ import LaunchpadDetail from './pages/LaunchpadDetail.jsx'
 import Narratives from './pages/Narratives.jsx'
 import Research from './pages/Research.jsx'
 import Reports from './pages/Reports.jsx'
+import Memory from './pages/Memory.jsx'
 import AnniePage from './pages/Annie.jsx'
 import DataSources from './pages/DataSources.jsx'
 import SystemHealth from './pages/SystemHealth.jsx'
 import Settings from './pages/Settings.jsx'
+import Personality from './pages/Personality.jsx'
 
 /**
  * Navigation.
@@ -47,6 +49,7 @@ const NAV = [
       { to: '/trends', label: 'Trends', icon: '◈', mobile: true },
       { to: '/research', label: 'Research', icon: '◎', mobile: true },
       { to: '/reports', label: 'Reports', icon: '▣' },
+      { to: '/memory', label: 'Memory', icon: '◒' },
     ],
   },
   {
@@ -64,6 +67,7 @@ const NAV = [
       { to: '/sources', label: 'Data Sources', icon: '⊞' },
       { to: '/health', label: 'System Health', icon: '⊙' },
       { to: '/settings', label: 'Settings', icon: '⚙' },
+      { to: '/personality', label: 'Personality', icon: '⚑' },
     ],
   },
 ]
@@ -74,6 +78,7 @@ const TITLES = {
   '/trends': 'Trends',
   '/research': 'Research',
   '/reports': 'Reports',
+  '/memory': 'Memory',
   '/tokens': 'Tokens',
   '/launchpads': 'Launchpads',
   '/creators': 'Creators',
@@ -81,6 +86,7 @@ const TITLES = {
   '/sources': 'Data Sources',
   '/health': 'System Health',
   '/settings': 'Settings',
+  '/personality': 'Personality',
 }
 
 function useTheme() {
@@ -252,6 +258,7 @@ function App({ onLogout }) {
             <Route path="/research" element={<Research />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/reports/:id" element={<Reports />} />
+            <Route path="/memory" element={<Memory />} />
 
             <Route path="/tokens" element={<Tokens />} />
             <Route path="/tokens/:mint" element={<TokenDetail />} />
@@ -264,6 +271,7 @@ function App({ onLogout }) {
             <Route path="/sources" element={<DataSources />} />
             <Route path="/health" element={<SystemHealth />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/personality" element={<Personality />} />
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
