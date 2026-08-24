@@ -245,19 +245,39 @@ class FirestoreRepo:
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[Token], int]:
-        query = self.db.collection("tokens")
-        if qualified_only:
-            query = query.where(filter=FieldFilter("is_qualified", "==", True))
-        if launchpad_slug:
-            query = query.where(filter=FieldFilter("launchpad_slug", "==", launchpad_slug))
-        if creator_wallet:
-            query = query.where(filter=FieldFilter("creator_wallet", "==", creator_wallet))
-        query = query.order_by("created_at", direction=Query.DESCENDING)
+        """List one page of tokens, plus the total matching count.
 
-        all_docs = [s async for s in query.stream()]
-        page = all_docs[offset : offset + limit]
-        tokens = [from_doc(Token, s.id, s.to_dict() or {}, mint=s.id) for s in page]
-        return tokens, len(all_docs)
+        Pushes ``limit``/``offset`` into the Firestore query itself and uses
+        a server-side ``count()`` aggregation for the total, rather than
+        streaming every matching document just to slice it in Python and
+        call ``len()`` — the previous approach downloaded the *entire*
+        collection on every call regardless of ``limit``, including every
+        unfiltered call (``qualified_only=False``, the default — used by the
+        Dashboard endpoint on every page load and Annie's own
+        ``dashboard_summary`` tool). Confirmed as a real, worsening
+        performance bug 2026-08-25: with ~17,300 tokens and climbing by
+        roughly 16,000/day, every such call was transferring the full
+        collection (qualification evidence, metadata, everything) over the
+        wire just to report a single number.
+        """
+        base = self.db.collection("tokens")
+        if qualified_only:
+            base = base.where(filter=FieldFilter("is_qualified", "==", True))
+        if launchpad_slug:
+            base = base.where(filter=FieldFilter("launchpad_slug", "==", launchpad_slug))
+        if creator_wallet:
+            base = base.where(filter=FieldFilter("creator_wallet", "==", creator_wallet))
+        base = base.order_by("created_at", direction=Query.DESCENDING)
+
+        count_result = await base.count().get()
+        total = int(count_result[0][0].value) if count_result and count_result[0] else 0
+
+        page_query = base.limit(limit)
+        if offset:
+            page_query = page_query.offset(offset)
+        docs = [s async for s in page_query.stream()]
+        tokens = [from_doc(Token, s.id, s.to_dict() or {}, mint=s.id) for s in docs]
+        return tokens, total
 
     async def qualified_tokens_in_window(
         self, *, start: datetime, end: datetime, min_peak: Decimal | None = None
