@@ -42,6 +42,7 @@ from google.cloud.firestore import AsyncClient, DocumentSnapshot, FieldFilter, Q
 
 from app.db.base import doc_id_safe, from_doc, money_from_doc, money_to_doc, slugify, to_doc, utcnow
 from app.db.enums import MilestoneKind, PipelineStage
+from app.db.models.discord import DiscordChannel
 from app.db.models.entities import Creator, Dex, Launchpad, Narrative
 from app.db.models.intelligence import Anomaly, Trend, TrendHistory, TrendObservation
 from app.db.models.ops import AuditLog, DataQuality, ProviderHealth, Setting, ToolCall
@@ -915,6 +916,47 @@ class FirestoreRepo:
             {"provider": provider, "external_id": external_id, "conversation_id": conversation_id},
             merge=True,
         )
+
+    # -- Discord workspace channels ------------------------------------------
+
+    async def create_discord_channel(self, channel: DiscordChannel) -> DiscordChannel:
+        channel.created_at = utcnow()
+        channel.updated_at = utcnow()
+        await self.db.collection("discord_channels").document(channel.channel_id).set(to_doc(channel))
+        return channel
+
+    async def get_discord_channel(self, channel_id: str) -> DiscordChannel | None:
+        snap = await self.db.collection("discord_channels").document(channel_id).get()
+        if not snap.exists:
+            return None
+        return from_doc(DiscordChannel, snap.id, snap.to_dict() or {}, channel_id=snap.id)
+
+    async def get_discord_channel_by_purpose(self, purpose: str, *, guild_id: str | None = None) -> DiscordChannel | None:
+        """First enabled channel configured for a purpose — used to find
+        where the Morning Brief (or any other purpose-routed content)
+        should be delivered without hardcoding a channel ID anywhere."""
+        query = self.db.collection("discord_channels").where(
+            filter=FieldFilter("purpose", "==", purpose)
+        ).where(filter=FieldFilter("enabled", "==", True))
+        async for snap in query.stream():
+            data = snap.to_dict() or {}
+            if guild_id and data.get("guild_id") != guild_id:
+                continue
+            return from_doc(DiscordChannel, snap.id, data, channel_id=snap.id)
+        return None
+
+    async def list_discord_channels(self, *, guild_id: str | None = None) -> list[DiscordChannel]:
+        query = self.db.collection("discord_channels")
+        if guild_id:
+            query = query.where(filter=FieldFilter("guild_id", "==", guild_id))
+        return [
+            from_doc(DiscordChannel, s.id, s.to_dict() or {}, channel_id=s.id)
+            async for s in query.stream()
+        ]
+
+    async def update_discord_channel(self, channel_id: str, **updates: Any) -> None:
+        updates["updated_at"] = utcnow()
+        await self.db.collection("discord_channels").document(channel_id).set(updates, merge=True)
 
 
 async def get_repo() -> "FirestoreRepo":

@@ -43,6 +43,7 @@ from typing import Any
 import structlog
 
 from app.annie import persona
+from app.annie.platform import PlatformContext
 from app.config import Settings
 from app.db.models.ops import ToolCall
 from app.db.repo import FirestoreRepo
@@ -105,10 +106,18 @@ FINAL_ANSWER_SCHEMA: dict[str, Any] = {
 
 
 class AnnieAgent:
-    def __init__(self, repo: FirestoreRepo, registry: ProviderRegistry, settings: Settings) -> None:
+    def __init__(
+        self,
+        repo: FirestoreRepo,
+        registry: ProviderRegistry,
+        settings: Settings,
+        *,
+        platform_context: PlatformContext | None = None,
+    ) -> None:
         self.repo = repo
         self.registry = registry
         self.settings = settings
+        self.platform_context = platform_context
 
     async def respond(self, *, conversation_id: str | None, user_message: str) -> AgentReply:
         started = time.perf_counter()
@@ -116,8 +125,14 @@ class AnnieAgent:
         model = self.settings.openai_reasoning_model
 
         capabilities_note = _capabilities_note(self.settings)
+        channel_note = _channel_note(self.platform_context)
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": persona.system_prompt(capabilities_note=capabilities_note)},
+            {
+                "role": "system",
+                "content": persona.system_prompt(
+                    capabilities_note=capabilities_note + channel_note
+                ),
+            },
         ]
         if conversation_id:
             history = await self.repo.list_messages(conversation_id, limit=MAX_CONTEXT_MESSAGES)
@@ -126,7 +141,7 @@ class AnnieAgent:
                 messages.append({"role": role, "content": m.content})
         messages.append({"role": "user", "content": user_message})
 
-        tools = _tool_specs(self.settings)
+        tools = _tool_specs(self.settings, self.platform_context)
         tool_call_log: list[dict[str, Any]] = []
         total_input = 0
         total_output = 0
@@ -515,6 +530,24 @@ async def _tool_search_memories(agent: AnnieAgent, args: dict[str, Any]) -> dict
     }
 
 
+async def _tool_manage_discord_channel(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """Only ever offered when app/bots/discord_bot.py already confirmed the
+    bot has Manage Channels in this guild — see app/annie/platform.py. If
+    this somehow gets called without that (a stale tool list from a prior
+    turn, say), it fails honestly rather than pretending to succeed."""
+    if agent.platform_context is None or agent.platform_context.create_channel is None:
+        return {"created": False, "error": "Not available in this context — Discord channel creation only."}
+
+    name = str(args.get("name") or "").strip()
+    purpose = str(args.get("purpose") or "").strip()
+    if not name or not purpose:
+        return {"created": False, "error": "Both name and purpose are required."}
+    category = args.get("category")
+
+    result = await agent.platform_context.create_channel(name=name, purpose=purpose, category=category)
+    return result
+
+
 async def _tool_web_research(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
     if not agent.settings.is_available("web_research"):
         return {"error": "Tavily is not configured in this deployment (TAVILY_API_KEY)."}
@@ -543,11 +576,12 @@ _TOOL_HANDLERS = {
     "get_launchpad": _tool_get_launchpad,
     "list_research_notes": _tool_list_research_notes,
     "search_memories": _tool_search_memories,
+    "manage_discord_channel": _tool_manage_discord_channel,
     "web_research": _tool_web_research,
 }
 
 
-def _tool_specs(settings: Settings) -> list[dict[str, Any]]:
+def _tool_specs(settings: Settings, platform_context: PlatformContext | None = None) -> list[dict[str, Any]]:
     specs = [
         _spec(
             "dashboard_summary", "Overall counts: tokens collected/qualified, active trend counts.",
@@ -633,6 +667,23 @@ def _tool_specs(settings: Settings) -> list[dict[str, Any]]:
                  "properties": {"query": {"type": "string"}, "max_results": {"type": "integer", "minimum": 1, "maximum": 8}}},
             )
         )
+    if platform_context is not None and platform_context.create_channel is not None:
+        specs.append(
+            _spec(
+                "manage_discord_channel",
+                "Create a new Discord channel in THIS server for a specific purpose (e.g. "
+                "'morning briefs', 'research findings for AI narrative investigations'). Only use "
+                "when explicitly asked to create/set up a channel — never on your own initiative.",
+                {
+                    "type": "object", "required": ["name", "purpose"], "additionalProperties": False,
+                    "properties": {
+                        "name": {"type": "string", "description": "Short channel name, e.g. 'morning-briefs'."},
+                        "purpose": {"type": "string", "description": "What this channel is for, in your own words."},
+                        "category": {"type": ["string", "null"], "description": "Optional category to group it under."},
+                    },
+                },
+            )
+        )
     return specs
 
 
@@ -648,6 +699,19 @@ def _capabilities_note(settings: Settings) -> str:
     if not lines:
         return "Every capability is configured in this deployment."
     return "Not available right now — say so rather than guessing around it:\n" + "\n".join(lines)
+
+
+def _channel_note(platform_context: PlatformContext | None) -> str:
+    """Appended to the capabilities note (same system-prompt slot) when
+    this turn arrived in a Discord channel with a configured purpose — see
+    app/db/models/discord.py. Empty string changes nothing about the
+    prompt for web/Telegram/unconfigured-channel turns."""
+    if platform_context is None or not platform_context.channel_purpose:
+        return ""
+    return (
+        f"\n\nThis conversation is happening in a Discord channel configured for: "
+        f"{platform_context.channel_purpose}. Keep your answer relevant to that purpose."
+    )
 
 
 def _iso(value: Any) -> str | None:

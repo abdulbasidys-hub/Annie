@@ -6,6 +6,7 @@ can write ``from app.db.models import Token`` instead of reaching into each
 submodule.
 """
 
+from app.db.models.discord import DiscordChannel
 from app.db.models.entities import Creator, Dex, Launchpad, Narrative
 from app.db.models.intelligence import Anomaly, Trend, TrendHistory, TrendObservation
 from app.db.models.ops import (
@@ -35,6 +36,8 @@ from app.db.models.tokens import (
 )
 
 __all__ = [
+    # discord
+    "DiscordChannel",
     # entities
     "Creator",
     "Dex",

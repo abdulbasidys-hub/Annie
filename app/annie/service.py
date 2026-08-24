@@ -9,6 +9,7 @@ assistant on different surfaces, not three).
 
 from __future__ import annotations
 
+from app.annie.platform import PlatformContext
 from app.config import Settings
 from app.db.models.research import Conversation, Message
 from app.db.repo import FirestoreRepo
@@ -22,8 +23,13 @@ async def ask_annie(
     settings: Settings,
     conversation_id: str | None,
     user_message: str,
+    platform_context: PlatformContext | None = None,
 ) -> tuple[Conversation, Message]:
-    """Run one turn. Raises ``CapabilityUnavailable`` if AI isn't configured."""
+    """Run one turn. Raises ``CapabilityUnavailable`` if AI isn't configured.
+
+    ``platform_context`` is Discord-only (see app/annie/platform.py) — every
+    other caller omits it and nothing about this function's behavior changes.
+    """
     settings.require("ai")
 
     convo = await repo.get_conversation(conversation_id) if conversation_id else None
@@ -34,7 +40,7 @@ async def ask_annie(
 
     from app.annie.agent import AnnieAgent  # imported late: pulls the OpenAI client
 
-    agent = AnnieAgent(repo=repo, registry=registry, settings=settings)
+    agent = AnnieAgent(repo=repo, registry=registry, settings=settings, platform_context=platform_context)
     reply = await agent.respond(conversation_id=convo.id, user_message=user_message)
 
     message = await repo.add_message(

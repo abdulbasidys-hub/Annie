@@ -1,4 +1,4 @@
-"""Discord bot integration (§62).
+"""Discord bot integration (§62) and workspace (channel management).
 
 Runs as a background asyncio task in the same process as the API — see
 `telegram_bot.py`'s module docstring for the trade-off against a separate
@@ -15,16 +15,30 @@ Developer Portal** (Application -> Bot page). Without it, `message.content`
 arrives as an empty string for every message regardless of what was
 actually typed — this is a privileged intent Discord requires you to
 opt into per-bot, and it cannot be set from code.
+
+**Workspace channels**: a message in a channel configured with a purpose
+(`app/db/models/discord.py`'s `DiscordChannel`, created via the
+`manage_discord_channel` agent tool or manually) gets that purpose folded
+into Annie's context for the turn (`app/annie/platform.py`). The bot only
+ever *offers* Annie the ability to create a channel when it has actually
+confirmed the "Manage Channels" permission in that guild first — never by
+trying and catching a permission error, per this codebase's "don't assume
+permissions the bot doesn't have" rule.
 """
 
 from __future__ import annotations
 
+from typing import Any
+
 import discord
 import structlog
 
+from app.annie.platform import PlatformContext
 from app.annie.service import ask_annie
 from app.bots.access_control import is_allowed
 from app.config import Settings
+from app.db.base import slugify
+from app.db.models.discord import DiscordChannel
 from app.db.repo import FirestoreRepo
 from app.providers.registry import ProviderRegistry
 
@@ -71,12 +85,14 @@ def build_discord_client(
         try:
             async with message.channel.typing():
                 conversation_id = await repo.get_bot_session("discord", channel_id)
+                platform_context = await _build_platform_context(repo, message)
                 convo, reply = await ask_annie(
                     repo=repo,
                     registry=registry,
                     settings=settings,
                     conversation_id=conversation_id,
                     user_message=text,
+                    platform_context=platform_context,
                 )
                 await repo.set_bot_session("discord", channel_id, convo.id)
                 await _send(message.channel, reply.content)
@@ -85,6 +101,53 @@ def build_discord_client(
             await _send(message.channel, "Something went wrong on my end — try again in a moment.")
 
     return client
+
+
+async def _build_platform_context(repo: FirestoreRepo, message: "discord.Message") -> PlatformContext:
+    """Look up this channel's configured purpose (if any), and decide
+    whether Annie may be offered channel-creation this turn — gated on the
+    bot actually holding Manage Channels in this specific guild, checked
+    now rather than assumed."""
+    configured = await repo.get_discord_channel(str(message.channel.id))
+    channel_purpose = configured.purpose if configured and configured.enabled else None
+
+    create_channel = None
+    guild = message.guild
+    if guild is not None and guild.me is not None and guild.me.guild_permissions.manage_channels:
+        async def _create(*, name: str, purpose: str, category: str | None = None) -> dict[str, Any]:
+            return await _create_channel(guild, repo, name=name, purpose=purpose, category=category)
+
+        create_channel = _create
+
+    return PlatformContext(platform="discord", channel_purpose=channel_purpose, create_channel=create_channel)
+
+
+async def _create_channel(
+    guild: "discord.Guild", repo: FirestoreRepo, *, name: str, purpose: str, category: str | None
+) -> dict[str, Any]:
+    channel_name = slugify(name, max_length=90) or "annie-channel"
+    try:
+        category_obj = None
+        if category:
+            category_obj = discord.utils.get(guild.categories, name=category)
+            if category_obj is None:
+                category_obj = await guild.create_category(category)
+        channel = await guild.create_text_channel(channel_name, category=category_obj, topic=purpose[:1024])
+    except discord.Forbidden:
+        log.warning("discord_channel_create_forbidden", guild_id=guild.id, name=channel_name)
+        return {"created": False, "error": "Missing the Manage Channels permission in this server."}
+    except discord.HTTPException as exc:
+        log.warning("discord_channel_create_failed", guild_id=guild.id, name=channel_name, error=str(exc))
+        return {"created": False, "error": f"Discord rejected the request: {exc}"}
+
+    await repo.create_discord_channel(
+        DiscordChannel(
+            channel_id=str(channel.id), guild_id=str(guild.id), name=channel.name,
+            purpose=purpose, type="text", enabled=True,
+        )
+    )
+    log.info("discord_channel_created", guild_id=guild.id, channel_id=channel.id, name=channel.name)
+    return {"created": True, "channel_id": str(channel.id), "name": channel.name, "error": None}
 
 
 async def _send(channel: "discord.abc.Messageable", text: str) -> None:
