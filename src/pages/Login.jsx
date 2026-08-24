@@ -7,8 +7,9 @@ import { api } from '../api/client.js'
  *
  * There is no signup, no password reset, no "remember me" — one operator,
  * one set of credentials, set via AUTH_USERNAME/AUTH_PASSWORD on the backend.
- * A successful login sets an httpOnly session cookie; this component just
- * asks for credentials and tells the app when to stop showing it.
+ * A successful login returns a Bearer token (api.login stores it in
+ * localStorage — see src/api/client.js); this component just asks for
+ * credentials and tells the app when to stop showing it.
  */
 export default function Login({ onAuthenticated }) {
   const [username, setUsername] = useState('')

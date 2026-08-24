@@ -61,6 +61,20 @@ for (const [vpName, viewport] of VIEWPORTS) {
       }
     })
 
+    // Each browser context starts with empty storage, so there is no
+    // Bearer token yet (see src/api/client.js) and the app shows the login
+    // screen — sign in for real, once per context, before the route loop.
+    // The fixture server's login stub (tools/fixture-server/server.js)
+    // accepts any credentials.
+    await page.goto(BASE, { waitUntil: 'networkidle' })
+    const usernameField = page.locator('input[autocomplete="username"]')
+    if (await usernameField.count()) {
+      await usernameField.fill('demo')
+      await page.locator('input[autocomplete="current-password"]').fill('demo')
+      await page.locator('button[type="submit"]').click()
+      await page.waitForTimeout(500)
+    }
+
     for (const [name, path] of ROUTES) {
       await page.goto(`${BASE}${path}`, { waitUntil: 'networkidle' })
       await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme)

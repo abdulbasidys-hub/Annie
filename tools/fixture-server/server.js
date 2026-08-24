@@ -527,18 +527,39 @@ const routes = [
   // Auth is a stub here — the real backend (app/auth.py) is what actually
   // gates anything. This exists only so the auth screen added to App.jsx
   // doesn't block the zero-backend "just look at the interface" path.
+  //
+  // `token` matters here, not just `authenticated` — api.login() (see
+  // src/api/client.js) only stores what comes back under `result.token`.
+  // Without one, a single continuous session still looks logged in (Login.jsx
+  // flips its local React state directly on a successful call, independent of
+  // any stored token), but a full page reload — exactly what tools/shoot.js
+  // does for every route, and exactly what a real bookmarked/shared URL does —
+  // re-runs AuthGate's check, finds no token, and lands back on the login
+  // screen. Found by shoot.js actually failing this way, not by inspection.
   ['GET', /^\/api\/auth\/me$/, () => ({ authenticated: true, username: 'demo' })],
-  ['POST', /^\/api\/auth\/login$/, () => ({ authenticated: true, username: 'demo' })],
+  ['POST', /^\/api\/auth\/login$/, () => ({ authenticated: true, username: 'demo', token: 'fixture-demo-token' })],
   ['POST', /^\/api\/auth\/logout$/, () => ({ authenticated: false })],
 ]
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`)
 
+  // Access-Control-Allow-Headers previously allowed only Content-Type — a
+  // leftover from the old cookie-based auth model (Access-Control-Allow-
+  // Credentials is the cookie-era header too, kept here only because
+  // removing it doesn't matter either way for a bearer-token app). Every
+  // authenticated request now sends an Authorization header instead, which
+  // is cross-origin here (5180 vs 8000) and therefore needs an explicit
+  // CORS preflight allowance — without "authorization" here, the browser's
+  // preflight silently fails and every GET/PATCH/DELETE past the initial
+  // login 404s at the network level, not at this server at all. Found by
+  // tools/shoot.js actually failing this way on a full page reload — a
+  // continuous single-session click-through never re-sends the preflight
+  // for a route it already loaded, so this was invisible testing normally.
   res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*')
   res.setHeader('Access-Control-Allow-Credentials', 'true')
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,OPTIONS')
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
 
   if (req.method === 'OPTIONS') { res.writeHead(204).end(); return }
 
