@@ -79,9 +79,24 @@ one conversation she can:
   how many qualified, its success rate, and its growth over the last 7 days.
 - Check prior research findings before answering, so she doesn't re-derive
   something already established, and cite it if it applies.
+- Check her own accumulated work memory — durable lessons and recurring
+  observations, separate from research findings and from chat history — for
+  context on patterns she's noticed before.
+- Look up **live** market data for any mint you drop on her, qualified or
+  not. `get_token` only ever sees the research database (tokens that
+  migrated and cleared a $100k+ tier); asking about a random CA goes through
+  a separate live lookup instead of coming back "not found."
 - Search the public web for outside context (news, an event, a narrative) —
   only if `TAVILY_API_KEY` is configured, and always clearly separated from
   what the database itself says.
+- Ask her to investigate something properly — "investigate whether AI-themed
+  tokens are becoming more successful across launchpads" creates a real,
+  budget-bounded research task, worked in the background, that produces a
+  cited finding rather than an off-the-cuff chat answer.
+- In Discord specifically: create a channel for a stated purpose ("create a
+  channel for morning briefs") — but only when asked directly, and only if
+  the bot actually has permission to in that server; a missing permission is
+  reported honestly, never faked as success.
 
 **What she deliberately will not do:** state a number that didn't come from
 one of the tool calls above in that same conversation, give trading advice,
@@ -103,20 +118,31 @@ inventing a number.
 
 All three run through the same code (`app/annie/service.py`) — a conversation
 started on Telegram and continued on the web app would get the same answers,
-because there both is only one Annie, not three. There is currently no access
-restriction on either bot: anyone who has the bot's Telegram handle or is in
-its Discord server can chat with Annie, at your OpenAI cost. If you need that
-locked down, that is a change to make before pointing a bot token at a public
-group.
+because there both is only one Annie, not three. Both bots are open by
+default (anyone who has the handle or is in the server can chat with Annie,
+at your OpenAI cost) but support an operator-editable allowlist —
+`telegram_allowlist`/`discord_allowlist` on the Settings page, empty by
+default so turning it on can never lock you out by surprise.
+
+Discord specifically is a **workspace**, not just a notification channel: a
+channel with a configured purpose (research findings, morning briefs, and so
+on) folds that purpose into Annie's context for the turn, and she can create
+new channels herself when asked, provided the bot actually holds the Manage
+Channels permission in that server.
 
 **What the website lets *you* (the operator) do**, separately from chatting
 with Annie: the **System Health** page has "Run now" buttons for Discovery,
 Enrichment, and Trend analysis — the same three operations that would
 otherwise need a terminal and a `curl` command against
-`/api/system/run/discovery`, `/run/enrichment`, `/run/trends`. This is the
-whole point of that page existing: once this system is deployed and working,
-day-to-day operation — checking on it, nudging the pipeline forward, reading
-what it found — should not require opening the codebase at all.
+`/api/system/run/discovery`, `/run/enrichment`, `/run/trends`. A daily
+scheduler (`app/scheduling/`) now runs qualification, a daily activity log,
+memory consolidation, and (if a Discord channel is configured for it) a
+Morning Brief automatically — the manual triggers remain for an on-demand
+check between scheduled runs, not because nothing runs on its own anymore.
+This is the whole point of both existing: once this system is deployed and
+working, day-to-day operation — checking on it, nudging the pipeline
+forward, reading what it found — should not require opening the codebase at
+all.
 
 ---
 
@@ -195,22 +221,29 @@ The data model enforces the same discipline the prompt asks for:
 
 ## The web app
 
-Twelve destinations in the sidebar, grouped by what you're doing rather than
-by data model:
+Fourteen destinations in the sidebar, grouped by what you're doing rather
+than by data model:
 
 | Group | Pages |
 |---|---|
 | — | **Dashboard** (overview + freshness), **Annie** (chat) |
-| Intelligence | Trends, Research, Reports |
+| Intelligence | Trends, Research, Reports, **Memory** |
 | Catalogue | Tokens, Launchpads, Creators, Narratives |
-| System | Data Sources, System Health, Settings |
+| System | Data Sources, System Health, Settings, **Personality** |
 
 Tokens, Trends, Launchpads and Creators each open onto a detail page for one
 record (`/tokens/:mint`, `/trends/:slug`, and so on) — not separate nav
 destinations, but real pages with their own URLs. **System Health** is where
 you check whether every provider is reachable and configured, and where the
 three pipeline stages (Discovery / Enrichment / Trend analysis) can be run
-on demand. Six of the twelve destinations also appear in a mobile tab bar.
+on demand. **Memory** is Annie's durable work memory — long-term findings,
+daily activity logs, the research behind them, and (once there's history to
+show) consolidation runs — separate from the chat history on the Annie page.
+**Personality** is where her voice is configured (tone, communication style,
+how skeptical she sounds, how hard she pushes back) — deliberately separate
+from the hard rules in `app/annie/persona.py`, which aren't editable from
+here or anywhere in the UI. Six of the fourteen destinations also appear in
+a mobile tab bar.
 
 Logging in requires the single operator credential you set as
 `AUTH_USERNAME` / `AUTH_PASSWORD` — see [Design decisions worth
@@ -230,14 +263,14 @@ review.
 app/
   config.py               Tiered capability config — Firestore + auth + all providers
   auth.py                 Bearer-token session issuance/verification
-  main.py                 App entry, lifespan, router-level auth guard
+  main.py                 App entry, lifespan, router-level auth guard, scheduler startup
 
   db/
     firestore.py           Async Firestore client + service-account auth
     base.py                 Money/slug helpers, generic dataclass<->doc conversion
     enums.py                 Engine-agnostic enums
     repo.py                  The Firestore repository — every read/write
-    models/                  Plain dataclasses, one per collection
+    models/                  Plain dataclasses, one per collection (incl. Memory, DiscordChannel)
 
   providers/
     helius.py                RPC + discovery backfill; KNOWN_LAUNCHPAD_PROGRAMS
@@ -247,32 +280,46 @@ app/
 
   bots/
     telegram_bot.py           Long-polling bot, shares app/annie/service.py
-    discord_bot.py             Gateway client, same shared service
+    discord_bot.py             Gateway client + workspace (channel create, purpose routing)
+    access_control.py          Operator-editable allowlist, open by default
 
   pipeline/
-    qualification.py         Provider-only, no DB coupling
+    qualification.py         Provider-only, no DB coupling — the real migration gate
     discovery.py              Stage 1 — webhook-primary, polling backfill
-    enrichment.py              Stage 2/3, Firestore-backed
+    enrichment.py              Stage 2/3, Firestore-backed; run_enrichment_all drains the backlog
+
+  scheduling/
+    scheduler.py               Generic daily-job loop, operator-configurable per job
+    jobs.py                    Qualification, daily log, consolidation, morning brief, task sweep
+
+  research/
+    runner.py                  Executes queued ResearchTasks — reuses AnnieAgent's own tools
+
+  reports/
+    generator.py                Daily digest — backs both the Reports page and the Morning Brief
 
   trends/
     lifecycle.py              Pure functions, no DB coupling
     engine.py                  Firestore cohort queries + the same statistics
 
   annie/
-    persona.py                System prompt and voice
+    persona.py                System prompt, voice, operator-configured overrides
     agent.py                   The chat agent loop — tool-calling + schema-forced answers
+    platform.py                 Discord-only optional capability injection (channel actions)
+    service.py                   Shared ask_annie() — web chat + both bots, one implementation
 
   api/
     schemas.py                IDs are strings (mint/slug/wallet, not autoincrement)
     routes/
       auth.py                  Login/logout/session check
       webhooks.py               Helius's server-to-server callback (§76)
+      memory.py, personality.py
       system.py, catalogue.py, intelligence.py, annie.py
 ```
 
 ### Frontend — Vite + React
 
-The 12-destination interface described [above](#the-web-app), plus
+The 14-destination interface described [above](#the-web-app), plus
 [`src/pages/Login.jsx`](src/pages/Login.jsx) and an auth gate in `App.jsx`
 wrapping the whole app.
 
@@ -298,6 +345,26 @@ directory — it lives at the repository root (`index.html`, `vite.config.js`,
   was found.
 - Both Telegram and Discord bots hold a conversation across multiple
   messages, sharing the same underlying agent as the web chat.
+- Qualification now runs on a real, unsupervised daily schedule
+  (`app/scheduling/`): verified the trigger-timing logic directly (fires
+  once past the configured time, never twice the same local day, self-heals
+  a missed exact minute), then seeded two real chain-verified mints — one
+  migrated, one not — and ran the actual scheduled job against them: the
+  migrated one qualified and got enriched with real Helius metadata, the
+  non-migrated one was correctly rejected with its evidence recorded.
+- A queued research task ran end-to-end against real OpenAI: two tool
+  rounds, a correctly-labeled answer, cost tracked with `Decimal` precision
+  intact, and a linked research note written — closing what had been an
+  empty stub (`app/research/`) despite `ResearchTask` already existing.
+- Memory consolidation, run against a seeded evidence-backed finding and a
+  deliberately stale placeholder in the same pass, correctly promoted one to
+  long-term memory and archived the other — real discrimination, not
+  "promote everything."
+- The Memory and Personality pages were driven through an actual browser
+  (Playwright, against the real backend, not the fixture server): zero
+  console errors, a personality field saved earlier via the API rendered
+  correctly on page load, and a live status edit (Active → Uncertain)
+  persisted correctly across both the list row and the detail header.
 
 ---
 
@@ -309,23 +376,27 @@ Be direct about this before relying on anything.
 |---|---|
 | Firestore persistence, repository layer | **Complete, verified against a live project** |
 | Provider adapters, registry, failover | Complete. Helius + DexScreener **verified reachable** — the only two adapters this deployment has; Bitquery/Birdeye were removed entirely rather than kept unused (§75) |
-| Statistical engine, trend lifecycle | Complete — pure functions |
-| Qualification | Complete — provider-only, no DB coupling |
-| Discovery (Stage 1) | **Working, narrow — webhook-driven.** A Helius webhook (`transactionTypes: ["CREATE"]`) pushes new Pump.fun mints in real time, verified against a real delivery; signature polling remains only as a backfill (§76). No automatic discovery of *unknown* launchpads |
-| Enrichment (Stage 2/3) | **Working.** Metadata, creator wallet, deterministic features |
+| Statistical engine, trend lifecycle | Complete — pure functions, now with a real test suite (see Tests below) |
+| Qualification | Complete — provider-only, no DB coupling. **Now the sole discovery gate**: a token can't qualify without having migrated off its bonding curve, since DexScreener (this deployment's only market-data source) has no quote until it has — confirmed empirically, see below |
+| Discovery (Stage 1) | **Working — webhook-driven, real time.** A Helius webhook (`transactionTypes: ["CREATE"]`) records every new Pump.fun mint the instant it happens, verified against a real delivery; signature polling remains only as a backfill (§76). No automatic discovery of *unknown* launchpads |
+| Enrichment (Stage 2/3) | **Working, now scheduled daily** (`app/scheduling/`), not just on manual trigger — drains the full pending backlog, not one bounded batch |
 | Trend engine | **Working.** Not yet run against real qualified-token volume |
-| **Annie's chat agent** | **Built and verified against live OpenAI**, on web, Telegram and Discord |
+| **Annie's chat agent** | **Built and verified against live OpenAI**, on web, Telegram and Discord — plus a live on-demand token lookup, work-memory search, and (Discord only) real channel creation |
 | Single-operator authentication | **Built and verified** — Bearer-token login/session/route-guarding confirmed working cross-origin |
-| API routes | Complete for all read paths + the routes above |
-| Frontend (12 destinations + login) | Built; `npm run build` and the visual-check harness (`tools/shoot.js`) have not been re-run recently — see [Picking up the unfinished work](#picking-up-the-unfinished-work) |
-| **Autonomous research task runner** | **Not written.** `ResearchTask` documents can be created (manually, via the API) but nothing picks one up and works it — Annie only answers what she's asked, in the moment |
-| **Report generator** | **Not written** — §41/§42 |
+| **Bot access control** | **Built.** Operator-editable allowlist per bot, empty (open) by default |
+| **Scheduler / background jobs** | **Built.** In-process daily scheduler, no external queue — daily qualification, a daily activity log, memory consolidation, a research-task safety sweep, and the Morning Brief, each independently configurable (time/timezone/enabled) from the Settings page |
+| **Autonomous research task runner** | **Built and verified against live OpenAI.** A queued `ResearchTask` now actually runs (immediately on creation, with a daily sweep as a safety net) — reuses Annie's own tool set, writes a `ResearchNote`, respects its own iteration/tool-call/cost budget |
+| **Report generator** | **Built.** One deterministic daily-digest generator backs both the Reports page and the Morning Brief — no separate implementation of "summarize the day" for each |
+| **Annie's work memory** | **Built.** Long-term findings + daily logs (`Memory` model), consolidation ("Dreams") that promotes real findings and archives stale ones, all retrieved on-demand by a dedicated agent tool — never preloaded into every turn |
+| **Discord workspace** | **Built.** Channel-purpose configuration (`DiscordChannel`), purpose-aware routing, and a `manage_discord_channel` agent tool gated on a real, confirmed Manage Channels permission — never offered when it would just fail |
+| **Personality configuration** | **Built.** Tone/style/skepticism/pushback/explanation are operator-editable from the Personality page; the hard rules in `persona.py` are not, and the page says so rather than faking an editable UI for them |
 | **Narrative clustering** | **Not written** — the `narratives` collection exists but nothing populates it; trend detection uses the deterministic `token.theme` feature as a stand-in |
-| **Scheduler / background workers** | **Not written.** No queue is configured (Redis was removed — nothing consumed it, see Build.md §75). Use the manual trigger endpoints instead (`POST /api/system/run/discovery`, `/run/enrichment`, `/run/trends`), or the same buttons on System Health |
-| **Firestore composite indexes** | Declared in `firestore.indexes.json`; deploy them once — see [Setup](#step-2-deploy-firestore-indexes) |
-| **Tests** | **Not written** |
+| API routes | Complete for all read paths + the routes above, plus `/api/memory/*` and `/api/personality` |
+| Frontend (14 destinations + login) | Built; `npm run build` passes, and Memory/Personality specifically were driven through a real browser against the real backend (Playwright) — see [Verified end-to-end](#verified-end-to-end). The other 12 pages were not re-verified this pass |
+| **Firestore composite indexes** | Declared in `firestore.indexes.json`, including the new `memories` indexes; deploy them once — see [Setup](#step-2-deploy-firestore-indexes) |
+| **Tests** | **70 passing** — `app/analysis/stats.py`, `app/trends/lifecycle.py`, `app/pipeline/qualification.py`'s decision logic, and the scheduler's timing rules. Run with `pip install -r requirements-dev.txt && pytest`. Everything else (routes, Firestore-touching code, the agent loop) is still only verified by hand, not by an automated suite |
 
-Three specific things to know before trusting output:
+Four specific things to know before trusting output:
 
 - **Discovery only sees Pump.fun right now.** `app/providers/helius.py`'s
   `KNOWN_LAUNCHPAD_PROGRAMS` is a short, explicit list, and the Helius webhook
@@ -352,6 +423,16 @@ Three specific things to know before trusting output:
   below. The error message itself contains a direct link to create the
   specific index it's missing, so even skipping the batch-deploy step, the
   app tells you exactly what to click.
+- **Qualification's migration gate is a side effect, not a dedicated check.**
+  There is no code anywhere that asks "has this token migrated to Raydium" —
+  `app/pipeline/qualification.py` just asks DexScreener for a market cap, and
+  DexScreener has no quote for a mint still on its Pump.fun bonding curve
+  (confirmed directly: 0 of 5 real non-migrated mints returned any pair, 5 of
+  5 migrated ones did). This is convenient and correct today, but it's
+  *implicit* — if this deployment's market-data source ever changes to one
+  that quotes bonding-curve prices too, this gate silently stops working, and
+  nothing would say so until qualified-but-not-really-migrated tokens started
+  showing up.
 
 ---
 
@@ -826,6 +907,31 @@ full reasoning.
 primary way new tokens are found — Pump.fun's real transaction volume is high
 enough that polling structurally cannot keep up. See Build.md §76.
 
+**Qualification is the migration gate — deliberately, not by building a
+second check.** A token can't qualify without a real DexScreener quote, and
+DexScreener has none for a mint still on its Pump.fun bonding curve. Rather
+than add a dedicated "has this migrated" step, the existing $100k+ tier
+check already can't succeed until it has. One mechanism, not two — see [What
+is not built](#what-is-not-built) for the empirical proof and the risk of
+that being implicit.
+
+**The scheduler is a loop, not a library.** No Celery, no APScheduler, no
+Redis-backed queue — `app/scheduling/scheduler.py` is a ~150-line loop that
+wakes every 60 seconds, checks each job's operator-configured time against
+"today, in that job's timezone," and fires at most once a day. It doesn't
+need cron's precision (a job that fires a minute late because the process
+was mid-restart is fine); it does need to survive a restart without silently
+skipping a whole day, which the once-per-day check against `last_run_date`
+gives it for free.
+
+**A tool the model can see must be a tool that can actually succeed.**
+`manage_discord_channel` isn't offered to Annie at all unless
+`app/bots/discord_bot.py` already confirmed the bot holds Manage Channels in
+that specific guild — not offered-then-caught-when-it-fails. Same reasoning
+extends the platform-agnostic agent (`app/annie/platform.py`): web chat and
+Telegram never see Discord-only tools, because for them the capability
+genuinely doesn't exist.
+
 **Design split.** Data surfaces are near-monochrome and colour means status,
 verification or direction. Annie's chat is the only warm surface and owns the
 only use of `--annie`. Personality lives in her voice, not in your charts.
@@ -834,7 +940,10 @@ only use of `--annie`. Personality lives in her voice, not in your charts.
 
 ## Picking up the unfinished work
 
-Each item is reachable without touching the others.
+Each item is reachable without touching the others. The autonomous research
+runner, the scheduler, the report generator, and an initial test suite —
+all previously listed here — are built; see [What's actually built and
+working](#whats-actually-built-and-working).
 
 1. **Broaden discovery beyond Pump.fun.** Add program IDs to
    `KNOWN_LAUNCHPAD_PROGRAMS` in `app/providers/helius.py`, then update the
@@ -842,36 +951,35 @@ Each item is reachable without touching the others.
    https://api.helius.xyz/v0/webhooks/<webhookID>?api-key=...` with the full
    new list — see Step 4 in Setup) as you identify them, or reinstate Bitquery
    as the discovery source (§76) for indexed, ecosystem-wide coverage instead
-   of a fixed list.
+   of a fixed list. Since qualification's real migration gate is just "does
+   DexScreener have a quote" (see [What is not
+   built](#what-is-not-built)), watching Raydium's pool-creation events
+   generically — not just Pump.fun's program — could pick up migrations from
+   *any* launchpad that ends up on Raydium, as a further extension.
 
-2. **The autonomous research task runner.** `ResearchTask` documents exist and
-   `budget_exhausted` is implemented on the dataclass; nothing polls the
-   `queued` status and works a task end-to-end without a user typing a
-   question. Build.md §35-§36 describes the bounded-loop shape it should take
-   — largely the same pattern `agent.py`'s single-turn loop already
-   demonstrates, run against a stored question instead of a live chat message.
-
-3. **Background workers / scheduler.** No queue is configured — Redis was
-   removed from this deployment entirely (nothing consumed it; add it back
-   if a worker needs it). The daily cycle is Build.md §40; today it's the
-   three manual trigger endpoints (`/api/system/run/discovery`,
-   `/run/enrichment`, `/run/trends`), also exposed as buttons on System
-   Health. A cron calling those three endpoints in order is the fastest path
-   to "automatic" without building a queue.
-
-4. **Report generator.** Build.md §41-§42. `Report` documents and the API
-   routes to serve them exist; nothing writes one yet.
-
-5. **Narrative clustering.** The `narratives` collection and its API routes
+2. **Narrative clustering.** The `narratives` collection and its API routes
    exist and return correctly-shaped empty results. A stage that actually
    clusters the deterministic `theme` features into named narratives (§16)
    would populate it.
 
-6. **Re-verify the frontend.** `npm run build` and `tools/shoot.js` — run
-   these before trusting a visual claim about the app.
+3. **Re-verify the other 12 frontend pages.** `npm run build` passes and
+   Memory/Personality were driven through a real browser this pass (see
+   [Verified end-to-end](#verified-end-to-end)) — the rest weren't re-checked.
+   Run `cd tools && node shoot.js ./shots` before trusting a visual claim
+   about any page not named there.
 
-7. **Tests.** Start with `app/analysis/stats.py` and `app/trends/lifecycle.py`
-   — pure functions, and where a subtle error does the most damage.
+4. **Broaden the test suite.** 70 tests cover the pure decision logic
+   (`app/analysis/stats.py`, `app/trends/lifecycle.py`,
+   `app/pipeline/qualification.py`, the scheduler's timing rules) — routes,
+   Firestore-touching repo methods, and the agent loop are still only
+   verified by hand. `pip install -r requirements-dev.txt && pytest`.
+
+5. **A consolidation run-history endpoint.** The Memory page's Dreams tab is
+   an honest empty state right now because consolidation runs on a schedule
+   but doesn't record anything queryable about *each run* — only its
+   effects (new/archived memories). A small `ConsolidationRun` record
+   written by `app/scheduling/jobs.py`'s `_memory_consolidation` would give
+   that tab real content.
 
 ---
 

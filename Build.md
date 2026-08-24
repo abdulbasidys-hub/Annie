@@ -2327,16 +2327,120 @@ lives in **README.md** — that file changes with the codebase; duplicating it
 here would just give it a chance to go stale in two places. As of this build
 pass: Firestore persistence, provider adapters (Helius discovery + chain
 truth, DexScreener market data, OpenAI + Tavily), the qualification engine,
-the trend engine, Annie's chat agent with a bounded tool-calling loop, and
-single-operator (Bearer-token) authentication are all real and have been
-exercised against a live Firestore project and a live OpenAI call — not
-merely written. Discovery specifically has been verified end-to-end against
-a real, unprompted Helius webhook delivery in production (§76), not just a
-hand-simulated payload. Not yet
-built: the research-task runner that lets Annie pursue a queued question
-autonomously (§35-§36), report generation (§41-§42), narrative clustering
-(§16's dedicated stage — trend detection currently uses the deterministic
-`token.theme` feature as a proxy), and the scheduled daily cycle (§40) — that
-last one exists today as manual trigger endpoints
-(`POST /api/system/run/discovery`, `/run/enrichment`, `/run/trends`) rather
-than a cron.
+the trend engine, Annie's chat agent with a bounded tool-calling loop,
+single-operator (Bearer-token) authentication, the daily scheduler, the
+research-task runner, the report generator, Annie's work memory, and the
+Discord workspace (§79) are all real and have been exercised against a live
+Firestore project and a live OpenAI call — not merely written. Discovery
+specifically has been verified end-to-end against a real, unprompted Helius
+webhook delivery in production (§76), not just a hand-simulated payload. Not
+yet built: narrative clustering (§16's dedicated stage — trend detection
+currently uses the deterministic `token.theme` feature as a proxy), and an
+automated test suite covering routes and Firestore-touching code (the pure
+decision logic — statistics, trend lifecycle, qualification, scheduler
+timing — has one; see README's Tests row).
+
+---
+
+# 79. Amendment — Scheduler, autonomous research, reports, and Annie's work memory
+
+Closes several gaps §78 listed as not yet built, plus a new
+memory/personality/Discord-workspace layer not in the original spec at all.
+
+**§40's daily cycle now exists as a real scheduler, not manual triggers.**
+`app/scheduling/scheduler.py` is a small in-process loop (no external queue —
+Redis stays removed per §75's reasoning; nothing here needed it back),
+started the same way the Telegram/Discord bots already are
+(`app/main.py`'s `_start_bots`/`_start_scheduler`, both background
+`asyncio.Task`s under one `lifespan`). Each job's trigger time is
+operator-configurable through the existing `Setting` mechanism — no
+redeploy to change when something runs. `app/scheduling/jobs.py` registers
+five: daily qualification, a daily activity log, memory consolidation, a
+research-task safety sweep, and the Morning Brief.
+
+**Discovery/qualification amendment (superseding part of §76's framing).**
+§76 described discovery as "narrower than an indexer" but otherwise left
+Stage 1/2 as originally specified: poll or webhook for mints, then
+separately decide qualification. In practice, once the Helius webhook (§76)
+started actually working, it surfaced two things: qualification had never
+been run against the resulting backlog at all (no scheduler existed to run
+it), and — checked directly against real chain data — DexScreener returns
+zero pairs for any mint still on its Pump.fun bonding curve and a real pair
+for every migrated one. The existing $100k+ tier check in
+`app/pipeline/qualification.py` was therefore already the correct migration
+gate; it just needed to run daily instead of never. No new
+migration-detection code was written. The Helius webhook remains exactly as
+before — it still records every mint at creation, in real time, for ad-hoc
+lookups (`live_token_lookup`, below) — the change is that a token becomes a
+*research subject* (qualifies) only after a scheduled pass finds it both
+migrated and above threshold.
+
+**§35-§36's research-task runner** (`app/research/runner.py`) executes a
+queued `ResearchTask` end-to-end: reuses `AnnieAgent`'s own tool dispatch
+(no second implementation of the same tools), driven by the task's budget
+(`iterations`/`tool_calls`/`cost_usd`, all pre-existing fields on
+`ResearchTask`) rather than a chat turn's fixed round count, writing a
+`ResearchNote` and marking the task `completed`/`failed` on exit. Triggered
+immediately on creation (`app/api/routes/intelligence.py`) with the daily
+sweep as a safety net for a process restart mid-flight.
+
+**§41-§42's report generator** (`app/reports/generator.py`) is deterministic
+— every section (new discoveries, rising/declining trends, research
+completed, worth investigating, memory promoted, data quality) is a direct
+query over the report's time window, no LLM call, matching the "never invent
+a number" discipline this system holds everywhere else. It backs two
+surfaces from one implementation: the `Report` documents §41-§42 always
+specified, and a new Discord-formatted Morning Brief — see below.
+
+**New: Annie's work memory**, not originally in the spec. A `Memory` model
+(`memories/{auto_id}`, `long_term`/`daily_log` types) distinct from
+`ResearchNote` (findings) and `Conversation`/`Message` (chat history) — see
+`app/db/models/research.py`'s module docstring for exactly how these three
+relate and why a fourth, parallel "research memory" collection was *not*
+added (existing `ResearchTask`/`ResearchNote` already covered that concept).
+Consolidation (`_memory_consolidation` in `app/scheduling/jobs.py`) is the
+one part of this that needed judgment rather than a query: a single bounded
+OpenAI call reviewing recent daily logs, research findings and existing
+long-term memories, deciding what's worth promoting permanently and what's
+gone stale — restricted to archiving only memory IDs it was actually shown,
+never an invented one. Retrieval follows the same on-demand discipline every
+other agent tool already used: a new `search_memories` tool, never
+preloaded into every turn ("store extensively, retrieve selectively").
+
+**New: operator-configured personality**, layered on top of, never
+replacing, the hard rules. `PersonalityConfig` (`personality/config`, one
+singleton doc) adjusts voice — tone, communication style, skepticism,
+pushback, explanation style — through a new `persona.system_prompt(...,
+personality_overrides=...)` parameter. `SOURCE_OF_TRUTH`, `CLAIM_DISCIPLINE`,
+`EVIDENCE_STANDARD` and `MONEY` are unconditional regardless of what's
+configured — an operator can change how Annie sounds, never what keeps her
+honest.
+
+**New: Discord as a workspace, not just a notification channel.**
+`DiscordChannel` (`discord_channels/{channel_id}`) records a channel's
+configured purpose; a message arriving there folds that purpose into
+Annie's context for the turn. Annie can create a channel herself
+(`manage_discord_channel`, a new agent tool) — but the tool is only ever
+*offered* to the model when `app/bots/discord_bot.py` has already confirmed
+the bot holds the Manage Channels permission in that specific guild, never
+offered-then-caught-on-failure. This required the one deliberate crack in
+`AnnieAgent`'s platform-agnostic design: an optional `PlatformContext`
+(`app/annie/platform.py`) that web chat and Telegram never construct, so
+nothing about them changes.
+
+**New: bot access control.** Both bots were built §62-era with an explicit
+"no access restriction" decision. An operator-editable allowlist
+(`app/bots/access_control.py`, Firestore-backed via the `Setting`
+mechanism) now exists, defaulting to empty/open — the allowlist can only
+ever *add* a restriction the operator explicitly configured, never lock
+them out by being turned on with nothing in it.
+
+**New: live token lookup.** `search_tokens`/`get_token` only ever see the
+research database — which, per the qualification amendment above, now only
+contains migrated, tier-qualified tokens. A user asking about an arbitrary
+CA needs a different answer than "not found." `live_token_lookup` queries
+the market provider directly, tagged `source: "live_lookup"` so Annie never
+conflates a live chain read with a claim from the qualified dataset.
+
+See README.md for setup/operational detail on all of the above (env vars —
+none new were required — Firestore indexes, the scheduler's config keys).
