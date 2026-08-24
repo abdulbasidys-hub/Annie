@@ -15,31 +15,17 @@ import { Async, Badge, Panel } from '../components/primitives.jsx'
 const ROLES = {
   helius: {
     title: 'Helius',
-    role: 'Primary blockchain infrastructure',
-    uses: ['Token metadata', 'Deployer resolution', 'Holder concentration', 'On-chain verification'],
-    without: 'No chain-level verification. Creator attribution falls back to indexer fee-payer data, which is often the launchpad relayer rather than the actual deployer.',
+    role: 'Discovery and chain infrastructure',
+    uses: ['Real-time launch discovery (webhook)', 'Token metadata', 'Deployer resolution', 'On-chain verification'],
+    without: 'No discovery at all — nothing is ever found. This is the only discovery source this deployment has (Pump.fun + Raydium LaunchLab), via a Helius webhook — see System Health for whether it is currently active.',
     trust: 'Highest — read directly from chain.',
-  },
-  bitquery: {
-    title: 'Bitquery',
-    role: 'Primary market, launch and DEX data',
-    uses: ['Launch discovery', 'Launchpad discovery', 'Migration events', 'OHLCV', 'Peak market caps'],
-    without: 'No launch discovery. The pipeline has nothing to qualify, and the trend engine has no new cohorts.',
-    trust: 'High — indexed chain data.',
   },
   dexscreener: {
     title: 'DexScreener',
-    role: 'Cross-validation and discovery',
-    uses: ['Second-opinion market caps', 'Liquidity', 'Pair discovery'],
-    without: 'Market caps rest on a single source. Qualification still works but is recorded as unverified rather than cross-verified.',
-    trust: 'Medium — derived from pair liquidity.',
-  },
-  birdeye: {
-    title: 'Birdeye',
-    role: 'Optional secondary market data',
-    uses: ['Token statistics', 'Historical prices', 'Additional cross-validation'],
-    without: 'One fewer corroborating source. Nothing depends on it exclusively.',
-    trust: 'Medium.',
+    role: 'Primary market data (§76)',
+    uses: ['Qualification market caps', 'Liquidity', 'Pair discovery'],
+    without: 'No market data at all — nothing can qualify. This is the only market-data adapter this deployment has; needs no key, always configured.',
+    trust: 'Medium — derived from pair liquidity. Never cross-validated against a second source in this deployment (Bitquery/Birdeye were removed entirely rather than kept unused — see Build.md §75).',
   },
   tavily: {
     title: 'Tavily',
