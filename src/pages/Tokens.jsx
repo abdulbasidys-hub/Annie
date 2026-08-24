@@ -28,7 +28,7 @@ export default function Tokens() {
   const debounced = useDebounced(query, 300)
 
   const state = useApi(
-    () => api.tokens({ q: debounced || undefined, min_tier: tier || undefined, sort, limit: 100 }),
+    () => api.tokens({ q: debounced || undefined, min_tier: tier || undefined, sort, qualified_only: true, limit: 100 }),
     [debounced, tier, sort]
   )
 

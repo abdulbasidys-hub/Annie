@@ -104,10 +104,8 @@ class DexScreenerAdapter(HttpProvider):
                 operation="get_quotes",
                 allow_404=True,
             )
-            if not data:
-                continue
             by_mint: dict[str, list[MarketQuote]] = {}
-            for pair in data.get("pairs") or []:
+            for pair in _pairs_from_response(data):
                 quote = self._parse_pair(pair)
                 if quote is not None:
                     by_mint.setdefault(quote.mint, []).append(quote)
