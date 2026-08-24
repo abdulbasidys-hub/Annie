@@ -613,6 +613,20 @@ class MemoryOut(ApiModel):
     last_used_at: datetime | None = None
 
 
+class ConsolidationRunOut(ApiModel):
+    id: str
+    run_at: datetime | None = None
+    memories_reviewed: int = 0
+    memories_promoted: int = 0
+    memories_archived: int = 0
+    promoted_memory_ids: list[str] = Field(default_factory=list)
+    archived_memory_ids: list[str] = Field(default_factory=list)
+    summary: str | None = None
+    model: str | None = None
+    error: str | None = None
+    created_at: datetime
+
+
 class PersonalityConfigOut(ApiModel):
     name: str
     description: str

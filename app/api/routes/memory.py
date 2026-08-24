@@ -10,10 +10,20 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.api.schemas import MemoryOut, Page
+from app.api.schemas import ConsolidationRunOut, MemoryOut, Page
 from app.db.repo import FirestoreRepo, get_repo
 
 router = APIRouter()
+
+
+@router.get("/memory/consolidation-runs", response_model=Page[ConsolidationRunOut])
+async def list_consolidation_runs(
+    limit: int = Query(20, ge=1, le=100), repo: FirestoreRepo = Depends(get_repo)
+) -> dict[str, Any]:
+    """History for the Memory page's Dreams tab — the run itself, distinct
+    from its effects (new/archived memories, already visible on Long-Term)."""
+    runs = await repo.list_consolidation_runs(limit=limit)
+    return {"items": runs, "total": len(runs), "limit": limit, "offset": 0}
 
 
 @router.get("/memory", response_model=Page[MemoryOut])

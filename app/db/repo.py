@@ -47,6 +47,7 @@ from app.db.models.entities import Creator, Dex, Launchpad, Narrative
 from app.db.models.intelligence import Anomaly, Trend, TrendHistory, TrendObservation
 from app.db.models.ops import AuditLog, DataQuality, ProviderHealth, Setting, ToolCall
 from app.db.models.research import (
+    ConsolidationRun,
     Conversation,
     Memory,
     Message,
@@ -681,6 +682,23 @@ class FirestoreRepo:
         return [
             from_doc(Memory, s.id, s.to_dict() or {}, id=s.id) for s in page
         ], len(all_docs)
+
+    async def create_consolidation_run(self, run: ConsolidationRun) -> ConsolidationRun:
+        ref = self.db.collection("consolidation_runs").document()
+        run.id = ref.id
+        run.created_at = utcnow()
+        await ref.set(to_doc(run))
+        return run
+
+    async def list_consolidation_runs(self, *, limit: int = 20) -> list[ConsolidationRun]:
+        query = (
+            self.db.collection("consolidation_runs")
+            .order_by("created_at", direction=Query.DESCENDING)
+            .limit(limit)
+        )
+        return [
+            from_doc(ConsolidationRun, s.id, s.to_dict() or {}, id=s.id) async for s in query.stream()
+        ]
 
     async def active_memories_by_importance(self, *, type_: str | None = None, limit: int = 20) -> list[Memory]:
         """Retrieval-oriented read: active memories ranked by importance,

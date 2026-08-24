@@ -18,6 +18,7 @@ from app.db.models.ops import (
     ToolCall,
 )
 from app.db.models.research import (
+    ConsolidationRun,
     Conversation,
     Memory,
     Message,
@@ -57,6 +58,7 @@ __all__ = [
     "TrendHistory",
     "TrendObservation",
     # research
+    "ConsolidationRun",
     "Conversation",
     "Memory",
     "Message",

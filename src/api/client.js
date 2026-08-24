@@ -160,6 +160,7 @@ export const api = {
   memory: (id) => request('GET', `/api/memory/${id}`),
   updateMemory: (id, body) => request('PATCH', `/api/memory/${id}`, { body }),
   deleteMemory: (id) => request('DELETE', `/api/memory/${id}`),
+  consolidationRuns: (params) => request('GET', '/api/memory/consolidation-runs', { params }),
 
   personality: () => request('GET', '/api/personality'),
   updatePersonality: (body) => request('PATCH', '/api/personality', { body }),

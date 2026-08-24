@@ -74,14 +74,7 @@ export default function Memory() {
         />
       )}
       {tab === 'research' && <ResearchNotesTab />}
-      {tab === 'dreams' && (
-        <Panel>
-          <Empty
-            title="No consolidation history yet"
-            body="Memory consolidation runs on a daily schedule and promotes findings into Long-Term memory automatically — check the Long-Term tab for what it's produced, filtered by source_type: 'consolidation' if you want to see specifically what consolidation added."
-          />
-        </Panel>
-      )}
+      {tab === 'dreams' && <DreamsTab />}
     </>
   )
 }
@@ -380,6 +373,66 @@ function ImportanceMeter({ value }) {
       </span>
       <span className="mono">{value.toFixed(2)}</span>
     </span>
+  )
+}
+
+/* ------------------------------------------------------------------ Dreams -- */
+
+/**
+ * Consolidation run history. The *effects* of a run (new/archived memories)
+ * already show up on the Long-Term tab (filter by source_type:
+ * "consolidation" there) — this is the run itself, so "consolidation ran
+ * and found nothing worth changing" is visible too, not just its results.
+ */
+function DreamsTab() {
+  const state = useApi(() => api.consolidationRuns({ limit: 30 }), [])
+  return (
+    <Async
+      state={state}
+      empty={
+        <Panel>
+          <Empty
+            title="No consolidation history yet"
+            body="Memory consolidation runs on a daily schedule (see Settings → Bots & scheduler → scheduler_memory_consolidation) and will show up here after its first run."
+          />
+        </Panel>
+      }
+    >
+      {(data) => (
+        <Panel title={`${count(data.total)} consolidation runs`} flush>
+          <div className="stack">
+            {data.items.map((run) => (
+              <article
+                key={run.id}
+                className="stack gap-2"
+                style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--border-subtle)' }}
+              >
+                <div className="row gap-2 wrap">
+                  {run.error ? (
+                    <Badge status="dead">Failed</Badge>
+                  ) : (
+                    <Badge status={run.memories_promoted || run.memories_archived ? 'rising' : 'stable'}>
+                      {run.memories_promoted || run.memories_archived ? 'Changes made' : 'No changes'}
+                    </Badge>
+                  )}
+                  <span className="faint" style={{ fontSize: 'var(--text-2xs)', marginLeft: 'auto' }}>
+                    {relative(run.run_at || run.created_at)}
+                  </span>
+                </div>
+                <p style={{ fontSize: 'var(--text-sm)', lineHeight: 'var(--leading-relaxed)' }}>
+                  {run.error ? `Failed: ${run.error}` : run.summary}
+                </p>
+                <span className="faint mono" style={{ fontSize: 'var(--text-2xs)' }}>
+                  reviewed {count(run.memories_reviewed)} · promoted {count(run.memories_promoted)} · archived{' '}
+                  {count(run.memories_archived)}
+                  {run.model && ` · ${run.model}`}
+                </span>
+              </article>
+            ))}
+          </div>
+        </Panel>
+      )}
+    </Async>
   )
 }
 

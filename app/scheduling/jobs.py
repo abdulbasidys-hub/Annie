@@ -75,11 +75,12 @@ async def _daily_log(registry: ProviderRegistry, repo: FirestoreRepo, settings) 
         lines.append(f"  - {t.question} -> {t.result_claim_type}/{t.confidence}")
     lines.append(f"Research notes recorded: {len(notes_today)}")
 
+    content = "\n".join(lines)
     memory = await repo.create_memory(
         Memory(
             type=MemoryType.DAILY_LOG,
             title=f"Daily log — {now.date().isoformat()}",
-            content="\n".join(lines),
+            content=content,
             structured_data={
                 "tokens_qualified": len(newly_qualified),
                 "tasks_completed": len(completed_tasks),
@@ -91,12 +92,30 @@ async def _daily_log(registry: ProviderRegistry, repo: FirestoreRepo, settings) 
             tags=["daily_log", now.date().isoformat()],
         )
     )
-    return {
+
+    result: dict[str, Any] = {
         "memory_id": memory.id,
         "tokens_qualified": len(newly_qualified),
         "tasks_completed": len(completed_tasks),
         "notes_recorded": len(notes_today),
+        "delivered": False,
     }
+
+    # Same "generate regardless, deliver only if a channel exists for it"
+    # pattern as the Morning Brief below — no configured daily_log channel
+    # is a normal state before the operator (or Annie, on request) sets one
+    # up, not a failure.
+    if settings.is_available("discord"):
+        channel = await repo.get_discord_channel_by_purpose("daily_log")
+        if channel is not None:
+            from app.bots.discord_bot import send_channel_message
+
+            result["delivered"] = await send_channel_message(
+                settings.discord_bot_token, channel.channel_id, f"**{memory.title}**\n\n{content}"
+            )
+            result["channel_id"] = channel.channel_id
+
+    return result
 
 
 CONSOLIDATION_SCHEMA: dict[str, Any] = {
@@ -150,7 +169,7 @@ async def _memory_consolidation(
     what's already gathered into the digest below).
     """
     from app.db.enums import MemoryStatus, MemoryType
-    from app.db.models.research import Memory
+    from app.db.models.research import ConsolidationRun, Memory
 
     if not settings.is_available("ai"):
         return {"skipped": "ai not configured"}
@@ -160,6 +179,12 @@ async def _memory_consolidation(
     recent_notes = await repo.list_research_notes(current_only=True, limit=15)
 
     if not daily_logs and not recent_notes:
+        await repo.create_consolidation_run(
+            ConsolidationRun(
+                run_at=datetime.now(timezone.utc),
+                summary="Nothing to review — no daily logs or research findings since the last run.",
+            )
+        )
         return {"skipped": "nothing to consolidate"}
 
     digest = _consolidation_digest(daily_logs, existing_long_term, recent_notes)
@@ -181,8 +206,11 @@ async def _memory_consolidation(
             temperature=0.2,
             reasoning_effort="none",
         )
-    except Exception:
+    except Exception as exc:
         log.error("memory_consolidation_call_failed", exc_info=True)
+        await repo.create_consolidation_run(
+            ConsolidationRun(run_at=datetime.now(timezone.utc), error=str(exc)[:500], model=model)
+        )
         return {"error": "OpenAI call failed — see memory_consolidation_call_failed in logs"}
 
     try:
@@ -190,9 +218,9 @@ async def _memory_consolidation(
     except json.JSONDecodeError:
         payload = {}
 
-    promoted = 0
+    promoted_ids: list[str] = []
     for item in (payload.get("promote") or [])[:5]:
-        await repo.create_memory(
+        created = await repo.create_memory(
             Memory(
                 type=MemoryType.LONG_TERM,
                 title=str(item.get("title", ""))[:120],
@@ -205,21 +233,39 @@ async def _memory_consolidation(
                 related_research_ids=[n.id for n in recent_notes[:5]],
             )
         )
-        promoted += 1
+        promoted_ids.append(created.id)
 
     # Only archive IDs the model was actually shown — never trust an
     # invented ID to correspond to a real document.
     valid_ids = {m.id for m in existing_long_term}
-    archived = 0
+    archived_ids: list[str] = []
     for mid in payload.get("archive_memory_ids") or []:
         if mid in valid_ids:
             await repo.update_memory(mid, status=MemoryStatus.ARCHIVED)
-            archived += 1
+            archived_ids.append(mid)
+
+    reviewed = len(daily_logs) + len(existing_long_term) + len(recent_notes)
+    await repo.create_consolidation_run(
+        ConsolidationRun(
+            run_at=datetime.now(timezone.utc),
+            memories_reviewed=reviewed,
+            memories_promoted=len(promoted_ids),
+            memories_archived=len(archived_ids),
+            promoted_memory_ids=promoted_ids,
+            archived_memory_ids=archived_ids,
+            summary=(
+                f"Reviewed {reviewed} item(s): promoted {len(promoted_ids)}, archived {len(archived_ids)}."
+                if promoted_ids or archived_ids
+                else f"Reviewed {reviewed} item(s): nothing met the bar for promotion or archival."
+            ),
+            model=model,
+        )
+    )
 
     return {
-        "promoted": promoted,
-        "archived": archived,
-        "reviewed": len(daily_logs) + len(existing_long_term) + len(recent_notes),
+        "promoted": len(promoted_ids),
+        "archived": len(archived_ids),
+        "reviewed": reviewed,
     }
 
 

@@ -194,6 +194,28 @@ class PersonalityConfig:
 
 
 @dataclass(slots=True)
+class ConsolidationRun:
+    """One execution of memory consolidation ("Dreams") — the run itself,
+    distinct from its effects (the `Memory` records it created/archived,
+    already visible on the Long-Term tab via `source_type: "consolidation"`).
+    Exists purely so the Memory page's Dreams tab has something to show
+    even when a run promoted and archived nothing — "consolidation ran and
+    found nothing worth changing" is itself worth being able to see."""
+
+    id: str = ""
+    run_at: datetime | None = None
+    memories_reviewed: int = 0
+    memories_promoted: int = 0
+    memories_archived: int = 0
+    promoted_memory_ids: list[str] = field(default_factory=list)
+    archived_memory_ids: list[str] = field(default_factory=list)
+    summary: str | None = None
+    model: str | None = None
+    error: str | None = None
+    created_at: datetime | None = None
+
+
+@dataclass(slots=True)
 class ResearchHypothesis:
     slug: str
     statement: str = ""
