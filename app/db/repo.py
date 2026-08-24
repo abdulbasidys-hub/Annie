@@ -408,6 +408,39 @@ class FirestoreRepo:
             return None
         return from_doc(Narrative, snap.id, snap.to_dict() or {}, slug=snap.id)
 
+    async def upsert_narrative(self, narrative: Narrative) -> Narrative:
+        """Preserves ``first_seen_at`` across runs — a narrative's first
+        appearance shouldn't reset every time clustering re-runs and finds
+        it again. Everything else (counts, shares, last_seen_at) is
+        recomputed fresh each run, so ``merge=True`` here would leave stale
+        numbers from a run where the narrative briefly had fewer/more
+        matches; a full overwrite of the stats fields is correct."""
+        ref = self.db.collection("narratives").document(doc_id_safe(narrative.slug))
+        existing = await ref.get()
+        if existing.exists:
+            prior_first_seen = (existing.to_dict() or {}).get("first_seen_at")
+            if prior_first_seen is not None:
+                narrative.first_seen_at = prior_first_seen
+        narrative.updated_at = utcnow()
+        await ref.set(to_doc(narrative), merge=True)
+        return narrative
+
+    async def features_with_value(self, *, namespace: str, key: str, value: str) -> list[str]:
+        """Every token mint carrying a specific TokenFeature — a Firestore
+        collection-group query across every token's `features` subcollection
+        at once, rather than fetching each qualified token's features
+        one-by-one. Since deterministic features (app/analysis/features.py)
+        are only ever written by Stage-3 enrichment, which only ever runs
+        for tokens that already qualified, a match here is inherently a
+        qualified token — no separate qualified-only filter is needed."""
+        query = (
+            self.db.collection_group("features")
+            .where(filter=FieldFilter("namespace", "==", namespace))
+            .where(filter=FieldFilter("key", "==", key))
+            .where(filter=FieldFilter("value", "==", value))
+        )
+        return [s.to_dict().get("token_mint") async for s in query.stream() if s.to_dict()]
+
     async def list_narratives(self, *, limit: int = 50, offset: int = 0) -> tuple[list[Narrative], int]:
         query = self.db.collection("narratives").order_by(
             "share_of_qualified", direction=Query.DESCENDING

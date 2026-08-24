@@ -172,6 +172,21 @@ async def run_trends_now(repo: FirestoreRepo = Depends(get_repo)) -> dict[str, A
     }
 
 
+@router.post("/run/narratives")
+async def run_narratives_now(repo: FirestoreRepo = Depends(get_repo)) -> dict[str, Any]:
+    """Manually trigger narrative clustering (§16) over the qualified dataset."""
+    from app.narratives.cluster import run_narrative_clustering
+
+    run = await run_narrative_clustering(repo)
+    return {
+        "qualified_tokens_scanned": run.qualified_tokens_scanned,
+        "seeded_narratives_updated": run.seeded_narratives_updated,
+        "emergent_narratives_found": run.emergent_narratives_found,
+        "started_at": run.started_at,
+        "finished_at": run.finished_at,
+    }
+
+
 @router.patch("/settings/{key}", response_model=SettingOut)
 async def update_setting(
     key: str,

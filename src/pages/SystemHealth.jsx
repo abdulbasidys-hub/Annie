@@ -56,7 +56,7 @@ function Pipeline({ onRan }) {
   return (
     <Panel
       title="Pipeline"
-      meta="no scheduler yet — each stage runs when you click it"
+      meta="also runs daily on its own schedule (Settings → Bots & scheduler) — use these for an on-demand check between runs"
     >
       <div className="stack gap-4">
         <PipelineAction
@@ -98,6 +98,20 @@ function Pipeline({ onRan }) {
             `${r.trends_created ?? 0} new trend(s), ${r.trends_updated ?? 0} updated, ` +
             `${r.status_changes ?? 0} status change(s).` +
             (r.skipped_windows?.length ? ` Skipped: ${r.skipped_windows.join(', ')}.` : '')
+          }
+        />
+        <PipelineAction
+          label="4. Narrative clustering"
+          hint="Group qualified tokens into seeded and emergent narratives (name/ticker/description patterns)."
+          onRun={async () => {
+            const r = await api.runNarratives()
+            onRan()
+            return r
+          }}
+          formatResult={(r) =>
+            `${r.qualified_tokens_scanned ?? 0} qualified token(s) scanned, ` +
+            `${r.seeded_narratives_updated ?? 0} seeded narrative(s) updated, ` +
+            `${r.emergent_narratives_found ?? 0} emergent narrative(s) found.`
           }
         />
       </div>

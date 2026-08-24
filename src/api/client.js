@@ -181,6 +181,7 @@ export const api = {
   runDiscovery: (hours) => request('POST', '/api/system/run/discovery', { params: { hours } }),
   runEnrichment: (batchSize) => request('POST', '/api/system/run/enrichment', { params: { batch_size: batchSize } }),
   runTrends: () => request('POST', '/api/system/run/trends'),
+  runNarratives: () => request('POST', '/api/system/run/narratives'),
 
   login: async (username, password) => {
     const result = await request('POST', '/api/auth/login', { body: { username, password } })

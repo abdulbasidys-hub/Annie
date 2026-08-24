@@ -57,6 +57,11 @@
       { "fieldPath": "type", "order": "ASCENDING" },
       { "fieldPath": "status", "order": "ASCENDING" },
       { "fieldPath": "created_at", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "features", "queryScope": "COLLECTION_GROUP", "fields": [
+      { "fieldPath": "namespace", "order": "ASCENDING" },
+      { "fieldPath": "key", "order": "ASCENDING" },
+      { "fieldPath": "value", "order": "ASCENDING" }
     ]}
   ],
   "fieldOverrides": []

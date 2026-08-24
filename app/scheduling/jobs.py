@@ -334,6 +334,21 @@ def _format_brief_for_discord(report) -> str:
     return "\n".join(lines)
 
 
+async def _narrative_clustering(registry: ProviderRegistry, repo: FirestoreRepo, settings) -> dict[str, Any]:
+    """Populates the narratives collection (§16) — see
+    app/narratives/cluster.py's module docstring for what this does and
+    deliberately doesn't (no baseline/trend comparison; that's the existing
+    trend engine's job over the same token.theme feature)."""
+    from app.narratives.cluster import run_narrative_clustering
+
+    run = await run_narrative_clustering(repo)
+    return {
+        "qualified_tokens_scanned": run.qualified_tokens_scanned,
+        "seeded_narratives_updated": run.seeded_narratives_updated,
+        "emergent_narratives_found": run.emergent_narratives_found,
+    }
+
+
 async def _research_task_sweep(
     registry: ProviderRegistry, repo: FirestoreRepo, settings
 ) -> dict[str, Any]:
@@ -386,6 +401,14 @@ JOBS: list[ScheduledJob] = [
         run=_memory_consolidation,
         default_hour=4,
         default_minute=0,
+        default_timezone="UTC",
+    ),
+    ScheduledJob(
+        name="narrative_clustering",
+        settings_key="scheduler_narrative_clustering",
+        run=_narrative_clustering,
+        default_hour=3,
+        default_minute=30,
         default_timezone="UTC",
     ),
     ScheduledJob(

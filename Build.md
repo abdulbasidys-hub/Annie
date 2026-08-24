@@ -2329,16 +2329,17 @@ pass: Firestore persistence, provider adapters (Helius discovery + chain
 truth, DexScreener market data, OpenAI + Tavily), the qualification engine,
 the trend engine, Annie's chat agent with a bounded tool-calling loop,
 single-operator (Bearer-token) authentication, the daily scheduler, the
-research-task runner, the report generator, Annie's work memory, and the
-Discord workspace (§79) are all real and have been exercised against a live
+research-task runner, the report generator, Annie's work memory, the
+Discord workspace (§79), a second discovery source, and narrative
+clustering (§80) are all real and have been exercised against a live
 Firestore project and a live OpenAI call — not merely written. Discovery
 specifically has been verified end-to-end against a real, unprompted Helius
-webhook delivery in production (§76), not just a hand-simulated payload. Not
-yet built: narrative clustering (§16's dedicated stage — trend detection
-currently uses the deterministic `token.theme` feature as a proxy), and an
-automated test suite covering routes and Firestore-touching code (the pure
-decision logic — statistics, trend lifecycle, qualification, scheduler
-timing — has one; see README's Tests row).
+webhook delivery in production (§76), not just a hand-simulated payload
+(though as of §80 the live webhook is temporarily disabled — see that
+section). Not yet built: an automated test suite covering routes and
+Firestore-touching code (the pure decision logic — statistics, trend
+lifecycle, qualification, scheduler timing — has one; see README's Tests
+row), and broadening discovery past two launchpads.
 
 ---
 
@@ -2444,3 +2445,59 @@ conflates a live chain read with a claim from the qualified dataset.
 
 See README.md for setup/operational detail on all of the above (env vars —
 none new were required — Firestore indexes, the scheduler's config keys).
+
+---
+
+# 80. Amendment — Second discovery source, narrative clustering, and testing-infrastructure fixes
+
+Closes the two items §79 still left open (multi-launchpad discovery,
+narrative clustering) plus real bugs found by actually exercising what §79
+built, rather than reading it.
+
+**Raydium LaunchLab added as a second discovery source**, superseding part
+of §76/§79's "Pump.fun only" framing.
+`LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj` — the shared program behind
+Bonk.fun/LetsBonk.fun — confirmed the same empirical way the original
+CREATE-vs-TOKEN_MINT question was answered: pulled real signatures for the
+program, found the real `InitializeV2`+`BuyExactIn` creation pattern, then
+confirmed Helius's enhanced parser classifies it `type: "CREATE_POOL"`,
+`source: "RAYDIUM_LAUNCHLAB"` — a different value than Pump.fun's
+`"CREATE"`. Fed a real payload through the actual `_parse_token_mint`
+function, not a simulation. Worth knowing: unlike Pump.fun, this launchpad
+has no bonding-curve gate — a freshly-created token already has a real
+DexScreener quote, so qualification's "invisible until migrated" property
+(§79) is Pump.fun-specific, not universal; the $100k threshold itself still
+works correctly regardless.
+
+**Narrative clustering** (§16) — `app/narratives/cluster.py`, deterministic,
+scheduled daily. Populates the `narratives` collection two ways: seeded
+themes (`SEED_THEMES` in `app/analysis/features.py`) become real records via
+a Firestore collection-group query over the `token.theme` feature every
+qualified token already carries; emergent discovery calls
+`discover_ngrams`, which already existed specifically for §16's "discover
+categories rather than relying exclusively on hardcoded categories"
+requirement and had never been called from anywhere. No LLM call, no
+baseline/trend comparison (that machinery already exists in
+`app/trends/engine.py` over the same feature — duplicating it here would be
+a second, divergent implementation, not new coverage).
+
+**Two real bugs found by re-verifying the 12 frontend pages that hadn't
+been touched since the Bearer-token migration**, both in test
+infrastructure, not the app itself: the fixture server's login stub never
+returned a token (a continuous session never noticed, since `Login.jsx`
+flips React state directly on a successful call; a full page reload —
+exactly what `tools/shoot.js` does per route, and exactly what a real
+bookmarked URL does — re-checks for a stored token, finds none, and shows
+the login screen again), and its CORS `Access-Control-Allow-Headers` never
+allowed `Authorization` at all (a leftover from the pre-Bearer-token cookie
+model), which silently fails every authenticated request's preflight at the
+network level once a token *is* present. Both fixed; all 17 routes render
+clean (desktop/mobile, dark/light) with the fix in place, confirmed by
+actually running the harness and inspecting the screenshots.
+
+**Also found and being tracked as a live operational fact, not a code
+issue:** the registered Helius webhook auto-disabled itself (99.6% failure
+rate over 24h) while Railway was down overnight — every delivery attempt
+hit a dead URL. Re-enabling it is a manual step after any extended Railway
+outage; Helius does not do this automatically once the URL starts working
+again.

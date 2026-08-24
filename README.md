@@ -378,7 +378,7 @@ Be direct about this before relying on anything.
 | Provider adapters, registry, failover | Complete. Helius + DexScreener **verified reachable** — the only two adapters this deployment has; Bitquery/Birdeye were removed entirely rather than kept unused (§75) |
 | Statistical engine, trend lifecycle | Complete — pure functions, now with a real test suite (see Tests below) |
 | Qualification | Complete — provider-only, no DB coupling. **Now the sole discovery gate**: a token can't qualify without having migrated off its bonding curve, since DexScreener (this deployment's only market-data source) has no quote until it has — confirmed empirically, see below |
-| Discovery (Stage 1) | **Working — webhook-driven, real time.** A Helius webhook (`transactionTypes: ["CREATE"]`) records every new Pump.fun mint the instant it happens, verified against a real delivery; signature polling remains only as a backfill (§76). No automatic discovery of *unknown* launchpads |
+| Discovery (Stage 1) | **Working — webhook-driven, real time, two launchpads.** A Helius webhook records every new mint from Pump.fun (`type: "CREATE"`) and Raydium LaunchLab/Bonk.fun (`type: "CREATE_POOL"`) the instant it happens; signature polling remains only as a backfill (§76, §79). No automatic discovery of *unknown* launchpads. **The live webhook is currently disabled** — Helius auto-disables on a high failure rate, which is exactly what happened while Railway was down; see [What is not built](#what-is-not-built) |
 | Enrichment (Stage 2/3) | **Working, now scheduled daily** (`app/scheduling/`), not just on manual trigger — drains the full pending backlog, not one bounded batch |
 | Trend engine | **Working.** Not yet run against real qualified-token volume |
 | **Annie's chat agent** | **Built and verified against live OpenAI**, on web, Telegram and Discord — plus a live on-demand token lookup, work-memory search, and (Discord only) real channel creation |
@@ -390,7 +390,7 @@ Be direct about this before relying on anything.
 | **Annie's work memory** | **Built.** Long-term findings + daily logs (`Memory` model), consolidation ("Dreams") that promotes real findings and archives stale ones, all retrieved on-demand by a dedicated agent tool — never preloaded into every turn |
 | **Discord workspace** | **Built.** Channel-purpose configuration (`DiscordChannel`), purpose-aware routing, and a `manage_discord_channel` agent tool gated on a real, confirmed Manage Channels permission — never offered when it would just fail |
 | **Personality configuration** | **Built.** Tone/style/skepticism/pushback/explanation are operator-editable from the Personality page; the hard rules in `persona.py` are not, and the page says so rather than faking an editable UI for them |
-| **Narrative clustering** | **Not written** — the `narratives` collection exists but nothing populates it; trend detection uses the deterministic `token.theme` feature as a stand-in |
+| **Narrative clustering** | **Built.** Deterministic (no LLM), scheduled daily: seeded themes (animal, ai, politics, ...) become real `Narrative` records via a Firestore collection-group query over existing `token.theme` features, and emergent n-gram discovery (§16's "discover categories rather than relying exclusively on hardcoded categories") finds recurring non-seeded words across qualified tokens' names/descriptions — reusing `discover_ngrams`, which already existed in `app/analysis/features.py` and had never been called |
 | API routes | Complete for all read paths + the routes above, plus `/api/memory/*` and `/api/personality` |
 | Frontend (14 destinations + login) | Built; `npm run build` passes, and Memory/Personality specifically were driven through a real browser against the real backend (Playwright) — see [Verified end-to-end](#verified-end-to-end). The other 12 pages were not re-verified this pass |
 | **Firestore composite indexes** | Declared in `firestore.indexes.json`, including the new `memories` indexes; deploy them once — see [Setup](#step-2-deploy-firestore-indexes) |
@@ -398,25 +398,35 @@ Be direct about this before relying on anything.
 
 Four specific things to know before trusting output:
 
-- **Discovery only sees Pump.fun right now.** `app/providers/helius.py`'s
-  `KNOWN_LAUNCHPAD_PROGRAMS` is a short, explicit list, and the Helius webhook
-  (see `app/api/routes/webhooks.py`) is registered against exactly that list's
-  program IDs. A launch on a program not in that list is invisible — not
-  filtered out, not deprioritized, *invisible*. This directly limits Build.md
-  §5's "must not be limited to Pump.fun" goal until either more program IDs
-  are added (and the webhook's `accountAddresses` updated to match) or
-  Bitquery is reinstated as the discovery source (§76 explains the trade).
-- **The webhook's `transactionTypes` filter matters and isn't documented
-  anywhere authoritative.** A real Pump.fun create transaction classifies as
-  `type: "CREATE"`, `source: "PUMP_FUN"` in Helius's enhanced parser —
-  confirmed empirically against a real delivery, not from Helius's docs (the
-  initial guess, `TOKEN_MINT`, silently produced zero deliveries for hours).
-  If discovery ever goes quiet again, checking the registered webhook's
-  `transactionTypes` against a fresh empirical sample (fetch a known-new mint
-  from `frontend-api-v3.pump.fun/coins`, walk its signature history back to
-  genesis, diff the raw tx logs against Helius's enhanced parse of that same
-  signature) is the reliable way to re-derive the correct value — not
-  re-reading Helius's docs.
+- **Discovery only sees two launchpads.** `app/providers/helius.py`'s
+  `KNOWN_LAUNCHPAD_PROGRAMS` is a short, explicit list (Pump.fun, Raydium
+  LaunchLab), and the Helius webhook (see `app/api/routes/webhooks.py`) is
+  registered against exactly that list's program IDs. A launch on a program
+  not in that list is invisible — not filtered out, not deprioritized,
+  *invisible*. This directly limits Build.md §5's "must not be limited to
+  Pump.fun" goal until either more program IDs are added (and the webhook's
+  `accountAddresses`/`transactionTypes` updated to match — see
+  `KNOWN_LAUNCHPAD_PROGRAMS`'s docstring for the exact empirical procedure)
+  or Bitquery is reinstated as the discovery source (§76 explains the trade).
+- **The live Helius webhook is currently disabled.** Helius auto-disables a
+  webhook after a sustained high failure rate — this one got auto-disabled
+  (99.6% failures over 24h) while Railway was down overnight, since every
+  delivery attempt hit a dead URL. Redeploying Railway does **not**
+  automatically re-enable it; that's a separate `PUT
+  https://api.helius.xyz/v0/webhooks/<webhookID>` call (or the Helius
+  dashboard) setting `active: true`, needed once after any extended outage.
+- **The webhook's `transactionTypes` filter matters, isn't documented
+  anywhere authoritative, and is different per launchpad.** A real Pump.fun
+  create transaction classifies as `type: "CREATE"`, `source: "PUMP_FUN"`;
+  a real Raydium LaunchLab create classifies as `type: "CREATE_POOL"`,
+  `source: "RAYDIUM_LAUNCHLAB"` — both confirmed empirically against real
+  chain data, not from Helius's docs (the initial Pump.fun guess,
+  `TOKEN_MINT`, silently produced zero deliveries for hours). If discovery
+  ever goes quiet again, or a new launchpad is added, the reliable way to
+  find the correct value is empirical, not documentation: fetch a known-new
+  mint from that launchpad's own API, walk its signature history back to
+  genesis, and diff the raw tx logs against Helius's enhanced parse of that
+  same signature.
 - **Without Firestore's composite indexes deployed, list/dashboard queries
   will 500** with a `FAILED_PRECONDITION: The query requires an index` error.
   This is normal, expected Firestore behavior, not a bug — see the setup step
@@ -941,45 +951,43 @@ only use of `--annie`. Personality lives in her voice, not in your charts.
 ## Picking up the unfinished work
 
 Each item is reachable without touching the others. The autonomous research
-runner, the scheduler, the report generator, and an initial test suite —
-all previously listed here — are built; see [What's actually built and
+runner, the scheduler, the report generator, an initial test suite, a
+second discovery source, and narrative clustering — all previously listed
+here — are built; see [What's actually built and
 working](#whats-actually-built-and-working).
 
-1. **Broaden discovery beyond Pump.fun.** Add program IDs to
-   `KNOWN_LAUNCHPAD_PROGRAMS` in `app/providers/helius.py`, then update the
-   registered webhook's `accountAddresses` to match (`PUT
-   https://api.helius.xyz/v0/webhooks/<webhookID>?api-key=...` with the full
-   new list — see Step 4 in Setup) as you identify them, or reinstate Bitquery
-   as the discovery source (§76) for indexed, ecosystem-wide coverage instead
-   of a fixed list. Since qualification's real migration gate is just "does
-   DexScreener have a quote" (see [What is not
-   built](#what-is-not-built)), watching Raydium's pool-creation events
-   generically — not just Pump.fun's program — could pick up migrations from
-   *any* launchpad that ends up on Raydium, as a further extension.
+1. **Broaden discovery beyond Pump.fun + Raydium LaunchLab.** Add program
+   IDs to `KNOWN_LAUNCHPAD_PROGRAMS` in `app/providers/helius.py`, empirically
+   confirm the launchpad's real Helius `transactionTypes` classification (see
+   `KNOWN_LAUNCHPAD_PROGRAMS`'s docstring for the exact procedure — do not
+   assume it matches either of the two already confirmed), then update the
+   registered webhook's `accountAddresses` *and* `transactionTypes` to match
+   (`PUT https://api.helius.xyz/v0/webhooks/<webhookID>?api-key=...`) — or
+   reinstate Bitquery as the discovery source (§76) for indexed,
+   ecosystem-wide coverage instead of a fixed list.
 
-2. **Narrative clustering.** The `narratives` collection and its API routes
-   exist and return correctly-shaped empty results. A stage that actually
-   clusters the deterministic `theme` features into named narratives (§16)
-   would populate it.
-
-3. **Re-verify the other 12 frontend pages.** `npm run build` passes and
+2. **Re-verify the other 12 frontend pages.** `npm run build` passes and
    Memory/Personality were driven through a real browser this pass (see
-   [Verified end-to-end](#verified-end-to-end)) — the rest weren't re-checked.
-   Run `cd tools && node shoot.js ./shots` before trusting a visual claim
-   about any page not named there.
+   [Verified end-to-end](#verified-end-to-end)) — the rest weren't re-checked
+   this time, though `tools/shoot.js` itself was fixed this pass (it never
+   actually logged in before testing routes — see the fixture server's
+   git history) and running it now correctly exercises all of them. Run
+   `cd tools && node shoot.js ./shots` before trusting a visual claim about
+   any page not named in Verified end-to-end.
 
-4. **Broaden the test suite.** 70 tests cover the pure decision logic
+3. **Broaden the test suite.** 70 tests cover the pure decision logic
    (`app/analysis/stats.py`, `app/trends/lifecycle.py`,
    `app/pipeline/qualification.py`, the scheduler's timing rules) — routes,
    Firestore-touching repo methods, and the agent loop are still only
    verified by hand. `pip install -r requirements-dev.txt && pytest`.
 
-5. **A consolidation run-history endpoint.** The Memory page's Dreams tab is
-   an honest empty state right now because consolidation runs on a schedule
-   but doesn't record anything queryable about *each run* — only its
-   effects (new/archived memories). A small `ConsolidationRun` record
-   written by `app/scheduling/jobs.py`'s `_memory_consolidation` would give
-   that tab real content.
+4. **Narrative clustering trend comparison.** The new clustering stage
+   (`app/narratives/cluster.py`) computes current counts/shares, deliberately
+   not a recent-vs-baseline comparison — that statistical machinery already
+   exists in `app/trends/engine.py` over the same `token.theme` feature.
+   Wiring the trend engine to also treat *emergent* (n-gram-discovered)
+   narratives as trend subjects, not just the seeded ones, would extend that
+   existing comparison rather than duplicate it.
 
 ---
 
