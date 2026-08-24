@@ -141,6 +141,28 @@ async def helius_webhook(
     return {"received": len(events), "created": created, "unparsed": unparsed, "failed": failed}
 
 
+#: Mints that must never be picked as "the launched token", however early
+#: they appear in an event's tokenTransfers. Found via a real production
+#: event on 2026-08-24: a Pump.fun *migration* (bonding curve -> PumpSwap,
+#: `type: "CREATE_POOL"`, `source: "PUMP_AMM"` — a different classification
+#: from either launchpad's actual creation event) moves SOL as payment
+#: alongside the real token, with SOL listed first — naively taking index 0
+#: recorded wrapped SOL itself as a "discovered token" and then crashed
+#: qualification (see app/providers/dexscreener.py's `_pairs_from_response`
+#: for the DexScreener-side half of that bug). `CREATE_POOL` genuinely means
+#: "a pool was created", not "a token was created" — it fires for both a
+#: brand-new LaunchLab token *and* an already-existing Pump.fun token
+#: migrating; this list is the cheap, robust fix for the former case
+#: without needing to fully distinguish create-vs-migrate.
+_NON_MEMECOIN_MINTS = frozenset(
+    {
+        "So11111111111111111111111111111111111111112",  # wrapped SOL
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",  # USDC
+        "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",  # USDT
+    }
+)
+
+
 def _parse_token_mint(event: dict[str, Any]) -> TokenLaunch | None:
     signature = event.get("signature")
     timestamp = event.get("timestamp")
@@ -151,16 +173,18 @@ def _parse_token_mint(event: dict[str, Any]) -> TokenLaunch | None:
 
     mint: str | None = None
     for transfer in event.get("tokenTransfers") or []:
-        if isinstance(transfer, dict) and transfer.get("mint"):
-            mint = transfer["mint"]
+        candidate = transfer.get("mint") if isinstance(transfer, dict) else None
+        if candidate and candidate not in _NON_MEMECOIN_MINTS:
+            mint = candidate
             break
     if mint is None:
         for account in event.get("accountData") or []:
             if not isinstance(account, dict):
                 continue
             for change in account.get("tokenBalanceChanges") or []:
-                if isinstance(change, dict) and change.get("mint"):
-                    mint = change["mint"]
+                candidate = change.get("mint") if isinstance(change, dict) else None
+                if candidate and candidate not in _NON_MEMECOIN_MINTS:
+                    mint = candidate
                     break
             if mint:
                 break

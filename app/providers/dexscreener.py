@@ -21,6 +21,22 @@ from app.providers.types import MarketQuote, Provenance
 BASE_URL = "https://api.dexscreener.com"
 
 
+def _pairs_from_response(data: Any) -> list[dict[str, Any]]:
+    """DexScreener's `/latest/dex/tokens/{mint}` normally returns
+    ``{"pairs": [...]}`` but for an extremely high-traffic token (confirmed
+    directly: wrapped SOL's own mint, So111...112) returns a **bare array**
+    instead — found when real qualification data hit this mint and crashed
+    with ``'list' object has no attribute 'get'``. Handles both shapes
+    rather than trusting the documented one."""
+    if not data:
+        return []
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        return data.get("pairs") or []
+    return []
+
+
 def _dec(value: Any) -> Decimal | None:
     """Parse to Decimal, or ``None``.
 
@@ -125,9 +141,8 @@ class DexScreenerAdapter(HttpProvider):
         data = await self.request(
             "GET", f"/latest/dex/tokens/{mint}", operation="get_pairs", allow_404=True
         )
-        if not data:
-            return []
-        parsed = [self._parse_pair(p) for p in (data.get("pairs") or [])]
+        pairs = _pairs_from_response(data)
+        parsed = [self._parse_pair(p) for p in pairs]
         return [p for p in parsed if p is not None]
 
     async def search(self, query: str) -> list[MarketQuote]:
@@ -139,9 +154,8 @@ class DexScreenerAdapter(HttpProvider):
             params={"q": query},
             allow_404=True,
         )
-        if not data:
-            return []
-        parsed = [self._parse_pair(p) for p in (data.get("pairs") or [])]
+        pairs = _pairs_from_response(data)
+        parsed = [self._parse_pair(p) for p in pairs]
         return [p for p in parsed if p is not None]
 
     async def get_new_pairs(self, *_: Any, **__: Any) -> list[MarketQuote]:
