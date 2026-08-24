@@ -208,13 +208,33 @@ class FirestoreRepo:
                 wallet=creator_wallet, mint=mint, launchpad_slug=None, launched_at=None
             )
 
-    async def list_tokens_for_qualification(self, limit: int = 50) -> list[Token]:
+    async def list_tokens_for_qualification(
+        self, limit: int = 50, *, start_after: Any | None = None
+    ) -> tuple[list[Token], Any | None]:
+        """Newest-discovered tokens first.
+
+        A brand-new token is far more likely to still be mid-pump than one
+        that has sat unqualified for days — the previous unordered query left
+        scan order to Firestore's discretion, so a backlog drain could burn
+        its entire budget on old, already-dead tokens while the day's actual
+        pumps went unchecked (confirmed empirically 2026-08-25: 16,602 of
+        16,774 discovered tokens had *never* been evaluated at all). Returns
+        the last document alongside the page so a multi-batch drain
+        (:func:`app.pipeline.enrichment.run_enrichment_all`) can page forward
+        with ``start_after`` instead of re-fetching the same newest N every
+        call.
+        """
         query = (
             self.db.collection("tokens")
             .where(filter=FieldFilter("pipeline_stage", "==", PipelineStage.DISCOVERY))
+            .order_by("created_at", direction=Query.DESCENDING)
             .limit(limit)
         )
-        return [from_doc(Token, s.id, s.to_dict() or {}, mint=s.id) async for s in query.stream()]
+        if start_after is not None:
+            query = query.start_after(start_after)
+        docs = [s async for s in query.stream()]
+        tokens = [from_doc(Token, s.id, s.to_dict() or {}, mint=s.id) for s in docs]
+        return tokens, (docs[-1] if docs else None)
 
     async def list_tokens(
         self,

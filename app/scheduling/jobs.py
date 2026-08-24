@@ -23,12 +23,14 @@ log = structlog.get_logger(__name__)
 async def _daily_qualification(
     registry: ProviderRegistry, repo: FirestoreRepo, settings
 ) -> dict[str, Any]:
-    """Drain the full discovery-stage backlog through qualification + enrichment.
+    """Nightly safety-net drain of the *entire* discovery-stage backlog.
 
-    This is the daily counterpart to the manual ``/api/system/run/enrichment``
-    endpoint (which still processes one bounded batch on demand, for a quick
-    operator-triggered check). See ``app/pipeline/enrichment.py``'s
-    ``run_enrichment_all`` for why a full drain is safe to run unattended:
+    Not what actually catches a pump anymore — see ``_frequent_qualification``
+    below for that. This exists to eventually reach stragglers the frequent
+    job's bounded, newest-first batches never get to (a token that never
+    pumped and just ages down the priority order forever), and as a full
+    reconciliation pass. See ``app/pipeline/enrichment.py``'s
+    ``run_enrichment_all`` for why draining is safe to run unattended:
     qualification structurally cannot succeed for a token that hasn't
     migrated off its bonding curve (DexScreener has no quote for one, and
     DexScreener is this deployment's only market-data source) — confirmed
@@ -39,6 +41,45 @@ async def _daily_qualification(
     from app.pipeline.enrichment import run_enrichment_all
 
     run = await run_enrichment_all(registry, repo)
+    return {
+        "evaluated": run.evaluated,
+        "qualified": run.qualified,
+        "enriched": run.enriched,
+        "errors": len(run.errors),
+    }
+
+
+#: How many of the newest discovery-stage tokens the frequent job checks per
+#: tick. Sized against real observed volume (~16,000 discoveries/day, ~11/min)
+#: plus headroom to also re-check recently-seen-but-not-yet-qualified tokens
+#: each pass, while comfortably finishing within DexScreener's 4 req/s budget
+#: (600 tokens / 4 req/s = 150s, well under the 10-minute interval below).
+FREQUENT_QUALIFICATION_BATCH_SIZE = 600
+
+
+async def _frequent_qualification(
+    registry: ProviderRegistry, repo: FirestoreRepo, settings
+) -> dict[str, Any]:
+    """Check the newest discovered tokens for qualification every few minutes.
+
+    This is the fix for a real, confirmed production bug (2026-08-25): with
+    qualification running once a day, everything discovered after that one
+    run sat unchecked for up to 24h — long past when a typical fast-moving
+    Pump.fun pump had already risen and reversed. A trader watching the
+    market live would see tokens cross $100k that this system's own
+    once-daily spot-check never had a chance to observe, because the check
+    almost never landed inside the token's brief pump window.
+
+    Always starts from the newest end (no cursor — see
+    ``FirestoreRepo.list_tokens_for_qualification``) rather than trying to
+    page through the whole backlog: a brand-new token is far more likely to
+    still be moving than one that has already sat unqualified for days, and
+    each tick naturally re-covers whatever is still fresh. The daily job
+    above is the backstop that eventually reaches everything else.
+    """
+    from app.pipeline.enrichment import run_enrichment
+
+    run, _cursor = await run_enrichment(registry, repo, batch_size=FREQUENT_QUALIFICATION_BATCH_SIZE)
     return {
         "evaluated": run.evaluated,
         "qualified": run.qualified,
@@ -371,6 +412,12 @@ async def _research_task_sweep(
 #: up as an editable row on the Settings page — change the trigger time/
 #: timezone/enabled flag there, no redeploy needed.
 JOBS: list[ScheduledJob] = [
+    ScheduledJob(
+        name="frequent_qualification",
+        settings_key="scheduler_frequent_qualification",
+        run=_frequent_qualification,
+        default_interval_minutes=10,
+    ),
     ScheduledJob(
         name="daily_qualification",
         settings_key="scheduler_daily_qualification",

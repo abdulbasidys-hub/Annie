@@ -21,6 +21,10 @@
       { "fieldPath": "is_qualified", "order": "ASCENDING" },
       { "fieldPath": "qualified_at", "order": "ASCENDING" }
     ]},
+    { "collectionGroup": "tokens", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "pipeline_stage", "order": "ASCENDING" },
+      { "fieldPath": "created_at", "order": "DESCENDING" }
+    ]},
     { "collectionGroup": "trends", "queryScope": "COLLECTION", "fields": [
       { "fieldPath": "status", "order": "ASCENDING" },
       { "fieldPath": "last_observed_at", "order": "DESCENDING" }

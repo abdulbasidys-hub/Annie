@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 
 import structlog
 
@@ -42,11 +43,12 @@ async def run_enrichment(
     repo: FirestoreRepo,
     *,
     batch_size: int = 50,
-) -> EnrichmentRun:
+    start_after: Any | None = None,
+) -> tuple[EnrichmentRun, Any | None]:
     run = EnrichmentRun(started_at=datetime.now(timezone.utc))
     qualifier = Qualifier(registry)
 
-    pending = await repo.list_tokens_for_qualification(limit=batch_size)
+    pending, cursor = await repo.list_tokens_for_qualification(limit=batch_size, start_after=start_after)
     for token in pending:
         run.evaluated += 1
         try:
@@ -74,7 +76,7 @@ async def run_enrichment(
         qualified=run.qualified,
         enriched=run.enriched,
     )
-    return run
+    return run, cursor
 
 
 async def run_enrichment_all(
@@ -86,20 +88,29 @@ async def run_enrichment_all(
 ) -> EnrichmentRun:
     """Drain the entire discovery-stage backlog, not just one batch.
 
-    Used by the daily scheduled qualification job
-    (:mod:`app.scheduling.jobs`) — the manual ``/api/system/run/enrichment``
-    endpoint still calls :func:`run_enrichment` directly for one bounded
-    batch, since an operator clicking "Run now" wants a fast result, not a
-    run that could process thousands of tokens before responding.
+    Used by the nightly full-sweep qualification job
+    (:mod:`app.scheduling.jobs`) as a safety net that eventually reaches
+    every straggler — the frequent qualification job (same module, every
+    few minutes) is what actually catches tokens while they're still
+    plausibly mid-pump, by always starting from the newest end with no
+    cursor. The manual ``/api/system/run/enrichment`` endpoint still calls
+    :func:`run_enrichment` directly for one bounded batch, since an operator
+    clicking "Run now" wants a fast result, not a run that could process
+    thousands of tokens before responding.
 
-    ``max_batches`` is a safety cap (200 x 200 = 40,000/day), not a tuned
-    limit — real daily discovery volume should be far below it; it exists so
-    a bug that makes ``list_tokens_for_qualification`` never shrink can't
-    turn this into an unbounded loop.
+    Pages forward with the cursor :func:`run_enrichment` returns — without
+    it, each call would re-fetch the same newest ``batch_size`` tokens
+    forever now that the underlying query is deterministically ordered
+    (confirmed empirically 2026-08-25: this is exactly what made 16,602 of
+    16,774 discovered tokens sit permanently unevaluated). ``max_batches`` is
+    a safety cap (200 x 200 = 40,000/run), not a tuned limit; it exists so a
+    bug that makes the cursor never advance can't turn this into an
+    unbounded loop.
     """
     total = EnrichmentRun(started_at=datetime.now(timezone.utc))
+    cursor: Any | None = None
     for _ in range(max_batches):
-        run = await run_enrichment(registry, repo, batch_size=batch_size)
+        run, cursor = await run_enrichment(registry, repo, batch_size=batch_size, start_after=cursor)
         total.evaluated += run.evaluated
         total.qualified += run.qualified
         total.enriched += run.enriched

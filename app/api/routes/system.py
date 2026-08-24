@@ -141,7 +141,7 @@ async def run_enrichment_now(
     """Manually trigger Stage 2/3 (§4, §20): qualify and enrich discovered tokens."""
     from app.pipeline.enrichment import run_enrichment
 
-    run = await run_enrichment(registry, repo, batch_size=batch_size)
+    run, _cursor = await run_enrichment(registry, repo, batch_size=batch_size)
     return {
         "evaluated": run.evaluated,
         "qualified": run.qualified,

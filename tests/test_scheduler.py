@@ -73,9 +73,14 @@ class TestTriggerTiming:
         async def job(registry, repo, settings):
             calls.append(1)
 
+        # A trigger two minutes from now, within the current hour, is
+        # unambiguously "later today" regardless of what hour it is right
+        # now — unlike `min(now.hour + 2, 23)`, which clamps to hour 23 and
+        # spuriously looks "already past" whenever the suite runs within two
+        # hours of UTC midnight.
         now = datetime.now(timezone.utc)
-        future_hour = min(now.hour + 2, 23)
-        scheduled = _job(job, hour=future_hour, minute=0)
+        future_minute = min(now.minute + 2, 59)
+        scheduled = _job(job, hour=now.hour, minute=future_minute)
         scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[scheduled])
 
         await scheduler._maybe_run(scheduled)
@@ -124,6 +129,91 @@ class TestTriggerTiming:
 
         await scheduler._maybe_run(scheduled)
         assert len(calls) == 1
+
+
+def _interval_job(run, *, minutes, enabled=True):
+    return ScheduledJob(
+        name="test_interval_job", settings_key="scheduler_test_interval_job", run=run,
+        default_interval_minutes=minutes, default_enabled=enabled,
+    )
+
+
+class TestIntervalTiming:
+    """The frequent-qualification job's timing rules (§ 2026-08-25 fix) — a
+    once-a-day cadence is what let 16,602 of 16,774 discovered tokens go
+    unevaluated in production, so this locks in that an interval job fires
+    immediately on first tick and then respects its own interval."""
+
+    async def test_fires_immediately_when_never_run(self, repo):
+        calls = []
+
+        async def job(registry, repo, settings):
+            calls.append(1)
+
+        scheduled = _interval_job(job, minutes=15)
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[scheduled])
+
+        await scheduler._maybe_run(scheduled)
+        assert len(calls) == 1
+
+    async def test_does_not_fire_again_before_interval_elapses(self, repo):
+        calls = []
+
+        async def job(registry, repo, settings):
+            calls.append(1)
+
+        scheduled = _interval_job(job, minutes=15)
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[scheduled])
+
+        await scheduler._maybe_run(scheduled)
+        await scheduler._maybe_run(scheduled)
+        await scheduler._maybe_run(scheduled)
+        assert len(calls) == 1
+
+    async def test_fires_again_once_interval_has_elapsed(self, repo):
+        calls = []
+
+        async def job(registry, repo, settings):
+            calls.append(1)
+
+        scheduled = _interval_job(job, minutes=15)
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[scheduled])
+
+        await repo.upsert_setting(
+            "scheduler_test_interval_job",
+            {
+                "enabled": True,
+                "interval_minutes": 15,
+                "last_run_at": (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat(),
+            },
+        )
+        await scheduler._maybe_run(scheduled)
+        assert len(calls) == 1
+
+    async def test_disabled_interval_job_never_fires(self, repo):
+        calls = []
+
+        async def job(registry, repo, settings):
+            calls.append(1)
+
+        scheduled = _interval_job(job, minutes=15, enabled=False)
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[scheduled])
+
+        await scheduler._maybe_run(scheduled)
+        assert len(calls) == 0
+
+    async def test_ensure_defaults_visible_writes_interval_shape(self, repo):
+        async def job(registry, repo, settings):
+            pass
+
+        scheduled = _interval_job(job, minutes=10)
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[scheduled])
+
+        await scheduler._ensure_defaults_visible()
+
+        setting = await repo.get_setting("scheduler_test_interval_job")
+        assert setting.value["interval_minutes"] == 10
+        assert "hour" not in setting.value
 
 
 class TestConfigPersistence:
