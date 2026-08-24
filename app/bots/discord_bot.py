@@ -154,3 +154,31 @@ async def _send(channel: "discord.abc.Messageable", text: str) -> None:
     text = text or "(empty reply)"
     for i in range(0, len(text), MAX_MESSAGE_LENGTH):
         await channel.send(text[i : i + MAX_MESSAGE_LENGTH])
+
+
+async def send_channel_message(bot_token: str, channel_id: str, text: str) -> bool:
+    """Send a message to a channel by ID over Discord's REST API, without
+    needing the live Gateway `discord.Client` — used by
+    `app/scheduling/jobs.py`'s Morning Brief job, which runs as its own
+    background task, not inside the bot's event loop. Same approach the
+    Telegram bot already uses (plain HTTP, no SDK needed for a one-shot
+    send). Returns False rather than raising — a failed delivery should
+    not crash the scheduler."""
+    import httpx
+
+    text = text or "(empty)"
+    ok = True
+    async with httpx.AsyncClient(
+        base_url="https://discord.com/api/v10",
+        headers={"Authorization": f"Bot {bot_token}"},
+        timeout=15,
+    ) as client:
+        for i in range(0, len(text), MAX_MESSAGE_LENGTH):
+            chunk = text[i : i + MAX_MESSAGE_LENGTH]
+            try:
+                response = await client.post(f"/channels/{channel_id}/messages", json={"content": chunk})
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                log.warning("discord_rest_send_failed", channel_id=channel_id, error=str(exc))
+                ok = False
+    return ok

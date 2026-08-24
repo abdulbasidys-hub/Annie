@@ -236,6 +236,58 @@ def _consolidation_digest(daily_logs, existing_long_term, recent_notes) -> str:
     return "\n".join(lines)
 
 
+async def _morning_brief(registry: ProviderRegistry, repo: FirestoreRepo, settings) -> dict[str, Any]:
+    """Generates today's daily Report (app/reports/generator.py — the same
+    generator the Reports page reads) and, if Discord is configured and a
+    channel has been set up for it, delivers a Discord-formatted version.
+
+    Never assumes a channel exists: no configured `morning_brief`-purpose
+    channel is a normal, expected state before the operator (or Annie, on
+    request) sets one up — this generates the report either way and simply
+    skips delivery, logged plainly rather than treated as a failure.
+    """
+    from app.reports.generator import generate_daily_report
+
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(hours=24)
+    report = await generate_daily_report(repo, period_start=since, period_end=now)
+
+    if not settings.is_available("discord"):
+        return {"report_id": report.id, "delivered": False, "reason": "discord not configured"}
+
+    channel = await repo.get_discord_channel_by_purpose("morning_brief")
+    if channel is None:
+        return {"report_id": report.id, "delivered": False, "reason": "no channel configured for morning_brief purpose"}
+
+    from app.bots.discord_bot import send_channel_message
+
+    text = _format_brief_for_discord(report)
+    delivered = await send_channel_message(settings.discord_bot_token, channel.channel_id, text)
+    return {"report_id": report.id, "delivered": delivered, "channel_id": channel.channel_id}
+
+
+def _format_brief_for_discord(report) -> str:
+    lines = [f"**Annie Morning Brief — {report.title.split(' — ')[-1]}**", ""]
+    if report.headline_finding:
+        lines.append(f"**What changed:** {report.headline_finding}")
+    if report.biggest_change:
+        lines.append(f"**Biggest change:** {report.biggest_change}")
+    lines.append(f"\n{report.summary or ''}")
+    if report.sections.get("rising_trends"):
+        lines.append("\n**Rising trends:**")
+        for t in report.sections["rising_trends"][:5]:
+            lines.append(f"- {t['name']}")
+    if report.sections.get("worth_investigating"):
+        lines.append("\n**Worth investigating:**")
+        for n in report.sections["worth_investigating"][:3]:
+            lines.append(f"- {n['title']}")
+    if report.sections.get("data_quality"):
+        lines.append("\n**Data quality issues:**")
+        for d in report.sections["data_quality"][:3]:
+            lines.append(f"- {d['stage']}: {d.get('notes') or 'below coverage threshold'}")
+    return "\n".join(lines)
+
+
 async def _research_task_sweep(
     registry: ProviderRegistry, repo: FirestoreRepo, settings
 ) -> dict[str, Any]:
@@ -287,6 +339,14 @@ JOBS: list[ScheduledJob] = [
         settings_key="scheduler_memory_consolidation",
         run=_memory_consolidation,
         default_hour=4,
+        default_minute=0,
+        default_timezone="UTC",
+    ),
+    ScheduledJob(
+        name="morning_brief",
+        settings_key="scheduler_morning_brief",
+        run=_morning_brief,
+        default_hour=8,
         default_minute=0,
         default_timezone="UTC",
     ),
