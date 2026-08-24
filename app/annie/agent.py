@@ -15,8 +15,16 @@ Two OpenAI calls per turn, not one:
    calling isn't expressible through that class's single-shot ``structured()``.
 
 Every tool call is logged via :meth:`FirestoreRepo.record_tool_call` (§47).
-The tools only ever *read* — nothing Annie can call writes to the database,
-so a model that misuses a tool can produce a wrong answer, never wrong data.
+Most tools only ever *read*, so a model that misuses one can produce a wrong
+answer, never wrong data. The two exceptions are scoped narrowly on purpose:
+``manage_discord_channel`` (only offered when Discord already confirmed the
+permission) and ``create_research_task``, which queues bounded, budgeted
+background work through the same engine autonomous research uses
+(:mod:`app.research.runner`) rather than touching token/trend data directly —
+this is what lets "go look into X" in chat or Discord/Telegram actually start
+real work instead of Annie describing a capability :mod:`app.annie.persona`
+tells her she has but that never existed as a callable tool (fixed
+2026-08-25).
 
 **Model: pinned to gpt-5.6-luna, deliberately — no other OpenAI model may be
 called.** Two API quirks specific to this model, discovered by actually
@@ -34,6 +42,7 @@ call in this file and in :mod:`app.providers.openai_provider`:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from dataclasses import dataclass, field
@@ -240,14 +249,26 @@ class AnnieAgent:
         )
 
     async def _finish(self, client: Any, model: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
-        """The structured finishing call — see module docstring."""
+        """The structured finishing call — see module docstring.
+
+        This is the only call whose output the user actually sees, so the
+        instruction below has to work against strict-JSON-schema mode's own
+        pull toward flatter, more literal text (confirmed as a real
+        complaint, 2026-08-25 — "the chatbot is not even giving the vibes").
+        Earlier wording just said "restate your answer", with nothing
+        counteracting that pull — this one says explicitly not to.
+        """
         prompt_messages = messages + [
             {
                 "role": "user",
                 "content": (
-                    "Restate your answer as the required JSON object. Do not add new "
-                    "claims not already grounded in the tool results above — if you did "
-                    "not check something, its claim_type must reflect that "
+                    "Put your answer into the required JSON object's `content` field — "
+                    "word for word if you already wrote it above, not a flattened or "
+                    "safer-sounding rewrite. Keep your actual voice: the tone, warmth, "
+                    "dry humour and directness from the system prompt's Voice section "
+                    "belong in `content` exactly as much as in a plain-text reply. Do "
+                    "not add new claims not already grounded in the tool results above — "
+                    "if you did not check something, its claim_type must reflect that "
                     "(hypothesis/speculation), not fact."
                 ),
             }
@@ -550,6 +571,46 @@ async def _tool_manage_discord_channel(agent: AnnieAgent, args: dict[str, Any]) 
     return result
 
 
+async def _tool_create_research_task(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """Queues a bounded, budgeted background task through the same engine
+    autonomous research uses (app/research/runner.py) rather than writing
+    anything to token/trend data directly — see the module docstring for why
+    this is one of the two deliberate exceptions to "tools only ever read"."""
+    question = str(args.get("question") or "").strip()
+    if not question:
+        return {"error": "question is required"}
+
+    from app.db.enums import ResearchTaskOrigin, ResearchTaskStatus
+    from app.db.models.research import ResearchTask
+    from app.research.runner import run_research_task
+
+    task = ResearchTask(
+        question=question,
+        reason=str(args.get("reason") or "Requested in chat.").strip(),
+        origin=ResearchTaskOrigin.USER,
+        status=ResearchTaskStatus.QUEUED,
+        priority=0.75,
+    )
+    created = await agent.repo.create_research_task(task)
+
+    # Fire-and-forget, same pattern as the API route
+    # (app/api/routes/intelligence.py's create_task) and the bots' own
+    # replies: the user gets an immediate "started" answer, not a wait for a
+    # multi-round research loop. The research_task_sweep scheduled job is
+    # the safety net if this never gets a chance to run before a restart.
+    asyncio.create_task(
+        run_research_task(created.id, repo=agent.repo, registry=agent.registry, settings=agent.settings),
+        name=f"research_task_{created.id}",
+    )
+
+    return {
+        "task_id": created.id,
+        "question": created.question,
+        "status": created.status,
+        "note": "Started in the background — check back shortly, or ask again later and I'll pull the finding.",
+    }
+
+
 async def _tool_web_research(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
     if not agent.settings.is_available("web_research"):
         return {"error": "Tavily is not configured in this deployment (TAVILY_API_KEY)."}
@@ -578,6 +639,7 @@ _TOOL_HANDLERS = {
     "get_launchpad": _tool_get_launchpad,
     "list_research_notes": _tool_list_research_notes,
     "search_memories": _tool_search_memories,
+    "create_research_task": _tool_create_research_task,
     "manage_discord_channel": _tool_manage_discord_channel,
     "web_research": _tool_web_research,
 }
@@ -658,6 +720,19 @@ def _tool_specs(settings: Settings, platform_context: PlatformContext | None = N
              "properties": {
                  "type": {"type": "string", "enum": ["long_term", "daily_log"], "description": "Omit for both."},
                  "limit": {"type": "integer", "minimum": 1, "maximum": 15},
+             }},
+        ),
+        _spec(
+            "create_research_task", "Start a real, multi-round background investigation — the same "
+            "engine autonomous research uses — instead of answering from what the tools above already "
+            "show. Use this when someone explicitly asks you to look into, dig into, investigate or "
+            "research something that needs actual new work, not a question you can already answer. "
+            "It runs in the background; tell the user you've started it and roughly what you're "
+            "checking, rather than waiting on it before replying.",
+            {"type": "object", "required": ["question"], "additionalProperties": False,
+             "properties": {
+                 "question": {"type": "string", "description": "The concrete question to investigate."},
+                 "reason": {"type": "string", "description": "Why this is worth investigating, in your own words."},
              }},
         ),
     ]
