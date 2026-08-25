@@ -338,16 +338,37 @@ class AnnieAgent:
 
 
 async def _tool_dashboard_summary(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """``*_raw`` counts every trend document regardless of sample size;
+    ``trends_meeting_significance`` applies the same bars
+    (MIN_RECENT_SAMPLE/MIN_OCCURRENCES) list_trends filters by — kept
+    separate rather than silently using one or the other after a real
+    inconsistency (2026-08-25): a raw count of 18 "new" trends alongside a
+    significance-filtered list_trends call returning zero of them, with
+    nothing in either result explaining the gap. Report both numbers rather
+    than picking one, so the difference itself is visible instead of hidden."""
+    from app.analysis.stats import MIN_OCCURRENCES, MIN_RECENT_SAMPLE
+
     _, total = await agent.repo.list_tokens(limit=1)
     _, qualified = await agent.repo.list_tokens(qualified_only=True, limit=1)
     trends = await agent.repo.all_trends()
+
+    def significant(t: Any) -> bool:
+        return (t.recent_total or 0) >= MIN_RECENT_SAMPLE and (t.recent_count or 0) >= MIN_OCCURRENCES
+
     return {
         "tokens_collected": total,
         "tokens_qualified": qualified,
-        "trends_active": sum(1 for t in trends if t.status != "dead"),
-        "trends_rising": sum(1 for t in trends if t.status == "rising"),
-        "trends_new": sum(1 for t in trends if t.status == "new"),
-        "trends_declining": sum(1 for t in trends if t.status == "declining"),
+        "trends_active_raw": sum(1 for t in trends if t.status != "dead"),
+        "trends_rising_raw": sum(1 for t in trends if t.status == "rising"),
+        "trends_new_raw": sum(1 for t in trends if t.status == "new"),
+        "trends_declining_raw": sum(1 for t in trends if t.status == "declining"),
+        "trends_meeting_significance": sum(1 for t in trends if t.status != "dead" and significant(t)),
+        "note": (
+            "*_raw counts every trend record regardless of sample size — most will be well "
+            "below the bar for a real finding until enough tokens qualify. "
+            "trends_meeting_significance is how many currently clear it; use list_trends "
+            "(not this raw count) to actually cite specific trends."
+        ),
     }
 
 

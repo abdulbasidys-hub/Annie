@@ -375,6 +375,38 @@ def _format_brief_for_discord(report) -> str:
     return "\n".join(lines)
 
 
+async def _trend_engine(registry: ProviderRegistry, repo: FirestoreRepo, settings) -> dict[str, Any]:
+    """Recompute trends against the latest qualified-token cohorts.
+
+    This had no scheduled job at all until 2026-08-25 — only the manual
+    "Run now" trigger on System Health (app/api/routes/system.py's
+    /run/trends) ever called TrendEngine.run(). Invisible while qualification
+    itself was broken (nothing new to compare), but the moment the
+    qualification-frequency fix started producing real data (1 -> 290
+    qualified tokens in a few hours), every existing trend document was
+    stuck at whatever tiny cohort (recent_total=1) existed the one time this
+    was ever manually triggered — confirmed directly: a chat request for
+    "new" trends returned zero rows because none of the 18 stale documents
+    could pass the significance bars, while the dashboard's raw count still
+    said 18, an inconsistency Annie correctly refused to paper over. Runs
+    hourly rather than daily: qualification itself now updates every 10
+    minutes, so trends frozen for a full day would just recreate a milder
+    version of the same staleness.
+    """
+    from app.trends.engine import TrendEngine
+
+    engine = TrendEngine(repo)
+    run = await engine.run()
+    return {
+        "cohorts_evaluated": run.cohorts_evaluated,
+        "features_evaluated": run.features_evaluated,
+        "trends_created": run.trends_created,
+        "trends_updated": run.trends_updated,
+        "status_changes": run.status_changes,
+        "skipped_windows": run.skipped_windows,
+    }
+
+
 async def _narrative_clustering(registry: ProviderRegistry, repo: FirestoreRepo, settings) -> dict[str, Any]:
     """Populates the narratives collection (§16) — see
     app/narratives/cluster.py's module docstring for what this does and
@@ -425,6 +457,12 @@ JOBS: list[ScheduledJob] = [
         default_hour=2,
         default_minute=0,
         default_timezone="UTC",
+    ),
+    ScheduledJob(
+        name="trend_engine",
+        settings_key="scheduler_trend_engine",
+        run=_trend_engine,
+        default_interval_minutes=60,
     ),
     ScheduledJob(
         name="daily_log",

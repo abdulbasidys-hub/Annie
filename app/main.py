@@ -40,6 +40,23 @@ log = structlog.get_logger(__name__)
 #: dangling when the process exits.
 _bot_tasks: list[asyncio.Task] = []
 
+#: The bot client/session objects themselves (Discord's `discord.Client`,
+#: Telegram's `TelegramBot`) — kept separately from `_bot_tasks` so shutdown
+#: can call their real close/stop method, not just cancel the wrapping task.
+#: This matters specifically for Discord: unlike Telegram's long-polling
+#: (which Telegram's own API 409s if a second poller starts with the same
+#: token), Discord happily accepts more than one simultaneous Gateway
+#: connection per bot token. Bare `task.cancel()` raises inside discord.py's
+#: internal loop but does not guarantee the Gateway session closes before a
+#: new process's connection opens during a rolling redeploy — confirmed as
+#: the likely cause of a real incident (2026-08-25): a single "create this
+#: channel" request produced two channels with different IDs during a
+#: deploy, exactly what two briefly-overlapping live connections both
+#: receiving the same event would produce. Explicit `.close()`/`.stop()`
+#: gives Discord/Telegram an immediate signal to end the old session instead
+#: of waiting for a heartbeat timeout.
+_bot_clients: list[object] = []
+
 
 async def _start_bots(settings: Settings) -> None:
     """Start whichever bot integrations are configured, as background tasks
@@ -61,6 +78,7 @@ async def _start_bots(settings: Settings) -> None:
 
         await ensure_visible(repo, "telegram")
         bot = TelegramBot(settings.telegram_bot_token, repo, registry, settings)
+        _bot_clients.append(bot)
         _bot_tasks.append(asyncio.create_task(bot.run(), name="telegram_bot"))
         log.info("telegram_bot_enabled")
 
@@ -69,6 +87,7 @@ async def _start_bots(settings: Settings) -> None:
 
         await ensure_visible(repo, "discord")
         client = build_discord_client(repo, registry, settings)
+        _bot_clients.append(client)
         _bot_tasks.append(
             asyncio.create_task(client.start(settings.discord_bot_token), name="discord_bot")
         )
@@ -148,6 +167,19 @@ async def lifespan(app: FastAPI):
     await _start_scheduler(settings)
 
     yield
+
+    # Close the actual bot session first — see `_bot_clients`'s docstring for
+    # why this matters more than it looks for Discord specifically. `close`
+    # (discord.Client) and `stop` (TelegramBot) are both async and idempotent
+    # enough to call even if the client never fully connected.
+    for client in _bot_clients:
+        closer = getattr(client, "close", None) or getattr(client, "stop", None)
+        if closer is None:
+            continue
+        try:
+            await closer()
+        except Exception:
+            log.warning("bot_client_close_failed", client=type(client).__name__, exc_info=True)
 
     for task in _bot_tasks:
         task.cancel()

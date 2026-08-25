@@ -125,7 +125,22 @@ async def _build_platform_context(repo: FirestoreRepo, message: "discord.Message
 async def _create_channel(
     guild: "discord.Guild", repo: FirestoreRepo, *, name: str, purpose: str, category: str | None
 ) -> dict[str, Any]:
+    """Idempotency guard, not just a nice-to-have: two independent processes
+    can both hold a live Discord Gateway connection during a rolling
+    redeploy (Discord, unlike Telegram, does not reject a second connection
+    with the same bot token), so the same "create this channel" request can
+    genuinely arrive twice — confirmed as the likely cause of a real
+    incident (2026-08-25) where one request produced two channels with
+    different IDs. `app/main.py`'s shutdown sequence now closes the old
+    Gateway session explicitly to shrink that window, but a name check here
+    is what actually stops it from producing a duplicate channel even if the
+    window isn't fully closed.
+    """
     channel_name = slugify(name, max_length=90) or "annie-channel"
+    existing = discord.utils.get(guild.text_channels, name=channel_name)
+    if existing is not None:
+        log.info("discord_channel_already_exists", guild_id=guild.id, channel_id=existing.id, name=channel_name)
+        return {"created": False, "channel_id": str(existing.id), "name": existing.name, "error": "Already exists."}
     try:
         category_obj = None
         if category:
