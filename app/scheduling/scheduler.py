@@ -192,10 +192,30 @@ class Scheduler:
     async def _run_job(
         self, job: ScheduledJob, config: dict[str, Any], *, last_run_date: str | None
     ) -> None:
+        """Records ``last_run_at`` *before* running the job, not only after —
+        confirmed as a real, actively-harmful bug (2026-08-25): a job whose
+        body can run for minutes to hours (``full_pipeline_and_brief``'s full
+        enrichment drain) only had its completion recorded in the ``finally``
+        block below, so a process restart mid-run (a redeploy — several
+        happened in quick succession) killed the task before it ever wrote
+        anything, leaving Firestore's ``last_run_at`` stale. The next
+        process's very first tick then saw "hasn't run in ages" and fired
+        again immediately — observed firing every 6–16 minutes instead of
+        the configured 360, with multiple full cycles running concurrently
+        by the time this was caught. Writing the timestamp at start means
+        even a mid-run kill leaves an accurate, recent ``last_run_at``
+        behind, so the interval gate in ``_maybe_run`` holds across
+        restarts instead of only across clean completions.
+        """
         log.info("scheduled_job_starting", job=job.name)
         started = datetime.now(timezone.utc) if job.default_interval_minutes is not None else (
             datetime.now(tz=_safe_zone(config["timezone"], job.name))
         )
+        if last_run_date is not None:
+            config["last_run_date"] = last_run_date
+        config["last_run_at"] = started.isoformat()
+        await self._repo.upsert_setting(job.settings_key, config, actor="scheduler")
+
         try:
             result = await job.run(self._registry, self._repo, self._settings)
             log.info("scheduled_job_complete", job=job.name, result=result)
@@ -203,9 +223,6 @@ class Scheduler:
             log.error("scheduled_job_failed", job=job.name, exc_info=True)
             result = {"error": "job raised — see server logs for scheduled_job_failed"}
         finally:
-            if last_run_date is not None:
-                config["last_run_date"] = last_run_date
-            config["last_run_at"] = started.isoformat()
             config["last_result"] = result
             await self._repo.upsert_setting(job.settings_key, config, actor="scheduler")
 
