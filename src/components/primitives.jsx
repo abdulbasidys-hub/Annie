@@ -13,9 +13,11 @@
  * through it, so a missing market cap can never appear as $0.
  */
 
-import { Link } from 'react-router-dom'
+import { useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   UNKNOWN,
+  address,
   count,
   humanise,
   isThinSample,
@@ -365,6 +367,64 @@ export function TokenLink({ token }) {
       <strong className="truncate">{token.symbol || token.name || 'Unnamed'}</strong>
       <span className="mono faint">{token.mint.slice(0, 4)}…</span>
     </Link>
+  )
+}
+
+/**
+ * A wallet or mint address that copies itself to the clipboard on click,
+ * rather than navigating — for use inside a row that's clickable as a whole
+ * (see `ClickableRow` below). Someone reaching for an address almost always
+ * wants to paste it into a block explorer, not open a page they're already
+ * one click away from via the rest of the row.
+ */
+export function CopyableAddress({ value, head = 4, tail = 4, full = false, className = 'mono' }) {
+  const [copied, setCopied] = useState(false)
+  if (!value) return <Value>{null}</Value>
+
+  async function onClick(e) {
+    e.stopPropagation()
+    e.preventDefault()
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1200)
+    } catch {
+      // Clipboard access denied (permissions, non-HTTPS) — nothing to
+      // recover into, the address is still visible to select manually.
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={className}
+      title={copied ? 'Copied' : `Copy ${value}`}
+      style={{
+        background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+        color: copied ? 'var(--rise)' : 'inherit', font: 'inherit',
+      }}
+    >
+      {copied ? 'Copied' : full ? value : address(value, { head, tail })}
+    </button>
+  )
+}
+
+/**
+ * Makes an entire `<tr>` navigate on click, while anything inside it that
+ * calls `e.stopPropagation()` (a `CopyableAddress`, a nested `<Link>`) keeps
+ * its own behaviour instead of also triggering the row navigation.
+ */
+export function ClickableRow({ to, children, ...props }) {
+  const navigate = useNavigate()
+  return (
+    <tr
+      onClick={() => navigate(to)}
+      style={{ cursor: 'pointer' }}
+      {...props}
+    >
+      {children}
+    </tr>
   )
 }
 

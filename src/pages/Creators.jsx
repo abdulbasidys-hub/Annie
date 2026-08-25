@@ -1,10 +1,9 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
 
 import { api } from '../api/client.js'
 import { useApi, useDebounced } from '../api/useApi.js'
-import { Async, Badge, Empty, Panel, Sample } from '../components/primitives.jsx'
-import { address, count, relative, usd } from '../lib/format.js'
+import { Async, Badge, ClickableRow, CopyableAddress, Empty, Panel, Sample } from '../components/primitives.jsx'
+import { count, relative, usd } from '../lib/format.js'
 
 /**
  * Creator Explorer (§58).
@@ -70,12 +69,12 @@ export default function Creators() {
                 </thead>
                 <tbody>
                   {data.items.map((c) => (
-                    <tr key={c.wallet}>
+                    <ClickableRow key={c.wallet} to={`/creators/${c.wallet}`}>
                       <td className="primary" data-label="Wallet">
-                        <Link to={`/creators/${c.wallet}`} className="row gap-2">
-                          <span className="mono">{address(c.wallet, { head: 6, tail: 4 })}</span>
+                        <div className="row gap-2">
+                          <CopyableAddress value={c.wallet} head={6} tail={4} />
                           {c.is_repeat_winner && <Badge status="rising" variant="outline">Repeat</Badge>}
-                        </Link>
+                        </div>
                       </td>
                       <td className="num" data-label="Launches">{count(c.total_launches)}</td>
                       <td className="num" data-label="Success rate">
@@ -85,7 +84,7 @@ export default function Creators() {
                       <td className="num" data-label="$1M">{count(c.wins_1m)}</td>
                       <td className="num" data-label="Best">{usd(c.best_market_cap)}</td>
                       <td data-label="Last launch" className="faint">{relative(c.last_launch_at)}</td>
-                    </tr>
+                    </ClickableRow>
                   ))}
                 </tbody>
               </table>

@@ -1,9 +1,8 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
 
 import { api } from '../api/client.js'
 import { useApi, useDebounced } from '../api/useApi.js'
-import { Async, Badge, Empty, Panel } from '../components/primitives.jsx'
+import { Async, Badge, ClickableRow, CopyableAddress, Empty, Panel } from '../components/primitives.jsx'
 import { count, relative, usd } from '../lib/format.js'
 
 const TIERS = [
@@ -90,9 +89,9 @@ export default function Tokens() {
                 </thead>
                 <tbody>
                   {data.items.map((t) => (
-                    <tr key={t.mint}>
+                    <ClickableRow key={t.mint} to={`/tokens/${t.mint}`}>
                       <td className="primary" data-label="Token">
-                        <Link to={`/tokens/${t.mint}`} className="row gap-3">
+                        <div className="row gap-3">
                           {t.image_url ? (
                             <img
                               src={t.image_url}
@@ -113,11 +112,14 @@ export default function Tokens() {
                           )}
                           <span className="stack" style={{ gap: 0, minWidth: 0 }}>
                             <strong className="truncate">{t.symbol || 'Unnamed'}</strong>
-                            <span className="faint truncate" style={{ fontSize: 'var(--text-2xs)' }}>
-                              {t.name}
+                            <span className="row gap-1" style={{ minWidth: 0 }}>
+                              <span className="faint truncate" style={{ fontSize: 'var(--text-2xs)' }}>
+                                {t.name}
+                              </span>
+                              <CopyableAddress value={t.mint} className="mono faint" />
                             </span>
                           </span>
-                        </Link>
+                        </div>
                       </td>
                       <td data-label="Launchpad">{t.launchpad_slug || '—'}</td>
                       <td className="num" data-label="At qualification">{usd(t.qualified_market_cap)}</td>
@@ -136,7 +138,7 @@ export default function Tokens() {
                       </td>
                       <td data-label="Evidence"><Badge status={t.verification_status} /></td>
                       <td data-label="Qualified" className="faint">{relative(t.qualified_at)}</td>
-                    </tr>
+                    </ClickableRow>
                   ))}
                 </tbody>
               </table>
