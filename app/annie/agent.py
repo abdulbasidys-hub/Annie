@@ -403,11 +403,39 @@ async def _tool_get_token(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, 
 
 
 async def _tool_list_trends(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """Sorting purely by |change| is a trap this tool fell into until
+    2026-08-25: a characteristic that appears exactly once in a still-tiny
+    cohort (a brand-new qualification pipeline, say) produces a huge percentage
+    swing versus a zero baseline and would rank *first* — ahead of anything
+    with real statistical standing — which is exactly how Annie ended up
+    citing things like a single token's incidental use of the word "still" as
+    if it were a narrative. app.analysis.stats already defines the sample-size
+    bars a trend needs to clear before it means anything (MIN_RECENT_SAMPLE,
+    MIN_OCCURRENCES) and stamps every trend's maturity accordingly — this
+    just makes the tool actually respect that instead of surfacing raw
+    percentage swings from cohorts too small to swing meaningfully.
+    """
+    from app.analysis.stats import MIN_OCCURRENCES, MIN_RECENT_SAMPLE
+
     limit = min(int(args.get("limit") or 10), 25)
     status = args.get("status")
+    include_low_confidence = bool(args.get("include_low_confidence", False))
     trends, _ = await agent.repo.list_trends(status=status, limit=10000)
+
+    if not include_low_confidence:
+        trends = [
+            t for t in trends
+            if (t.recent_total or 0) >= MIN_RECENT_SAMPLE and (t.recent_count or 0) >= MIN_OCCURRENCES
+        ]
     trends.sort(key=lambda t: abs(t.change or 0), reverse=True)
     return {
+        "note": (
+            None if include_low_confidence else
+            "Filtered to trends with enough sample size to mean something "
+            f"(cohort >= {MIN_RECENT_SAMPLE} tokens, characteristic seen >= {MIN_OCCURRENCES} times). "
+            "Pass include_low_confidence=true to see raw observations from thinner samples — "
+            "label those as speculation/hypothesis, not fact, if you cite them."
+        ),
         "trends": [
             {
                 "slug": t.slug, "name": t.name, "category": t.category, "status": t.status,
@@ -678,12 +706,20 @@ def _tool_specs(settings: Settings, platform_context: PlatformContext | None = N
              "properties": {"mint": {"type": "string"}}},
         ),
         _spec(
-            "list_trends", "List trends, optionally filtered by status.",
+            "list_trends", "List trends, optionally filtered by status. Defaults to trends with "
+            "enough sample size to mean something — leave include_low_confidence off unless "
+            "someone specifically wants to see raw, thin-sample observations too.",
             {
                 "type": "object", "additionalProperties": False,
                 "properties": {
                     "status": {"type": "string", "enum": ["new", "rising", "stable", "declining", "dead"]},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 25},
+                    "include_low_confidence": {
+                        "type": "boolean",
+                        "description": "Default false. True includes trends from cohorts too small "
+                        "for statistical significance — label anything cited from these as "
+                        "speculation/hypothesis, never fact.",
+                    },
                 },
             },
         ),

@@ -55,11 +55,23 @@ SEED_THEMES: dict[str, tuple[str, ...]] = {
     "absurd": ("random", "nothing", "literally", "unemployed", "broke", "sad"),
 }
 
-#: Words too common to carry meaning in a memecoin name.
+#: Words too common to carry meaning in a memecoin name. Started life missing
+#: ordinary filler words ("you", "still", ...) that aren't articles/prepositions
+#: but are just as meaningless as a narrative signal — found 2026-08-25 when a
+#: single token's name ("you are still early") produced two separate "trends"
+#: (name.word=you, name.word=still) that outranked every real signal because
+#: sorting by raw percentage change favours a brand-new word with zero baseline
+#: (see app/annie/agent.py's _tool_list_trends for the other half of that fix).
 STOPWORDS = frozenset(
     """
     the a an and or of on in to for with is it this that coin token solana sol
     official new real x2 v2 by at from as be are was were
+    you your youre yours i im ive my mine we our ours us he she they them their
+    still just now here there when where why how what who which
+    will would can could should shall may might must not no yes yeah ok okay
+    so up out on off over under again more most some any all one two
+    very much many lot get got go going come do does did done have has had
+    not no nor never always
     """.split()
 )
 
