@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.api.schemas import CapabilityOut, DataQualityOut, Page, ProviderHealthOut, SettingOut
+from app.api.schemas import CapabilityOut, DataQualityOut, Page, PipelineRunOut, ProviderHealthOut, SettingOut
 from app.config import Settings, get_settings
 from app.db.repo import FirestoreRepo, get_repo
+from app.pipeline.tracking import (
+    fire_and_forget,
+    run_discovery_stage,
+    run_enrichment_stage,
+    run_narratives_stage,
+    run_trends_stage,
+)
 from app.providers.registry import ProviderRegistry, get_registry
 
 router = APIRouter()
@@ -117,19 +125,17 @@ async def run_discovery_now(
     (app/api/routes/webhooks.py) is the primary, real-time discovery path;
     this polling backfill and this endpoint exist for catching up a gap, not
     as the everyday mechanism. Safe to call repeatedly; already-known mints
-    are skipped, not duplicated."""
-    from app.pipeline.discovery import run_discovery
+    are skipped, not duplicated.
 
-    since = datetime.now(timezone.utc) - timedelta(hours=hours)
-    run = await run_discovery(registry, repo, since=since)
-    return {
-        "launches_seen": run.launches_seen,
-        "tokens_created": run.tokens_created,
-        "tokens_already_known": run.tokens_already_known,
-        "errors": run.errors,
-        "started_at": run.started_at,
-        "finished_at": run.finished_at,
-    }
+    Returns immediately with a ``run_id`` rather than blocking until the
+    stage finishes (2026-08-25: enrichment in particular can run long enough
+    to look identical to a hung request from the browser's side) — poll
+    ``GET /run/pipeline-runs/{run_id}`` for status and, once ``done``, the
+    result.
+    """
+    run = await repo.create_pipeline_run("discovery", trigger="manual")
+    asyncio.create_task(fire_and_forget(repo, run.id, run_discovery_stage(registry, repo, hours=hours)))
+    return {"run_id": run.id}
 
 
 @router.post("/run/enrichment")
@@ -138,53 +144,49 @@ async def run_enrichment_now(
     repo: FirestoreRepo = Depends(get_repo),
     registry: ProviderRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
-    """Manually trigger Stage 2/3 (§4, §20): qualify and enrich discovered tokens."""
-    from app.pipeline.enrichment import run_enrichment
-
-    run, _cursor = await run_enrichment(registry, repo, batch_size=batch_size)
-    return {
-        "evaluated": run.evaluated,
-        "qualified": run.qualified,
-        "enriched": run.enriched,
-        "errors": run.errors,
-        "started_at": run.started_at,
-        "finished_at": run.finished_at,
-    }
+    """Manually trigger Stage 2/3 (§4, §20): qualify and enrich discovered tokens. See run_discovery_now's docstring for the async/polling contract."""
+    run = await repo.create_pipeline_run("enrichment", trigger="manual")
+    asyncio.create_task(fire_and_forget(repo, run.id, run_enrichment_stage(registry, repo, batch_size=batch_size)))
+    return {"run_id": run.id}
 
 
 @router.post("/run/trends")
-async def run_trends_now(repo: FirestoreRepo = Depends(get_repo)) -> dict[str, Any]:
-    """Manually trigger the trend engine (§24-§28) over the qualified dataset."""
-    from app.trends.engine import TrendEngine
-
-    engine = TrendEngine(repo)
-    run = await engine.run()
-    return {
-        "cohorts_evaluated": run.cohorts_evaluated,
-        "features_evaluated": run.features_evaluated,
-        "trends_created": run.trends_created,
-        "trends_updated": run.trends_updated,
-        "status_changes": run.status_changes,
-        "revivals": run.revivals,
-        "skipped_windows": run.skipped_windows,
-        "started_at": run.started_at,
-        "finished_at": run.finished_at,
-    }
+async def run_trends_now(
+    repo: FirestoreRepo = Depends(get_repo),
+) -> dict[str, Any]:
+    """Manually trigger the trend engine (§24-§28) over the qualified dataset. See run_discovery_now's docstring for the async/polling contract."""
+    run = await repo.create_pipeline_run("trends", trigger="manual")
+    asyncio.create_task(fire_and_forget(repo, run.id, run_trends_stage(repo)))
+    return {"run_id": run.id}
 
 
 @router.post("/run/narratives")
-async def run_narratives_now(repo: FirestoreRepo = Depends(get_repo)) -> dict[str, Any]:
-    """Manually trigger narrative clustering (§16) over the qualified dataset."""
-    from app.narratives.cluster import run_narrative_clustering
+async def run_narratives_now(
+    repo: FirestoreRepo = Depends(get_repo),
+) -> dict[str, Any]:
+    """Manually trigger narrative clustering (§16) over the qualified dataset. See run_discovery_now's docstring for the async/polling contract."""
+    run = await repo.create_pipeline_run("narratives", trigger="manual")
+    asyncio.create_task(fire_and_forget(repo, run.id, run_narratives_stage(repo)))
+    return {"run_id": run.id}
 
-    run = await run_narrative_clustering(repo)
-    return {
-        "qualified_tokens_scanned": run.qualified_tokens_scanned,
-        "seeded_narratives_updated": run.seeded_narratives_updated,
-        "emergent_narratives_found": run.emergent_narratives_found,
-        "started_at": run.started_at,
-        "finished_at": run.finished_at,
-    }
+
+@router.get("/pipeline-runs/{run_id}", response_model=PipelineRunOut)
+async def get_pipeline_run(run_id: str, repo: FirestoreRepo = Depends(get_repo)) -> Any:
+    run = await repo.get_pipeline_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="No run with that id.")
+    return run
+
+
+@router.get("/pipeline-runs", response_model=Page[PipelineRunOut])
+async def list_pipeline_runs(
+    stage: str | None = Query(None),
+    limit: int = Query(10, ge=1, le=50),
+    repo: FirestoreRepo = Depends(get_repo),
+) -> dict[str, Any]:
+    """Run history for System Health's per-stage panels — most recent first."""
+    runs = await repo.list_pipeline_runs(stage=stage, limit=limit)
+    return {"items": runs, "total": len(runs), "limit": limit, "offset": 0}
 
 
 @router.patch("/settings/{key}", response_model=SettingOut)

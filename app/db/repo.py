@@ -44,6 +44,7 @@ from app.db.base import doc_id_safe, from_doc, money_from_doc, money_to_doc, slu
 from app.db.enums import MilestoneKind, PipelineStage
 from app.db.models.discord import DiscordChannel
 from app.db.models.people import PlatformUser
+from app.db.models.pipeline import PipelineRun
 from app.db.models.entities import Creator, Dex, Launchpad, Narrative
 from app.db.models.intelligence import Anomaly, Trend, TrendHistory, TrendObservation
 from app.db.models.ops import AuditLog, DataQuality, ProviderHealth, Setting, ToolCall
@@ -1138,6 +1139,34 @@ class FirestoreRepo:
         await self.db.collection("platform_users").document(doc_id).set(
             {"preferred_name": name}, merge=["preferred_name"]
         )
+
+    # -- pipeline runs (§20, §2026-08-25) --------------------------------------
+
+    async def create_pipeline_run(self, stage: str, *, trigger: str = "manual") -> PipelineRun:
+        run = PipelineRun(stage=stage, trigger=trigger, status="running", started_at=utcnow())
+        ref = self.db.collection("pipeline_runs").document()
+        run.id = ref.id
+        await ref.set(to_doc(run))
+        return run
+
+    async def finish_pipeline_run(
+        self, run_id: str, *, status: str, result: dict[str, Any] | None = None, error: str | None = None
+    ) -> None:
+        updates = {"status": status, "result": result or {}, "error": error, "finished_at": utcnow()}
+        await self.db.collection("pipeline_runs").document(run_id).set(updates, merge=list(updates.keys()))
+
+    async def get_pipeline_run(self, run_id: str) -> PipelineRun | None:
+        snap = await self.db.collection("pipeline_runs").document(run_id).get()
+        if not snap.exists:
+            return None
+        return from_doc(PipelineRun, snap.id, snap.to_dict() or {}, id=snap.id)
+
+    async def list_pipeline_runs(self, *, stage: str | None = None, limit: int = 20) -> list[PipelineRun]:
+        query = self.db.collection("pipeline_runs")
+        if stage:
+            query = query.where(filter=FieldFilter("stage", "==", stage))
+        query = query.order_by("started_at", direction=Query.DESCENDING).limit(limit)
+        return [from_doc(PipelineRun, s.id, s.to_dict() or {}, id=s.id) async for s in query.stream()]
 
 
 async def get_repo() -> "FirestoreRepo":

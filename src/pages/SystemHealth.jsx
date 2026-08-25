@@ -1,34 +1,79 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { api } from '../api/client.js'
 import { useApi } from '../api/useApi.js'
 import { Async, Badge, Empty, ErrorState, Panel, Sample, Stat } from '../components/primitives.jsx'
 import { count, duration, humanise, percent, relative, usd } from '../lib/format.js'
 
-/**
- * One manual pipeline trigger (§20). No scheduler exists yet — this is
- * currently the only way discovery/enrichment/trends ever run. Each stage
- * owns its own run/result/error state rather than sharing one, since they
- * run independently and a slow discovery run must not block the trends
- * button from being usable.
- */
-function PipelineAction({ label, hint, onRun, formatResult }) {
-  const [state, setState] = useState('idle') // idle | running | done | error
-  const [result, setResult] = useState(null)
-  const [error, setError] = useState(null)
+const POLL_MS = 1500
 
-  async function run() {
-    setState('running')
-    setError(null)
+/**
+ * One pipeline stage trigger (§20, §2026-08-25). Also runs automatically on
+ * its own schedule (Settings → Bots & scheduler) — this is for an on-demand
+ * check between scheduled runs.
+ *
+ * "Run now" returns a run_id immediately rather than blocking until the
+ * stage finishes (enrichment in particular can run long enough to look
+ * identical to a hung request), so this polls the run's own status instead
+ * of awaiting the trigger call directly — a real spinner while it's
+ * actually still running server-side, not just while the browser is
+ * waiting on one HTTP response.
+ */
+function PipelineAction({ label, hint, stage, onTrigger, formatResult, onRan }) {
+  const [runId, setRunId] = useState(null)
+  const [run, setRun] = useState(null) // the live PipelineRun once polling starts
+  const [history, setHistory] = useState(null)
+  const [triggerError, setTriggerError] = useState(null)
+  const pollRef = useRef(null)
+
+  async function loadHistory() {
     try {
-      const data = await onRun()
-      setResult(data)
-      setState('done')
-    } catch (err) {
-      setError(err)
-      setState('error')
+      const data = await api.pipelineRuns({ stage, limit: 5 })
+      setHistory(data.items || data)
+    } catch {
+      // History is a nice-to-have — a failed fetch here must not block the
+      // run-now button itself from working.
     }
   }
+
+  useEffect(() => {
+    loadHistory()
+    return () => clearTimeout(pollRef.current)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stage])
+
+  function poll(id) {
+    pollRef.current = setTimeout(async () => {
+      try {
+        const data = await api.pipelineRun(id)
+        setRun(data)
+        if (data.status === 'running') {
+          poll(id)
+        } else {
+          loadHistory()
+          onRan?.()
+        }
+      } catch (err) {
+        setRun({ status: 'error', error: err.message || 'Lost track of this run.' })
+      }
+    }, POLL_MS)
+  }
+
+  async function trigger() {
+    setTriggerError(null)
+    setRun({ status: 'running' })
+    try {
+      const { run_id } = await onTrigger()
+      setRunId(run_id)
+      poll(run_id)
+    } catch (err) {
+      setTriggerError(err)
+      setRun(null)
+    }
+  }
+
+  const isRunning = run?.status === 'running'
+  const lastFinished = !isRunning && run ? run : history?.[0]
 
   return (
     <div
@@ -40,14 +85,45 @@ function PipelineAction({ label, hint, onRun, formatResult }) {
           <strong style={{ fontSize: 'var(--text-sm)' }}>{label}</strong>
           <span className="faint" style={{ fontSize: 'var(--text-2xs)' }}>{hint}</span>
         </div>
-        <button className="btn btn--sm btn--primary" onClick={run} disabled={state === 'running'}>
-          {state === 'running' ? 'Running…' : 'Run now'}
+        <button className="btn btn--sm btn--primary row gap-2" onClick={trigger} disabled={isRunning}>
+          {isRunning && <span className="spinner" aria-hidden="true" />}
+          {isRunning ? 'Running…' : 'Run now'}
         </button>
       </div>
-      {state === 'done' && result && (
-        <div className="secondary" style={{ fontSize: 'var(--text-xs)' }}>{formatResult(result)}</div>
+
+      {lastFinished?.status === 'done' && lastFinished.result && (
+        <div className="row gap-2" style={{ fontSize: 'var(--text-xs)' }}>
+          <span aria-hidden="true" style={{ color: 'var(--rise)' }}>✓</span>
+          <span className="secondary">{formatResult(lastFinished.result)}</span>
+        </div>
       )}
-      {state === 'error' && <ErrorState error={error} />}
+      {lastFinished?.status === 'error' && (
+        <div className="row gap-2" style={{ fontSize: 'var(--text-xs)' }}>
+          <span aria-hidden="true" style={{ color: 'var(--fall)' }}>✕</span>
+          <span className="secondary">{lastFinished.error || 'Failed — see server logs.'}</span>
+        </div>
+      )}
+      {triggerError && <ErrorState error={triggerError} />}
+
+      {history?.length > 0 && (
+        <details className="stack gap-1">
+          <summary className="faint" style={{ fontSize: 'var(--text-2xs)', cursor: 'pointer' }}>
+            History ({history.length})
+          </summary>
+          <div className="stack gap-1" style={{ paddingLeft: 'var(--space-3)' }}>
+            {history.map((h) => (
+              <div key={h.id} className="row gap-2" style={{ fontSize: 'var(--text-2xs)' }}>
+                <span aria-hidden="true" style={{ color: h.status === 'done' ? 'var(--rise)' : h.status === 'error' ? 'var(--fall)' : 'var(--text-muted)' }}>
+                  {h.status === 'done' ? '✓' : h.status === 'error' ? '✕' : '…'}
+                </span>
+                <span className="faint">{relative(h.started_at)}</span>
+                <span className="faint">·</span>
+                <span className="faint">{h.trigger}</span>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
     </div>
   )
 }
@@ -56,17 +132,15 @@ function Pipeline({ onRan }) {
   return (
     <Panel
       title="Pipeline"
-      meta="also runs daily on its own schedule (Settings → Bots & scheduler) — use these for an on-demand check between runs"
+      meta="also runs automatically on its own schedule (Settings → Bots & scheduler) — use these for an on-demand check between runs"
     >
       <div className="stack gap-4">
         <PipelineAction
           label="1. Discovery"
           hint="Scan known launchpad programs (Helius) for new mints from the last 24 hours."
-          onRun={async () => {
-            const r = await api.runDiscovery(24)
-            onRan()
-            return r
-          }}
+          stage="discovery"
+          onTrigger={() => api.runDiscovery(24)}
+          onRan={onRan}
           formatResult={(r) =>
             `${r.launches_seen ?? 0} launch(es) seen, ${r.tokens_created ?? 0} new token(s) created, ` +
             `${r.tokens_already_known ?? 0} already known.` +
@@ -75,12 +149,10 @@ function Pipeline({ onRan }) {
         />
         <PipelineAction
           label="2. Enrichment"
-          hint="Qualify and enrich up to 50 newly discovered tokens (metadata, creator wallet, features)."
-          onRun={async () => {
-            const r = await api.runEnrichment(50)
-            onRan()
-            return r
-          }}
+          hint="Qualify and enrich the newest 50 discovered tokens (metadata, creator wallet, features)."
+          stage="enrichment"
+          onTrigger={() => api.runEnrichment(50)}
+          onRan={onRan}
           formatResult={(r) =>
             `${r.evaluated ?? 0} evaluated, ${r.qualified ?? 0} qualified, ${r.enriched ?? 0} enriched.` +
             (r.errors?.length ? ` ${r.errors.length} error(s) — see server logs.` : '')
@@ -89,11 +161,9 @@ function Pipeline({ onRan }) {
         <PipelineAction
           label="3. Trend analysis"
           hint="Compare qualified-token cohorts against their historical baselines."
-          onRun={async () => {
-            const r = await api.runTrends()
-            onRan()
-            return r
-          }}
+          stage="trends"
+          onTrigger={() => api.runTrends()}
+          onRan={onRan}
           formatResult={(r) =>
             `${r.trends_created ?? 0} new trend(s), ${r.trends_updated ?? 0} updated, ` +
             `${r.status_changes ?? 0} status change(s).` +
@@ -103,11 +173,9 @@ function Pipeline({ onRan }) {
         <PipelineAction
           label="4. Narrative clustering"
           hint="Group qualified tokens into seeded and emergent narratives (name/ticker/description patterns)."
-          onRun={async () => {
-            const r = await api.runNarratives()
-            onRan()
-            return r
-          }}
+          stage="narratives"
+          onTrigger={() => api.runNarratives()}
+          onRan={onRan}
           formatResult={(r) =>
             `${r.qualified_tokens_scanned ?? 0} qualified token(s) scanned, ` +
             `${r.seeded_narratives_updated ?? 0} seeded narrative(s) updated, ` +

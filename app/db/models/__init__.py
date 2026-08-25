@@ -18,6 +18,7 @@ from app.db.models.ops import (
     ToolCall,
 )
 from app.db.models.people import PlatformUser
+from app.db.models.pipeline import PipelineRun
 from app.db.models.research import (
     ConsolidationRun,
     Conversation,
@@ -76,4 +77,5 @@ __all__ = [
     "Setting",
     "ToolCall",
     "PlatformUser",
+    "PipelineRun",
 ]

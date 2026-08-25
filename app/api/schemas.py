@@ -594,6 +594,17 @@ class SettingOut(ApiModel):
     updated_at: datetime | None = None
 
 
+class PipelineRunOut(ApiModel):
+    id: str
+    stage: str
+    trigger: str
+    status: str
+    result: dict[str, Any] = {}
+    error: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
 class MemoryOut(ApiModel):
     id: str
     type: str
