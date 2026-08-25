@@ -65,6 +65,17 @@ async def run_enrichment_stage(registry: ProviderRegistry, repo: FirestoreRepo, 
     return {"evaluated": run.evaluated, "qualified": run.qualified, "enriched": run.enriched, "errors": run.errors}
 
 
+async def run_enrichment_all_stage(registry: ProviderRegistry, repo: FirestoreRepo) -> dict[str, Any]:
+    """Full-backlog drain, not a bounded batch — used by the 6-hour full
+    pipeline cycle (app/scheduling/jobs.py), which wants a thorough sweep
+    each time rather than the newest-50 quick check the manual button and
+    the 10-minute frequent_qualification job use."""
+    from app.pipeline.enrichment import run_enrichment_all
+
+    run = await run_enrichment_all(registry, repo)
+    return {"evaluated": run.evaluated, "qualified": run.qualified, "enriched": run.enriched, "errors": run.errors}
+
+
 async def run_trends_stage(repo: FirestoreRepo) -> dict[str, Any]:
     from app.trends.engine import TrendEngine
 

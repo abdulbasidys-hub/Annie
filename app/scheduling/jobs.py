@@ -14,39 +14,11 @@ from typing import Any
 import structlog
 
 from app.db.repo import FirestoreRepo
+from app.pipeline.tracking import finish_with
 from app.providers.registry import ProviderRegistry
 from app.scheduling.scheduler import ScheduledJob
 
 log = structlog.get_logger(__name__)
-
-
-async def _daily_qualification(
-    registry: ProviderRegistry, repo: FirestoreRepo, settings
-) -> dict[str, Any]:
-    """Nightly safety-net drain of the *entire* discovery-stage backlog.
-
-    Not what actually catches a pump anymore — see ``_frequent_qualification``
-    below for that. This exists to eventually reach stragglers the frequent
-    job's bounded, newest-first batches never get to (a token that never
-    pumped and just ages down the priority order forever), and as a full
-    reconciliation pass. See ``app/pipeline/enrichment.py``'s
-    ``run_enrichment_all`` for why draining is safe to run unattended:
-    qualification structurally cannot succeed for a token that hasn't
-    migrated off its bonding curve (DexScreener has no quote for one, and
-    DexScreener is this deployment's only market-data source) — confirmed
-    directly against real chain data on 2026-08-24 — so this never mistakes
-    "still on the bonding curve" for "doesn't qualify" and never needs a
-    separate migration check of its own.
-    """
-    from app.pipeline.enrichment import run_enrichment_all
-
-    run = await run_enrichment_all(registry, repo)
-    return {
-        "evaluated": run.evaluated,
-        "qualified": run.qualified,
-        "enriched": run.enriched,
-        "errors": len(run.errors),
-    }
 
 
 #: How many of the newest discovery-stage tokens the frequent job checks per
@@ -74,8 +46,9 @@ async def _frequent_qualification(
     ``FirestoreRepo.list_tokens_for_qualification``) rather than trying to
     page through the whole backlog: a brand-new token is far more likely to
     still be moving than one that has already sat unqualified for days, and
-    each tick naturally re-covers whatever is still fresh. The daily job
-    above is the backstop that eventually reaches everything else.
+    each tick naturally re-covers whatever is still fresh. The 6-hourly full
+    pipeline cycle below (``_full_pipeline_and_brief``) is the backstop that
+    drains the entire backlog and eventually reaches everything else.
     """
     from app.pipeline.enrichment import run_enrichment
 
@@ -323,20 +296,80 @@ def _consolidation_digest(daily_logs, existing_long_term, recent_notes) -> str:
     return "\n".join(lines)
 
 
-async def _morning_brief(registry: ProviderRegistry, repo: FirestoreRepo, settings) -> dict[str, Any]:
-    """Generates today's daily Report (app/reports/generator.py — the same
-    generator the Reports page reads) and, if Discord is configured and a
-    channel has been set up for it, delivers a Discord-formatted version.
+async def _full_pipeline_and_brief(registry: ProviderRegistry, repo: FirestoreRepo, settings) -> dict[str, Any]:
+    """The four System Health pipeline stages, chained in order every 6
+    hours, followed by a briefing delivered to Discord (§ 2026-08-25:
+    "after this one is done, the other one runs in order... I want Annie to
+    analyze it and give me briefs everyday").
 
-    Never assumes a channel exists: no configured `morning_brief`-purpose
-    channel is a normal, expected state before the operator (or Annie, on
-    request) sets one up — this generates the report either way and simply
-    skips delivery, logged plainly rather than treated as a failure.
+    Replaces three separate standalone daily jobs that used to do this
+    piecemeal on their own schedules (daily_qualification's full drain,
+    narrative_clustering, morning_brief) — one chain, one history, no three
+    different clocks disagreeing about when "today's" numbers were last
+    refreshed. ``frequent_qualification`` (10 min) and ``trend_engine``
+    (hourly) still run independently in between cycles for faster coverage;
+    this is the thorough sweep, not a replacement for either.
+
+    One stage failing does not abort the chain — discovery erroring must not
+    prevent enrichment from at least trying against whatever is already
+    there — each stage's own PipelineRun records the failure and the loop
+    moves on; the overall full_cycle run is marked ``error`` only if every
+    stage failed.
+
+    Four ticks a day land roughly every 6 hours from whenever the process
+    first started (interval-mode, not clock-aligned — see
+    ``app/scheduling/scheduler.py``), so there's no fixed "the 18:00 UTC one"
+    to designate as the daily wrap-up. Instead: whichever tick's next
+    scheduled fire would cross into a new UTC calendar date *is* the last
+    one before that boundary, unconditionally — cheaper and more robust than
+    tracking clock alignment, and self-corrects if a tick is ever missed.
     """
-    from app.reports.generator import generate_daily_report
+    from app.pipeline.tracking import (
+        run_discovery_stage, run_enrichment_all_stage, run_narratives_stage, run_trends_stage,
+    )
 
     now = datetime.now(timezone.utc)
-    since = now - timedelta(hours=24)
+    is_end_of_day = (now + timedelta(hours=6)).date() != now.date()
+
+    full_run = await repo.create_pipeline_run("full_cycle", trigger="scheduled")
+    stages: dict[str, Any] = {
+        "discovery": lambda: run_discovery_stage(registry, repo, hours=24),
+        "enrichment": lambda: run_enrichment_all_stage(registry, repo),
+        "trends": lambda: run_trends_stage(repo),
+        "narratives": lambda: run_narratives_stage(repo),
+    }
+    stage_results: dict[str, Any] = {}
+    for stage_name, stage_fn in stages.items():
+        stage_run = await repo.create_pipeline_run(stage_name, trigger="scheduled")
+        try:
+            stage_results[stage_name] = await finish_with(repo, stage_run.id, stage_fn())
+        except Exception as exc:
+            log.warning("full_pipeline_stage_failed", stage=stage_name, error=str(exc))
+            stage_results[stage_name] = {"error": str(exc)}
+
+    all_failed = all("error" in r for r in stage_results.values())
+    await repo.finish_pipeline_run(
+        full_run.id, status="error" if all_failed else "done", result=stage_results
+    )
+
+    brief = await _deliver_brief(repo, settings, now=now, is_end_of_day=is_end_of_day)
+    return {"stages": stage_results, **brief}
+
+
+async def _deliver_brief(repo: FirestoreRepo, settings, *, now: datetime, is_end_of_day: bool) -> dict[str, Any]:
+    """Generates the period's Report (app/reports/generator.py — the same
+    generator the Reports page reads) and, if Discord is configured and a
+    channel has been set up for it, delivers a Discord-formatted version.
+    ``is_end_of_day`` widens the window to the full 24h and labels it as
+    such — see ``_full_pipeline_and_brief``'s docstring for how that's
+    decided. Never assumes a channel exists: no configured channel is a
+    normal, expected state before the operator (or Annie, on request) sets
+    one up — this generates the report either way and simply skips
+    delivery, logged plainly rather than treated as a failure."""
+    from app.reports.generator import generate_daily_report
+
+    period_hours = 24 if is_end_of_day else 6
+    since = now - timedelta(hours=period_hours)
     report = await generate_daily_report(repo, period_start=since, period_end=now)
 
     if not settings.is_available("discord"):
@@ -348,13 +381,14 @@ async def _morning_brief(registry: ProviderRegistry, repo: FirestoreRepo, settin
 
     from app.bots.discord_bot import send_channel_message
 
-    text = _format_brief_for_discord(report)
+    label = "Full-day briefing" if is_end_of_day else "6-hour briefing"
+    text = _format_brief_for_discord(report, label=label)
     delivered = await send_channel_message(settings.discord_bot_token, channel.channel_id, text)
-    return {"report_id": report.id, "delivered": delivered, "channel_id": channel.channel_id}
+    return {"report_id": report.id, "delivered": delivered, "channel_id": channel.channel_id, "is_end_of_day": is_end_of_day}
 
 
-def _format_brief_for_discord(report) -> str:
-    lines = [f"**Annie Morning Brief — {report.title.split(' — ')[-1]}**", ""]
+def _format_brief_for_discord(report, *, label: str = "Briefing") -> str:
+    lines = [f"**Annie {label} — {report.title.split(' — ')[-1]}**", ""]
     if report.headline_finding:
         lines.append(f"**What changed:** {report.headline_finding}")
     if report.biggest_change:
@@ -407,21 +441,6 @@ async def _trend_engine(registry: ProviderRegistry, repo: FirestoreRepo, setting
     }
 
 
-async def _narrative_clustering(registry: ProviderRegistry, repo: FirestoreRepo, settings) -> dict[str, Any]:
-    """Populates the narratives collection (§16) — see
-    app/narratives/cluster.py's module docstring for what this does and
-    deliberately doesn't (no baseline/trend comparison; that's the existing
-    trend engine's job over the same token.theme feature)."""
-    from app.narratives.cluster import run_narrative_clustering
-
-    run = await run_narrative_clustering(repo)
-    return {
-        "qualified_tokens_scanned": run.qualified_tokens_scanned,
-        "seeded_narratives_updated": run.seeded_narratives_updated,
-        "emergent_narratives_found": run.emergent_narratives_found,
-    }
-
-
 async def _research_task_sweep(
     registry: ProviderRegistry, repo: FirestoreRepo, settings
 ) -> dict[str, Any]:
@@ -451,12 +470,10 @@ JOBS: list[ScheduledJob] = [
         default_interval_minutes=10,
     ),
     ScheduledJob(
-        name="daily_qualification",
-        settings_key="scheduler_daily_qualification",
-        run=_daily_qualification,
-        default_hour=2,
-        default_minute=0,
-        default_timezone="UTC",
+        name="full_pipeline_and_brief",
+        settings_key="scheduler_full_pipeline_and_brief",
+        run=_full_pipeline_and_brief,
+        default_interval_minutes=360,
     ),
     ScheduledJob(
         name="trend_engine",
@@ -485,22 +502,6 @@ JOBS: list[ScheduledJob] = [
         settings_key="scheduler_memory_consolidation",
         run=_memory_consolidation,
         default_hour=4,
-        default_minute=0,
-        default_timezone="UTC",
-    ),
-    ScheduledJob(
-        name="narrative_clustering",
-        settings_key="scheduler_narrative_clustering",
-        run=_narrative_clustering,
-        default_hour=3,
-        default_minute=30,
-        default_timezone="UTC",
-    ),
-    ScheduledJob(
-        name="morning_brief",
-        settings_key="scheduler_morning_brief",
-        run=_morning_brief,
-        default_hour=8,
         default_minute=0,
         default_timezone="UTC",
     ),
