@@ -112,7 +112,7 @@ function Sidebar({ pendingTasks }) {
   return (
     <aside className="sidebar">
       <div className="sidebar__brand">
-        <span className="sidebar__mark">An</span>
+        <img src="/Annie.jpg" alt="" className="sidebar__mark" />
         <span className="sidebar__name">Annie</span>
       </div>
 

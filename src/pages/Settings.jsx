@@ -8,37 +8,28 @@ import { humanise, relative } from '../lib/format.js'
 /**
  * Settings (§4, §38, §63).
  *
- * Research parameters live in the database, not the environment — qualification
- * thresholds and autonomous budgets are things the operator changes while the
- * system runs. Environment variables are deployment facts and are deliberately
- * not editable here; the System Health page names them instead.
+ * Only operational knobs an operator actually touches day-to-day — who can
+ * reach Annie, and when the background jobs run. Research parameters
+ * (qualification thresholds, trend significance floors, autonomous budgets)
+ * used to have their own raw-JSON-editable groups here too, but an operator
+ * asked to change one exactly once in this project's life, by asking Annie
+ * to change it directly rather than opening this page (2026-08-25) — hidden
+ * rather than removed: they still live in the same `settings` collection at
+ * the same keys, editable via PATCH /api/system/settings/{key} same as
+ * always, just not surfaced as a wall of raw JSON inputs nobody wants to
+ * hand-edit. Environment variables are deployment facts and are deliberately
+ * not editable here either; the System Health page names them instead.
  */
 const GROUPS = {
-  qualification: {
-    title: 'Qualification',
-    note: 'Thresholds that decide what counts as a research subject. Changing these does not retroactively re-qualify existing tokens — each token records the rule version it was judged under.',
-  },
-  trends: {
-    title: 'Trend engine',
-    note: 'Sample floors and significance levels. Lowering these produces more findings and more false ones.',
-  },
-  autonomous: {
-    title: 'Autonomous research',
-    note: 'Hard caps on what Annie may spend without being asked. Enforced per task, and persisted so a worker restart cannot reset a task’s spend.',
-  },
   bots: {
     title: 'Bots & scheduler',
-    note: 'Who can reach Annie on Telegram/Discord, and when the daily background jobs run. Editing a job’s time/timezone/enabled here takes effect on its next check — no redeploy.',
+    note: 'Who can reach Annie on Telegram/Discord, and when the background jobs run. Editing a job’s time/timezone/interval/enabled here takes effect on its next check — no redeploy.',
   },
-  other: { title: 'Other', note: null },
 }
 
 function groupFor(key) {
-  if (key.startsWith('qualification') || key.includes('tier') || key.includes('threshold')) return 'qualification'
-  if (key.startsWith('trend') || key.includes('sample') || key.includes('alpha')) return 'trends'
-  if (key.startsWith('autonomous') || key.includes('budget') || key.includes('max_')) return 'autonomous'
   if (key.endsWith('_allowlist') || key.startsWith('scheduler_')) return 'bots'
-  return 'other'
+  return null
 }
 
 export default function Settings() {

@@ -83,7 +83,7 @@ export default function AnniePage() {
   return (
     <div className="chat">
       <header className="chat__head">
-        <span className="chat__avatar">An</span>
+        <img src="/Annie.jpg" alt="" className="chat__avatar" />
         <div className="stack">
           <span className="chat__name">Annie</span>
           <span className="chat__tagline">Reads the data. Will argue with you about it.</span>
