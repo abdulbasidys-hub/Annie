@@ -131,6 +131,113 @@ class TestTriggerTiming:
         assert len(calls) == 1
 
 
+def _fixed_times_job(run, *, hours, minute=0, enabled=True, timezone_="UTC"):
+    return ScheduledJob(
+        name="test_fixed_job", settings_key="scheduler_test_fixed_job", run=run,
+        default_hours=hours, default_minute=minute, default_timezone=timezone_,
+        default_enabled=enabled,
+    )
+
+
+class TestFixedTimesTiming:
+    """Clock-anchored multi-slot mode (§ 2026-08-25 — "12am Nigerian time,
+    then every 6 hours from there, fixed not flexible"): interval-mode
+    drifts with whenever the process last restarted and can never land on
+    a chosen wall-clock time; this locks in that fixed-times actually does."""
+
+    async def test_fires_for_the_current_hour_slot(self, repo):
+        calls = []
+
+        async def job(registry, repo, settings):
+            calls.append(1)
+
+        now = datetime.now(timezone.utc)
+        scheduled = _fixed_times_job(job, hours=[now.hour])
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[scheduled])
+
+        await scheduler._maybe_run(scheduled)
+        assert len(calls) == 1
+
+    async def test_does_not_fire_twice_for_the_same_slot_same_day(self, repo):
+        calls = []
+
+        async def job(registry, repo, settings):
+            calls.append(1)
+
+        now = datetime.now(timezone.utc)
+        scheduled = _fixed_times_job(job, hours=[now.hour])
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[scheduled])
+
+        await scheduler._maybe_run(scheduled)
+        await scheduler._maybe_run(scheduled)
+        await scheduler._maybe_run(scheduled)
+        assert len(calls) == 1
+
+    async def test_does_not_fire_before_the_slots_trigger_minute(self, repo):
+        calls = []
+
+        async def job(registry, repo, settings):
+            calls.append(1)
+
+        now = datetime.now(timezone.utc)
+        future_minute = min(now.minute + 2, 59)
+        scheduled = _fixed_times_job(job, hours=[now.hour], minute=future_minute)
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[scheduled])
+
+        await scheduler._maybe_run(scheduled)
+        assert len(calls) == 0
+
+    async def test_fires_independently_for_a_different_slot_same_day(self, repo):
+        """Two slots due the same day both fire — a whole-day last_run_date
+        model (daily mode) would wrongly treat one firing as covering the
+        entire day; fixed-times tracks per-slot via last_fired."""
+        calls = []
+
+        async def job(registry, repo, settings):
+            calls.append(1)
+
+        now = datetime.now(timezone.utc)
+        other_hour = (now.hour - 1) % 24
+        if other_hour == now.hour:
+            pytest.skip("degenerate at this run time")
+        scheduled = _fixed_times_job(job, hours=[other_hour, now.hour])
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[scheduled])
+        await repo.upsert_setting("scheduler_test_fixed_job", {
+            "enabled": True, "hours": [other_hour, now.hour], "minute": 0, "timezone": "UTC",
+            "last_fired": {str(other_hour): now.date().isoformat()},
+        })
+
+        await scheduler._maybe_run(scheduled)
+        assert len(calls) == 1
+
+    async def test_disabled_fixed_times_job_never_fires(self, repo):
+        calls = []
+
+        async def job(registry, repo, settings):
+            calls.append(1)
+
+        now = datetime.now(timezone.utc)
+        scheduled = _fixed_times_job(job, hours=[now.hour], enabled=False)
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[scheduled])
+
+        await scheduler._maybe_run(scheduled)
+        assert len(calls) == 0
+
+    async def test_ensure_defaults_visible_writes_fixed_times_shape(self, repo):
+        async def job(registry, repo, settings):
+            pass
+
+        scheduled = _fixed_times_job(job, hours=[0, 6, 12, 18], timezone_="Africa/Lagos")
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[scheduled])
+
+        await scheduler._ensure_defaults_visible()
+
+        setting = await repo.get_setting("scheduler_test_fixed_job")
+        assert setting.value["hours"] == [0, 6, 12, 18]
+        assert setting.value["timezone"] == "Africa/Lagos"
+        assert setting.value["last_fired"] == {}
+
+
 def _interval_job(run, *, minutes, enabled=True):
     return ScheduledJob(
         name="test_interval_job", settings_key="scheduler_test_interval_job", run=run,

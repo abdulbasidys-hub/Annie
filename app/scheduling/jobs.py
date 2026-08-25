@@ -298,9 +298,22 @@ def _consolidation_digest(daily_logs, existing_long_term, recent_notes) -> str:
 
 async def _full_pipeline_and_brief(registry: ProviderRegistry, repo: FirestoreRepo, settings) -> dict[str, Any]:
     """The four System Health pipeline stages, chained in order every 6
-    hours, followed by a briefing delivered to Discord (§ 2026-08-25:
-    "after this one is done, the other one runs in order... I want Annie to
-    analyze it and give me briefs everyday").
+    hours at fixed clock times, followed by a briefing delivered to Discord
+    (§ 2026-08-25: "after this one is done, the other one runs in order... I
+    want Annie to analyze it and give me briefs everyday", later refined to
+    "12am Nigerian time, then every 6 hours from there, fixed not flexible").
+
+    Runs at 00:00/06:00/12:00/18:00 in Africa/Lagos (WAT, UTC+1, no DST) —
+    fixed-times scheduler mode (app/scheduling/scheduler.py), not interval
+    mode. Interval mode was the original design here but structurally can't
+    give a chosen wall-clock time: "every 360 minutes since last run" drifts
+    with whenever the process happened to last (re)start, which is exactly
+    what an operator explicitly asking for "fixed not flexible" was
+    rejecting. The 00:00 WAT slot is the day boundary, so it's the one that
+    gets the full 24h window and the "full-day" label; the other three get
+    the usual 6h window — decided directly from the current WAT-local hour
+    rather than any scheduler-internal bookkeeping, so this stays correct
+    even if a slot is ever missed and fires late.
 
     Replaces three separate standalone daily jobs that used to do this
     piecemeal on their own schedules (daily_qualification's full drain,
@@ -315,21 +328,15 @@ async def _full_pipeline_and_brief(registry: ProviderRegistry, repo: FirestoreRe
     there — each stage's own PipelineRun records the failure and the loop
     moves on; the overall full_cycle run is marked ``error`` only if every
     stage failed.
-
-    Four ticks a day land roughly every 6 hours from whenever the process
-    first started (interval-mode, not clock-aligned — see
-    ``app/scheduling/scheduler.py``), so there's no fixed "the 18:00 UTC one"
-    to designate as the daily wrap-up. Instead: whichever tick's next
-    scheduled fire would cross into a new UTC calendar date *is* the last
-    one before that boundary, unconditionally — cheaper and more robust than
-    tracking clock alignment, and self-corrects if a tick is ever missed.
     """
+    from zoneinfo import ZoneInfo
+
     from app.pipeline.tracking import (
         run_discovery_stage, run_enrichment_all_stage, run_narratives_stage, run_trends_stage,
     )
 
     now = datetime.now(timezone.utc)
-    is_end_of_day = (now + timedelta(hours=6)).date() != now.date()
+    is_end_of_day = datetime.now(ZoneInfo("Africa/Lagos")).hour == 0
 
     full_run = await repo.create_pipeline_run("full_cycle", trigger="scheduled")
     stages: dict[str, Any] = {
@@ -473,7 +480,14 @@ JOBS: list[ScheduledJob] = [
         name="full_pipeline_and_brief",
         settings_key="scheduler_full_pipeline_and_brief",
         run=_full_pipeline_and_brief,
-        default_interval_minutes=360,
+        # Fixed clock times, not interval-mode (§ 2026-08-25 — "12am
+        # Nigerian time, then every 6 hours from there, fixed not
+        # flexible"): interval-mode's "every 360 minutes since last run"
+        # drifts with whenever the process last restarted and can never
+        # land on a chosen wall-clock time.
+        default_hours=[0, 6, 12, 18],
+        default_minute=0,
+        default_timezone="Africa/Lagos",
     ),
     ScheduledJob(
         name="trend_engine",
@@ -485,9 +499,9 @@ JOBS: list[ScheduledJob] = [
         name="daily_log",
         settings_key="scheduler_daily_log",
         run=_daily_log,
-        default_hour=2,
-        default_minute=30,
-        default_timezone="UTC",
+        default_hour=0,
+        default_minute=0,
+        default_timezone="Africa/Lagos",
     ),
     ScheduledJob(
         name="research_task_sweep",
