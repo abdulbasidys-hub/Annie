@@ -904,7 +904,17 @@ class FirestoreRepo:
         setting = Setting(
             key=key, value=value, description=resolved_description, updated_by=actor, updated_at=utcnow()
         )
-        await ref.set(to_doc(setting), merge=True)
+        doc = to_doc(setting)
+        # Field-path merge, not a bare `merge=True`: Firestore's boolean merge
+        # recursively merges nested maps, so a smaller `value` dict (e.g. a
+        # job's error result, {"error": "..."}) gets its missing keys
+        # silently backfilled from whatever the *previous* write's `value`
+        # happened to contain — confirmed 2026-08-25 against a real scheduled
+        # job's last_result, which showed stale evaluated/qualified counts
+        # from an earlier successful run stitched onto a later failed run's
+        # error message. Listing the top-level paths explicitly makes each
+        # one (value, description, ...) a full replacement instead.
+        await ref.set(doc, merge=list(doc.keys()))
 
         await self.db.collection("audit_log").document().set(
             to_doc(
