@@ -1023,18 +1023,45 @@ class FirestoreRepo:
             {"offset": offset}, merge=True
         )
 
-    async def get_bot_session(self, provider: str, external_id: str) -> str | None:
-        """The Annie conversation a Telegram chat / Discord channel maps to."""
+    async def get_bot_session(
+        self, provider: str, external_id: str, *, max_age: timedelta | None = None
+    ) -> str | None:
+        """The Annie conversation a Telegram chat / Discord channel maps to.
+
+        ``max_age`` (§62, 2026-08-25 — "even when the conversation has
+        shifted it repeats it"): a session persisted indefinitely with no
+        expiry, so up to MAX_CONTEXT_MESSAGES of old history kept feeding
+        into every new question no matter how much time had passed since
+        the topic actually moved on. Passing a max_age treats a session
+        that's gone quiet longer than that as expired — returns None (a
+        fresh conversation) rather than the stale conversation_id, same
+        effect as if the caller had never had one.
+        """
         doc_id = doc_id_safe(f"{provider}_{external_id}")
         snap = await self.db.collection("bot_sessions").document(doc_id).get()
-        return (snap.to_dict() or {}).get("conversation_id")
+        data = snap.to_dict() or {}
+        if max_age is not None:
+            updated_at = data.get("updated_at")
+            if updated_at is None or (utcnow() - updated_at) > max_age:
+                return None
+        return data.get("conversation_id")
 
     async def set_bot_session(self, provider: str, external_id: str, conversation_id: str) -> None:
         doc_id = doc_id_safe(f"{provider}_{external_id}")
         await self.db.collection("bot_sessions").document(doc_id).set(
-            {"provider": provider, "external_id": external_id, "conversation_id": conversation_id},
+            {
+                "provider": provider, "external_id": external_id,
+                "conversation_id": conversation_id, "updated_at": utcnow(),
+            },
             merge=True,
         )
+
+    async def clear_bot_session(self, provider: str, external_id: str) -> None:
+        """Explicit reset (a `/new` command) — the reliable complement to
+        max_age above for "the topic just shifted, right now" rather than
+        "enough time has passed that it probably did"."""
+        doc_id = doc_id_safe(f"{provider}_{external_id}")
+        await self.db.collection("bot_sessions").document(doc_id).delete()
 
     # -- personality (operator-editable voice knobs, one singleton doc) ------
 

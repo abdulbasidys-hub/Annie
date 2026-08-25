@@ -263,14 +263,19 @@ class AnnieAgent:
             {
                 "role": "user",
                 "content": (
-                    "Put your answer into the required JSON object's `content` field — "
-                    "word for word if you already wrote it above, not a flattened or "
-                    "safer-sounding rewrite. Keep your actual voice: the tone, warmth, "
-                    "dry humour and directness from the system prompt's Voice section "
-                    "belong in `content` exactly as much as in a plain-text reply. Do "
-                    "not add new claims not already grounded in the tool results above — "
-                    "if you did not check something, its claim_type must reflect that "
-                    "(hypothesis/speculation), not fact."
+                    "Put your answer to the CURRENT question into the required JSON "
+                    "object's `content` field — word for word if you already drafted "
+                    "it earlier in this turn's own reasoning above, not a flattened or "
+                    "safer-sounding rewrite. This is not a request to reuse or echo "
+                    "anything from your answers to EARLIER questions in this "
+                    "conversation's history — a new question gets a new answer, "
+                    "grounded in tool calls made for it specifically, even if an "
+                    "earlier turn covered similar ground. Keep your actual voice: the "
+                    "tone, warmth, dry humour and directness from the system prompt's "
+                    "Voice section belong in `content` exactly as much as in a "
+                    "plain-text reply. Do not add new claims not already grounded in "
+                    "the tool results above — if you did not check something, its "
+                    "claim_type must reflect that (hypothesis/speculation), not fact."
                 ),
             }
         ]

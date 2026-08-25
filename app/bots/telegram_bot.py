@@ -35,6 +35,7 @@ Turn off.
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from typing import Any
 
 import httpx
@@ -55,6 +56,11 @@ POLL_TIMEOUT_S = 30
 #: cutting it exactly at the wire, so this survives a future prompt tweak
 #: that adds a few characters of framing around the reply.
 MAX_MESSAGE_LENGTH = 4000
+#: A session quiet longer than this starts fresh automatically (§62,
+#: 2026-08-25 — "even when the conversation has shifted it repeats it").
+#: /new (below) is the reliable complement for "right now", not "probably
+#: enough time has passed".
+SESSION_MAX_AGE = timedelta(hours=3)
 
 
 class TelegramBot:
@@ -151,6 +157,11 @@ class TelegramBot:
             await self._send(chat_id, "This bot is restricted right now — you're not on the allowed list.")
             return
 
+        if text.strip().lower() in ("/new", "/reset"):
+            await self._repo.clear_bot_session("telegram", str(chat_id))
+            await self._send(chat_id, "Starting fresh — no memory of what we were just talking about.")
+            return
+
         try:
             await self._client.post(
                 "/sendChatAction", json={"chat_id": chat_id, "action": "typing"}
@@ -172,7 +183,9 @@ class TelegramBot:
                 sender_is_new=is_new,
             )
 
-            conversation_id = await self._repo.get_bot_session("telegram", str(chat_id))
+            conversation_id = await self._repo.get_bot_session(
+                "telegram", str(chat_id), max_age=SESSION_MAX_AGE
+            )
             convo, reply = await ask_annie(
                 repo=self._repo,
                 registry=self._registry,

@@ -32,6 +32,7 @@ permissions the bot doesn't have" rule.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 import discord
@@ -45,6 +46,12 @@ from app.db.base import slugify
 from app.db.models.discord import DiscordChannel
 from app.db.repo import FirestoreRepo
 from app.providers.registry import ProviderRegistry
+
+#: A session quiet longer than this starts fresh automatically (§62,
+#: 2026-08-25 — "even when the conversation has shifted it repeats it").
+#: /new (below) is the reliable complement for "right now", not "probably
+#: enough time has passed".
+SESSION_MAX_AGE = timedelta(hours=3)
 
 log = structlog.get_logger(__name__)
 
@@ -94,9 +101,14 @@ def build_discord_client(
             return
 
         channel_id = str(message.channel.id)
+        if text.strip().lower() in ("/new", "/reset"):
+            await repo.clear_bot_session("discord", channel_id)
+            await _send(message.channel, "Starting fresh — no memory of what we were just talking about.")
+            return
+
         try:
             async with message.channel.typing():
-                conversation_id = await repo.get_bot_session("discord", channel_id)
+                conversation_id = await repo.get_bot_session("discord", channel_id, max_age=SESSION_MAX_AGE)
                 platform_context = await _build_platform_context(repo, message)
                 convo, reply = await ask_annie(
                     repo=repo,
