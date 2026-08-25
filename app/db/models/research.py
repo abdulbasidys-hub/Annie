@@ -189,6 +189,12 @@ class PersonalityConfig:
     skepticism_level: str = ""
     pushback_degree: str = ""
     explanation_style: str = ""
+    #: The free-form paragraph an operator actually wrote — the individual
+    #: fields above are an LLM's extraction *from* this text (§ 2026-08-25:
+    #: "I cannot fill that one by one"), kept so a later edit shows what was
+    #: last submitted rather than making someone reverse-engineer their own
+    #: intent from five short derived phrases.
+    source_text: str = ""
     updated_at: datetime | None = None
     updated_by: str | None = None
 

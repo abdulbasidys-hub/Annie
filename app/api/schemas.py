@@ -635,6 +635,7 @@ class PersonalityConfigOut(ApiModel):
     skepticism_level: str
     pushback_degree: str
     explanation_style: str
+    source_text: str = ""
     updated_at: datetime | None = None
     updated_by: str | None = None
 

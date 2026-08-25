@@ -164,6 +164,7 @@ export const api = {
 
   personality: () => request('GET', '/api/personality'),
   updatePersonality: (body) => request('PATCH', '/api/personality', { body }),
+  extractPersonality: (text) => request('POST', '/api/personality/extract', { body: { text } }),
 
   conversations: () => request('GET', '/api/annie/conversations'),
   conversation: (id) => request('GET', `/api/annie/conversations/${id}`),

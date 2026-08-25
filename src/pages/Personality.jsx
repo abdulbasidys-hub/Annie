@@ -8,10 +8,14 @@ import { relative } from '../lib/format.js'
 /**
  * Personality.
  *
- * Every field here is plain free text — tone, how she engages, how she
- * explains herself — saved one field at a time, PATCH-per-field, the same
- * discipline Settings.jsx uses for research parameters. Unlike Settings.jsx
- * there is no JSON to round-trip; these are strings, edited as strings.
+ * One paragraph in, five voice fields out (§ 2026-08-25 — "I cannot fill
+ * that one by one"). The operator writes a free-form description of how
+ * they want Annie to sound; an LLM extracts tone/communication_style/
+ * skepticism_level/pushback_degree/explanation_style from it. Those five
+ * fields are shown below as a read-only preview of what got extracted, not
+ * as editable inputs — the paragraph is the single source of truth, so
+ * hand-editing an extracted field would just get silently overwritten the
+ * next time the paragraph is re-submitted.
  *
  * What is deliberately absent: the rules that keep Annie honest (every
  * number from a real tool call, every claim labelled fact/inference/
@@ -20,17 +24,13 @@ import { relative } from '../lib/format.js'
  * here. The panel at the bottom explains that rather than pretending it's a
  * setting.
  */
-const IDENTITY_FIELDS = [
-  { key: 'name', label: 'Name', multiline: false },
-  { key: 'description', label: 'Description', multiline: true },
-]
-
-const PERSONALITY_FIELDS = [
-  { key: 'tone', label: 'Tone', multiline: true },
-  { key: 'communication_style', label: 'Communication style', multiline: true },
-  { key: 'skepticism_level', label: 'Skepticism level', multiline: true },
-  { key: 'pushback_degree', label: 'Pushback degree', multiline: true },
-  { key: 'explanation_style', label: 'Explanation style', multiline: true },
+const EXTRACTED_FIELDS = [
+  { key: 'description', label: 'Overall description' },
+  { key: 'tone', label: 'Tone' },
+  { key: 'communication_style', label: 'Communication style' },
+  { key: 'skepticism_level', label: 'Skepticism level' },
+  { key: 'pushback_degree', label: 'Pushback degree' },
+  { key: 'explanation_style', label: 'Explanation style' },
 ]
 
 export default function Personality() {
@@ -41,8 +41,8 @@ export default function Personality() {
       <div className="page-head">
         <h2 className="page-head__title">Personality</h2>
         <p className="page-head__sub">
-          How Annie sounds and how hard she pushes back — editable. What keeps her honest is not,
-          and is explained below rather than exposed as a setting.
+          Describe how you want Annie to sound in your own words. What keeps her honest is not
+          editable here, and is explained below rather than exposed as a setting.
         </p>
       </div>
 
@@ -56,18 +56,23 @@ export default function Personality() {
               </span>
             )}
 
-            <Panel title="Identity">
-              <div className="stack gap-4">
-                {IDENTITY_FIELDS.map((f) => (
-                  <FieldRow key={f.key} field={f} value={data[f.key]} onSaved={state.reload} />
-                ))}
-              </div>
-            </Panel>
+            <ParagraphEditor sourceText={data.source_text} onSaved={state.reload} />
 
-            <Panel title="Personality">
+            <Panel title="What Annie extracted from that" meta="read-only — edit the paragraph above to change these">
               <div className="stack gap-4">
-                {PERSONALITY_FIELDS.map((f) => (
-                  <FieldRow key={f.key} field={f} value={data[f.key]} onSaved={state.reload} />
+                {EXTRACTED_FIELDS.map((f) => (
+                  <div key={f.key} className="stack gap-1">
+                    <strong style={{ fontSize: 'var(--text-sm)' }}>{f.label}</strong>
+                    {data[f.key] ? (
+                      <p className="secondary" style={{ fontSize: 'var(--text-sm)', lineHeight: 'var(--leading-relaxed)' }}>
+                        {data[f.key]}
+                      </p>
+                    ) : (
+                      <span className="faint" style={{ fontSize: 'var(--text-xs)' }}>
+                        Nothing extracted yet — write a paragraph above and hit Update.
+                      </span>
+                    )}
+                  </div>
                 ))}
               </div>
             </Panel>
@@ -78,8 +83,8 @@ export default function Personality() {
                 and intentionally not configurable from this page: every number she states must
                 come from a real tool call made during that conversation, every claim is labelled
                 fact, inference, hypothesis or speculation, every percentage carries its sample
-                size, and she never gives trading advice. The fields above change how she sounds —
-                they can't change what keeps her honest.
+                size, and she never gives trading advice. The paragraph above changes how she
+                sounds — it can't change what keeps her honest.
               </p>
             </Panel>
           </div>
@@ -89,19 +94,19 @@ export default function Personality() {
   )
 }
 
-function FieldRow({ field, value, onSaved }) {
-  const initial = value || ''
+function ParagraphEditor({ sourceText, onSaved }) {
+  const initial = sourceText || ''
   const [text, setText] = useState(initial)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
   const dirty = text !== initial
 
-  async function save() {
+  async function update() {
     setSaving(true)
     setError(null)
     try {
-      await api.updatePersonality({ [field.key]: text })
+      await api.extractPersonality(text)
       onSaved()
     } catch (err) {
       setError(err)
@@ -111,32 +116,27 @@ function FieldRow({ field, value, onSaved }) {
   }
 
   return (
-    <div className="stack gap-2" style={{ paddingBottom: 'var(--space-3)', borderBottom: '1px solid var(--border-subtle)' }}>
-      <strong style={{ fontSize: 'var(--text-sm)' }}>{field.label}</strong>
-      {field.multiline ? (
+    <Panel title="Describe Annie" meta="one paragraph, plain English">
+      <div className="stack gap-3">
         <textarea
           className="input"
-          rows={3}
+          rows={6}
           value={text}
           onChange={(e) => setText(e.target.value)}
-          aria-label={field.label}
-          style={{ fontSize: 'var(--text-sm)', lineHeight: 'var(--leading-relaxed)', resize: 'vertical', minHeight: 72 }}
+          placeholder="e.g. I want her blunt and fast — no hedging, no summarising my question back to me. She should push back hard when the data disagrees with me, but never be condescending about it. Explain things the way you'd explain them to a sharp trader who doesn't know the codebase, not an engineer."
+          aria-label="Describe Annie's personality"
+          style={{ fontSize: 'var(--text-sm)', lineHeight: 'var(--leading-relaxed)', resize: 'vertical', minHeight: 140 }}
         />
-      ) : (
-        <input
-          className="input"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          aria-label={field.label}
-          style={{ fontSize: 'var(--text-sm)' }}
-        />
-      )}
-      <div className="row gap-2">
-        <button className="btn btn--sm btn--primary" onClick={save} disabled={!dirty || saving}>
-          {saving ? 'Saving…' : 'Save'}
-        </button>
+        <div className="row gap-2">
+          <button className="btn btn--sm btn--primary" onClick={update} disabled={!dirty || !text.trim() || saving}>
+            {saving ? 'Updating…' : 'Update'}
+          </button>
+          {saving && (
+            <span className="faint" style={{ fontSize: 'var(--text-xs)' }}>Extracting tone, style, and how she pushes back…</span>
+          )}
+        </div>
+        {error && <ErrorState error={error} />}
       </div>
-      {error && <ErrorState error={error} />}
-    </div>
+    </Panel>
   )
 }
