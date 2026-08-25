@@ -17,6 +17,7 @@ from app.db.models.ops import (
     Setting,
     ToolCall,
 )
+from app.db.models.people import PlatformUser
 from app.db.models.research import (
     ConsolidationRun,
     Conversation,
@@ -74,4 +75,5 @@ __all__ = [
     "ProviderHealth",
     "Setting",
     "ToolCall",
+    "PlatformUser",
 ]

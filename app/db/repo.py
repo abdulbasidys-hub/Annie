@@ -43,6 +43,7 @@ from google.cloud.firestore import AsyncClient, DocumentSnapshot, FieldFilter, Q
 from app.db.base import doc_id_safe, from_doc, money_from_doc, money_to_doc, slugify, to_doc, utcnow
 from app.db.enums import MilestoneKind, PipelineStage
 from app.db.models.discord import DiscordChannel
+from app.db.models.people import PlatformUser
 from app.db.models.entities import Creator, Dex, Launchpad, Narrative
 from app.db.models.intelligence import Anomaly, Trend, TrendHistory, TrendObservation
 from app.db.models.ops import AuditLog, DataQuality, ProviderHealth, Setting, ToolCall
@@ -1090,6 +1091,53 @@ class FirestoreRepo:
     async def update_discord_channel(self, channel_id: str, **updates: Any) -> None:
         updates["updated_at"] = utcnow()
         await self.db.collection("discord_channels").document(channel_id).set(updates, merge=True)
+
+    # -- platform users (§62) --------------------------------------------------
+
+    async def get_platform_user(self, platform: str, user_id: str) -> PlatformUser | None:
+        doc_id = f"{platform}_{user_id}"
+        snap = await self.db.collection("platform_users").document(doc_id).get()
+        if not snap.exists:
+            return None
+        return from_doc(PlatformUser, snap.id, snap.to_dict() or {})
+
+    async def touch_platform_user(
+        self, platform: str, user_id: str, *, display_name: str | None, is_bot: bool
+    ) -> PlatformUser:
+        """Called on every incoming message — creates the profile on first
+        contact, bumps last_seen_at/message_count otherwise. Never touches
+        ``preferred_name``: that only ever comes from
+        :func:`app.annie.agent._tool_remember_person`, once Annie has
+        actually asked and been told, not from a platform's own display name.
+        """
+        doc_id = f"{platform}_{user_id}"
+        ref = self.db.collection("platform_users").document(doc_id)
+        snap = await ref.get()
+        now = utcnow()
+        if not snap.exists:
+            user = PlatformUser(
+                platform=platform, user_id=str(user_id), platform_display_name=display_name,
+                is_bot=is_bot, first_seen_at=now, last_seen_at=now, message_count=1,
+            )
+            await ref.set(to_doc(user))
+            return user
+
+        existing = snap.to_dict() or {}
+        updates: dict[str, Any] = {
+            "last_seen_at": now,
+            "message_count": int(existing.get("message_count") or 0) + 1,
+        }
+        if display_name:
+            updates["platform_display_name"] = display_name
+        await ref.set(updates, merge=list(updates.keys()))
+        existing.update(updates)
+        return from_doc(PlatformUser, doc_id, existing)
+
+    async def set_preferred_name(self, platform: str, user_id: str, name: str) -> None:
+        doc_id = f"{platform}_{user_id}"
+        await self.db.collection("platform_users").document(doc_id).set(
+            {"preferred_name": name}, merge=["preferred_name"]
+        )
 
 
 async def get_repo() -> "FirestoreRepo":

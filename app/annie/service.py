@@ -27,8 +27,10 @@ async def ask_annie(
 ) -> tuple[Conversation, Message]:
     """Run one turn. Raises ``CapabilityUnavailable`` if AI isn't configured.
 
-    ``platform_context`` is Discord-only (see app/annie/platform.py) — every
-    other caller omits it and nothing about this function's behavior changes.
+    ``platform_context`` carries sender identity for both bot integrations
+    (Telegram and Discord) plus Discord-only channel context/actions — see
+    app/annie/platform.py. Web chat omits it and nothing about this
+    function's behavior changes.
     """
     settings.require("ai")
 

@@ -4,7 +4,11 @@ Runs as a background asyncio task in the same process as the API — see
 `telegram_bot.py`'s module docstring for the trade-off against a separate
 service. Responds to direct messages always, and to messages in a server
 channel only when @mentioned, so it doesn't answer every message in every
-channel it happens to be invited into.
+channel it happens to be invited into. That same DM-or-mentioned gate also
+covers messages from *other* bots sharing a channel (§62) — Annie's own
+messages are the only ones unconditionally ignored (self-loop guard); a
+second bot's ambient chatter is visible to her the moment she's actually
+addressed, never auto-replied to on its own.
 
 **Access is controlled by an operator-editable allowlist**
 (`app/bots/access_control.py`) — same mechanism and same open-by-default
@@ -62,7 +66,15 @@ def build_discord_client(
 
     @client.event
     async def on_message(message: discord.Message) -> None:
-        if message.author.bot:
+        # Only Annie's own messages are unconditionally ignored (self-loop
+        # guard) — another bot's messages are allowed through the same
+        # DM/mention gate a human's would need to clear (§62, 2026-08-25:
+        # "I want her to be able to read the other bot's messages and maybe
+        # respond when I wants her to"). This never makes her reply to a
+        # bot's routine chatter on its own; see _sender_context_note in
+        # app/annie/agent.py for the "never auto-reply to a bot" instruction
+        # that actually enforces the "maybe" half of that request.
+        if client.user is not None and message.author.id == client.user.id:
             return
 
         is_dm = isinstance(message.channel, discord.DMChannel)
@@ -70,7 +82,7 @@ def build_discord_client(
         if not is_dm and not mentioned:
             return
 
-        if not await is_allowed(repo, "discord", message.author.id):
+        if not message.author.bot and not await is_allowed(repo, "discord", message.author.id):
             log.info("discord_message_rejected", sender_id=message.author.id)
             await _send(message.channel, "This bot is restricted right now — you're not on the allowed list.")
             return
@@ -104,10 +116,11 @@ def build_discord_client(
 
 
 async def _build_platform_context(repo: FirestoreRepo, message: "discord.Message") -> PlatformContext:
-    """Look up this channel's configured purpose (if any), and decide
-    whether Annie may be offered channel-creation this turn — gated on the
-    bot actually holding Manage Channels in this specific guild, checked
-    now rather than assumed."""
+    """Look up this channel's configured purpose (if any), decide whether
+    Annie may be offered channel-creation this turn — gated on the bot
+    actually holding Manage Channels in this specific guild, checked now
+    rather than assumed — and record/refresh who's actually sending this
+    message (§62)."""
     configured = await repo.get_discord_channel(str(message.channel.id))
     channel_purpose = configured.purpose if configured and configured.enabled else None
 
@@ -119,7 +132,23 @@ async def _build_platform_context(repo: FirestoreRepo, message: "discord.Message
 
         create_channel = _create
 
-    return PlatformContext(platform="discord", channel_purpose=channel_purpose, create_channel=create_channel)
+    author = message.author
+    existing = await repo.get_platform_user("discord", str(author.id))
+    is_new = existing is None and not author.bot
+    profile = await repo.touch_platform_user(
+        "discord", str(author.id), display_name=author.display_name, is_bot=author.bot
+    )
+
+    return PlatformContext(
+        platform="discord",
+        channel_purpose=channel_purpose,
+        create_channel=create_channel,
+        sender_id=str(author.id),
+        sender_display_name=profile.platform_display_name,
+        sender_preferred_name=profile.preferred_name,
+        sender_is_bot=author.bot,
+        sender_is_new=is_new,
+    )
 
 
 async def _create_channel(

@@ -135,12 +135,13 @@ class AnnieAgent:
 
         capabilities_note = _capabilities_note(self.settings)
         channel_note = _channel_note(self.platform_context)
+        sender_note = _sender_context_note(self.platform_context)
         personality_overrides = await _personality_overrides(self.repo)
         messages: list[dict[str, Any]] = [
             {
                 "role": "system",
                 "content": persona.system_prompt(
-                    capabilities_note=capabilities_note + channel_note,
+                    capabilities_note=capabilities_note + channel_note + sender_note,
                     personality_overrides=personality_overrides,
                 ),
             },
@@ -602,6 +603,22 @@ async def _tool_search_memories(agent: AnnieAgent, args: dict[str, Any]) -> dict
     }
 
 
+async def _tool_remember_person(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """Only offered when a turn actually has a platform sender (Telegram or
+    Discord, never web chat — see PlatformContext.sender_id). Saves what
+    THIS person asked to be called; never infer a name from a platform
+    display name or guess one — that belongs in sender_display_name, which
+    this never touches."""
+    ctx = agent.platform_context
+    if ctx is None or not ctx.sender_id:
+        return {"saved": False, "error": "No platform sender in this context (web chat has none)."}
+    name = str(args.get("name") or "").strip()
+    if not name:
+        return {"saved": False, "error": "name is required"}
+    await agent.repo.set_preferred_name(ctx.platform, ctx.sender_id, name)
+    return {"saved": True, "name": name}
+
+
 async def _tool_manage_discord_channel(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
     """Only ever offered when app/bots/discord_bot.py already confirmed the
     bot has Manage Channels in this guild — see app/annie/platform.py. If
@@ -689,6 +706,7 @@ _TOOL_HANDLERS = {
     "list_research_notes": _tool_list_research_notes,
     "search_memories": _tool_search_memories,
     "create_research_task": _tool_create_research_task,
+    "remember_person": _tool_remember_person,
     "manage_discord_channel": _tool_manage_discord_channel,
     "web_research": _tool_web_research,
 }
@@ -801,6 +819,17 @@ def _tool_specs(settings: Settings, platform_context: PlatformContext | None = N
                  "properties": {"query": {"type": "string"}, "max_results": {"type": "integer", "minimum": 1, "maximum": 8}}},
             )
         )
+    if platform_context is not None and platform_context.sender_id:
+        specs.append(
+            _spec(
+                "remember_person",
+                "Save what the current sender (Telegram/Discord) asked to be called. Only call "
+                "this after they've actually told you a name in this conversation — never guess "
+                "or infer one, and never call it for another bot.",
+                {"type": "object", "required": ["name"], "additionalProperties": False,
+                 "properties": {"name": {"type": "string"}}},
+            )
+        )
     if platform_context is not None and platform_context.create_channel is not None:
         specs.append(
             _spec(
@@ -862,6 +891,37 @@ def _channel_note(platform_context: PlatformContext | None) -> str:
         f"\n\nThis conversation is happening in a Discord channel configured for: "
         f"{platform_context.channel_purpose}. Keep your answer relevant to that purpose."
     )
+
+
+def _sender_context_note(platform_context: PlatformContext | None) -> str:
+    """Gives a sense of *who* is talking, not just what they said (§62,
+    2026-08-25) — without this, every message in a group chat (multiple
+    people, or a person plus another bot) arrives as an undifferentiated
+    "user" turn, indistinguishable from a solo DM. Web chat never has a
+    sender_id, so this is a no-op there."""
+    if platform_context is None or not platform_context.sender_id:
+        return ""
+
+    if platform_context.sender_is_bot:
+        name = platform_context.sender_display_name or "another bot"
+        return (
+            f"\n\nThe message below is from {name}, another bot in this chat — not a human. "
+            "Never ask a bot its name. Only act on it if you were actually addressed; reading "
+            "it for context is fine, auto-replying to routine bot chatter is not."
+        )
+
+    if platform_context.sender_is_new:
+        return (
+            "\n\nYou have not met the person sending this message before. Naturally, without "
+            "making it feel like a form, ask what they'd like to be called — then call "
+            "remember_person once they tell you. Don't block your actual answer on this; "
+            "weave it in."
+        )
+
+    name = platform_context.sender_preferred_name or platform_context.sender_display_name
+    if name:
+        return f"\n\nYou're talking with {name}."
+    return ""
 
 
 def _iso(value: Any) -> str | None:
