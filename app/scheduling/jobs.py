@@ -315,13 +315,15 @@ async def _full_pipeline_and_brief(registry: ProviderRegistry, repo: FirestoreRe
     rather than any scheduler-internal bookkeeping, so this stays correct
     even if a slot is ever missed and fires late.
 
-    Replaces three separate standalone daily jobs that used to do this
-    piecemeal on their own schedules (daily_qualification's full drain,
-    narrative_clustering, morning_brief) — one chain, one history, no three
-    different clocks disagreeing about when "today's" numbers were last
-    refreshed. ``frequent_qualification`` (10 min) and ``trend_engine``
-    (hourly) still run independently in between cycles for faster coverage;
-    this is the thorough sweep, not a replacement for either.
+    Replaces four separate standalone jobs that used to do this piecemeal
+    on their own schedules (daily_qualification's full drain,
+    narrative_clustering, morning_brief, and — retired 2026-08-28 as a real
+    cost fix, see app/trends/engine.py's TRENDABLE docstring — the standalone
+    hourly trend_engine, whose per-token full-feature-subcollection reads
+    were the single largest driver of a real Firestore billing incident) —
+    one chain, one history. ``frequent_qualification`` (10 min) still runs
+    independently in between cycles for faster coverage on brand-new
+    tokens; trends now only ever recompute here, every 6 hours.
 
     One stage failing does not abort the chain — discovery erroring must not
     prevent enrichment from at least trying against whatever is already
@@ -416,38 +418,6 @@ def _format_brief_for_discord(report, *, label: str = "Briefing") -> str:
     return "\n".join(lines)
 
 
-async def _trend_engine(registry: ProviderRegistry, repo: FirestoreRepo, settings) -> dict[str, Any]:
-    """Recompute trends against the latest qualified-token cohorts.
-
-    This had no scheduled job at all until 2026-08-25 — only the manual
-    "Run now" trigger on System Health (app/api/routes/system.py's
-    /run/trends) ever called TrendEngine.run(). Invisible while qualification
-    itself was broken (nothing new to compare), but the moment the
-    qualification-frequency fix started producing real data (1 -> 290
-    qualified tokens in a few hours), every existing trend document was
-    stuck at whatever tiny cohort (recent_total=1) existed the one time this
-    was ever manually triggered — confirmed directly: a chat request for
-    "new" trends returned zero rows because none of the 18 stale documents
-    could pass the significance bars, while the dashboard's raw count still
-    said 18, an inconsistency Annie correctly refused to paper over. Runs
-    hourly rather than daily: qualification itself now updates every 10
-    minutes, so trends frozen for a full day would just recreate a milder
-    version of the same staleness.
-    """
-    from app.trends.engine import TrendEngine
-
-    engine = TrendEngine(repo)
-    run = await engine.run()
-    return {
-        "cohorts_evaluated": run.cohorts_evaluated,
-        "features_evaluated": run.features_evaluated,
-        "trends_created": run.trends_created,
-        "trends_updated": run.trends_updated,
-        "status_changes": run.status_changes,
-        "skipped_windows": run.skipped_windows,
-    }
-
-
 async def _research_task_sweep(
     registry: ProviderRegistry, repo: FirestoreRepo, settings
 ) -> dict[str, Any]:
@@ -488,12 +458,6 @@ JOBS: list[ScheduledJob] = [
         default_hours=[0, 6, 12, 18],
         default_minute=0,
         default_timezone="Africa/Lagos",
-    ),
-    ScheduledJob(
-        name="trend_engine",
-        settings_key="scheduler_trend_engine",
-        run=_trend_engine,
-        default_interval_minutes=60,
     ),
     ScheduledJob(
         name="daily_log",

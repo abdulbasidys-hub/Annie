@@ -200,6 +200,7 @@ class FirestoreRepo:
                     value=feat.value,
                     numeric_value=feat.numeric_value,
                     source=feat.source,
+                    subject=f"{feat.namespace}.{feat.key}",
                     created_at=utcnow(),
                 )
                 batch.set(features_col.document(tf.doc_id), to_doc(tf), merge=True)
@@ -309,6 +310,23 @@ class FirestoreRepo:
         return [
             from_doc(TokenFeature, s.id, s.to_dict() or {}, token_mint=mint)
             async for s in col.stream()
+        ]
+
+    async def token_features_for_subjects(self, mint: str, subjects: list[str]) -> list[TokenFeature]:
+        """Only the feature docs matching one of ``subjects`` (each a
+        ``"namespace.key"`` string) — used by the trend engine, which only
+        ever needs the handful of TRENDABLE fields, not a token's entire
+        features subcollection (13-47 docs, most of it structural fields
+        like word_count/has_emoji trends never look at, plus one document
+        per individual word before that was removed 2026-08-28). Firestore's
+        `in` filter caps at 30 values; TRENDABLE has far fewer than that."""
+        if not subjects:
+            return []
+        col = self._token_ref(mint).collection("features")
+        query = col.where(filter=FieldFilter("subject", "in", subjects))
+        return [
+            from_doc(TokenFeature, s.id, s.to_dict() or {}, token_mint=mint)
+            async for s in query.stream()
         ]
 
     async def token_milestones(self, mint: str) -> list[TokenMilestone]:
@@ -892,8 +910,18 @@ class FirestoreRepo:
         return from_doc(Setting, snap.id, snap.to_dict() or {}, key=snap.id)
 
     async def upsert_setting(
-        self, key: str, value: Any, *, description: str | None = None, actor: str = "operator"
+        self, key: str, value: Any, *, description: str | None = None, actor: str = "operator",
+        audit: bool = True,
     ) -> Setting:
+        """``audit=False`` skips the audit_log write below — for routine,
+        high-frequency bookkeeping (the scheduler's own last_run_at/
+        last_result heartbeat, written on every tick of jobs that can fire
+        every 10 minutes) rather than a meaningful operator- or Annie-driven
+        change. Confirmed as a real, avoidable cost contributor 2026-08-28:
+        audit logging exists for changes worth reviewing, not "a job ticked
+        on schedule" — every scheduler heartbeat was writing a full
+        audit_log document that nobody was ever going to read.
+        """
         ref = self.db.collection("settings").document(doc_id_safe(key))
         before_snap = await ref.get()
         before_doc = before_snap.to_dict() or {}
@@ -918,19 +946,20 @@ class FirestoreRepo:
         # one (value, description, ...) a full replacement instead.
         await ref.set(doc, merge=list(doc.keys()))
 
-        await self.db.collection("audit_log").document().set(
-            to_doc(
-                AuditLog(
-                    actor=actor,
-                    action="setting.update",
-                    subject_type="setting",
-                    subject_id=key,
-                    before={"value": before},
-                    after={"value": value},
-                    created_at=utcnow(),
+        if audit:
+            await self.db.collection("audit_log").document().set(
+                to_doc(
+                    AuditLog(
+                        actor=actor,
+                        action="setting.update",
+                        subject_type="setting",
+                        subject_id=key,
+                        before={"value": before},
+                        after={"value": value},
+                        created_at=utcnow(),
+                    )
                 )
             )
-        )
         return setting
 
     # =========================================================================

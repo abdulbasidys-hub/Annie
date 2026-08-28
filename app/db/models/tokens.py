@@ -134,6 +134,14 @@ class TokenFeature:
     source: str = "deterministic"
     model: str | None = None
     narrative_slug: str | None = None
+    #: ``f"{namespace}.{key}"``, stored redundantly (not derivable from a
+    #: query result on its own without this) so the trend engine can fetch
+    #: only the handful of TRENDABLE fields per token instead of its entire
+    #: features subcollection — added 2026-08-28 as a real cost fix: reading
+    #: all 13-47 feature docs per qualified token, every trend engine run,
+    #: was the single largest driver of a real Firestore billing incident.
+    #: See app/trends/engine.py's TRENDABLE and FirestoreRepo.token_features_for_subjects.
+    subject: str = ""
     created_at: datetime | None = None
 
     @property

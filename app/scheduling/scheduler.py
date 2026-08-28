@@ -285,7 +285,7 @@ class Scheduler:
         if extra:
             config.update(extra)
         config["last_run_at"] = started.isoformat()
-        await self._repo.upsert_setting(job.settings_key, config, actor="scheduler")
+        await self._repo.upsert_setting(job.settings_key, config, actor="scheduler", audit=False)
 
         try:
             result = await job.run(self._registry, self._repo, self._settings)
@@ -295,7 +295,7 @@ class Scheduler:
             result = {"error": "job raised — see server logs for scheduled_job_failed"}
         finally:
             config["last_result"] = result
-            await self._repo.upsert_setting(job.settings_key, config, actor="scheduler")
+            await self._repo.upsert_setting(job.settings_key, config, actor="scheduler", audit=False)
 
 
 def _parse_iso(value: Any) -> datetime:

@@ -33,7 +33,7 @@ class FakeRepo:
             return None
         return FakeSetting(self._store[key])
 
-    async def upsert_setting(self, key, value, *, description=None, actor="operator"):
+    async def upsert_setting(self, key, value, *, description=None, actor="operator", audit=True):
         self._store[key] = value
         return FakeSetting(value)
 

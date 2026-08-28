@@ -45,13 +45,19 @@ DEFAULT_TIERS: tuple[Decimal, ...] = (
 DEFAULT_RECENT_DAYS = 7
 DEFAULT_BASELINE_DAYS = 90
 
-#: Feature namespaces that produce trends. `token.theme` is the rollup; the
-#: per-namespace word features are counted too, but only `key` values in this
-#: map become trend rows, to stop every stopword becoming a "trend".
+#: Feature namespaces that produce trends. `token.theme` is the rollup; only
+#: `key` values in this map become trend rows, to stop every stopword
+#: becoming a "trend". ``("name", "word")`` deliberately excluded (removed
+#: 2026-08-28, real cost incident): tracking every individual word as its
+#: own permanent trend produced 1,818 of 1,952 total trend documents, ~93%
+#: of them a word seen once and never again, each recomputed on every trend
+#: engine run. app/narratives/cluster.py's discover_ngrams already covers
+#: emergent word-level discovery — in memory, no per-word document — so
+#: this wasn't buying anything discover_ngrams doesn't already give, at a
+#: fraction of the read/write cost.
 TRENDABLE: dict[tuple[str, str], TrendCategory] = {
     ("token", "theme"): TrendCategory.NARRATIVE,
     ("name", "theme"): TrendCategory.NAME,
-    ("name", "word"): TrendCategory.NAME,
     ("ticker", "shape"): TrendCategory.TICKER,
     ("ticker", "theme"): TrendCategory.TICKER,
     ("description", "theme"): TrendCategory.DESCRIPTION,
@@ -194,13 +200,19 @@ class TrendEngine:
         """Distinct-token counts per (namespace, key, value) across a cohort.
 
         The SQL version did this with ``count(distinct token_id) ... GROUP BY``
-        over an indexed join. This does it with one Firestore read per token's
-        ``features`` subcollection, fetched concurrently, tallied in Python.
+        over an indexed join. This does it with one Firestore read per token,
+        fetched concurrently, tallied in Python — but only the TRENDABLE
+        fields (~6 docs), not a token's entire features subcollection
+        (13-47 docs). Confirmed as a real, avoidable cost driver
+        2026-08-28: with hundreds of qualified tokens, reading everyone's
+        full subcollection on every run added up to tens of thousands of
+        document reads per pass.
         """
         if not tokens:
             return {}
+        subjects = [f"{namespace}.{key}" for namespace, key in TRENDABLE]
         results = await asyncio.gather(
-            *(self.repo.token_features(t.mint) for t in tokens)
+            *(self.repo.token_features_for_subjects(t.mint, subjects) for t in tokens)
         )
         counts: dict[Subject, int] = {}
         for features in results:
