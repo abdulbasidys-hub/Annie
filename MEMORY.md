@@ -113,7 +113,9 @@ rewrite — quietly widening until the whole notebook is in the prompt again.
 
 - **Website** → Memory page. Cards showing an excerpt of each file; click one
   to read it whole, edit it in place, or delete it. "New memory" creates one
-  by hand.
+  by hand. The front page (**Today**) also surfaces `core/whats-working.md`
+  and `core/market-model.md` inline, since her current read is the reason to
+  open the site.
 - **Chat / Discord / Telegram** → `search_memory`. Paste a CA or a wallet and
   it resolves straight to the file about it.
 - **Your machine** → `python -m tools.memory_pull`, which walks the API and

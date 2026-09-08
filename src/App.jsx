@@ -6,7 +6,8 @@ import { useApi } from './api/useApi.js'
 import { Freshness, Loading } from './components/primitives.jsx'
 
 import Login from './pages/Login.jsx'
-import Dashboard from './pages/Dashboard.jsx'
+import Today from './pages/Today.jsx'
+import Ideas from './pages/Ideas.jsx'
 import Tokens from './pages/Tokens.jsx'
 import TokenDetail from './pages/TokenDetail.jsx'
 import Trends from './pages/Trends.jsx'
@@ -35,37 +36,50 @@ import Personality from './pages/Personality.jsx'
  *
  * `mobile` marks the six destinations that survive into the phone tab bar.
  */
+/**
+ * Navigation.
+ *
+ * Restructured when the system stopped being a database and started being a
+ * notebook. The old grouping was Intelligence / **Catalogue** / System —
+ * "catalogue" being, literally, the raw material. That was honest about what
+ * the product was then: a collection of tokens you could browse.
+ *
+ * It is the wrong shape now. What Annie *thinks* is the product; the ledger
+ * is disposable evidence pruned within 48 hours. So the four things she
+ * actually produces sit at the top with no group heading at all, and
+ * everything that backs them up is demoted to "Evidence" — the material you
+ * consult to check a claim, not the reason to open the site.
+ *
+ * `mobile` marks the destinations that survive into the phone tab bar, and
+ * all four top-level ones do.
+ */
 const NAV = [
   {
     section: null,
     items: [
-      { to: '/', label: 'Dashboard', icon: '▤', end: true, mobile: true },
+      { to: '/', label: 'Today', icon: '◐', end: true, mobile: true },
       { to: '/annie', label: 'Annie', icon: '✳', annie: true, mobile: true },
+      { to: '/memory', label: 'Memory', icon: '◒', mobile: true },
+      { to: '/ideas', label: 'Ideas', icon: '✦', mobile: true },
     ],
   },
   {
-    section: 'Intelligence',
+    section: 'Evidence',
     items: [
-      { to: '/trends', label: 'Trends', icon: '◈', mobile: true },
-      { to: '/research', label: 'Research', icon: '◎', mobile: true },
-      { to: '/reports', label: 'Reports', icon: '▣' },
-      { to: '/memory', label: 'Memory', icon: '◒' },
-    ],
-  },
-  {
-    section: 'Catalogue',
-    items: [
-      { to: '/tokens', label: 'Tokens', icon: '◇', mobile: true },
-      { to: '/launchpads', label: 'Launchpads', icon: '◐', mobile: true },
+      { to: '/movers', label: 'Movers', icon: '◇', mobile: true },
       { to: '/creators', label: 'Creators', icon: '◔' },
+      { to: '/signals', label: 'Signals', icon: '◈', mobile: true },
       { to: '/narratives', label: 'Narratives', icon: '◑' },
+      { to: '/launchpads', label: 'Launchpads', icon: '◐' },
+      { to: '/research', label: 'Research', icon: '◎' },
+      { to: '/reports', label: 'Reports', icon: '▣' },
     ],
   },
   {
     section: 'System',
     items: [
-      { to: '/sources', label: 'Data Sources', icon: '⊞' },
       { to: '/health', label: 'System Health', icon: '⊙' },
+      { to: '/sources', label: 'Data Sources', icon: '⊞' },
       { to: '/settings', label: 'Settings', icon: '⚙' },
       { to: '/personality', label: 'Personality', icon: '⚑' },
     ],
@@ -73,18 +87,21 @@ const NAV = [
 ]
 
 const TITLES = {
-  '/': 'Dashboard',
+  '/': 'Today',
   '/annie': 'Annie',
-  '/trends': 'Trends',
+  '/memory': 'Memory',
+  '/ideas': 'Ideas',
+  '/movers': 'Movers',
+  '/tokens': 'Movers',
+  '/creators': 'Creators',
+  '/signals': 'Signals',
+  '/trends': 'Signals',
+  '/narratives': 'Narratives',
+  '/launchpads': 'Launchpads',
   '/research': 'Research',
   '/reports': 'Reports',
-  '/memory': 'Memory',
-  '/tokens': 'Tokens',
-  '/launchpads': 'Launchpads',
-  '/creators': 'Creators',
-  '/narratives': 'Narratives',
-  '/sources': 'Data Sources',
   '/health': 'System Health',
+  '/sources': 'Data Sources',
   '/settings': 'Settings',
   '/personality': 'Personality',
 }
@@ -203,13 +220,15 @@ function App({ onLogout }) {
   const location = useLocation()
   const { theme, toggle } = useTheme()
 
-  // The dashboard payload doubles as the shell's status source — freshness and
-  // the pending-task count. One request, not three.
-  const dashboard = useApi(() => api.dashboard(7), [])
+  // The front page's payload doubles as the shell's status source. It used
+  // to call /api/dashboard here, which issued five Firestore queries on
+  // every page load to render one sidebar number; /api/today is local reads
+  // plus a single query for that count.
+  const shell = useApi(() => api.today(24), [])
 
   useEffect(() => {
     const base = TITLES[`/${location.pathname.split('/')[1]}`] || TITLES['/']
-    document.title = base === 'Dashboard' ? 'Annie' : `${base} · Annie`
+    document.title = base === 'Today' ? 'Annie' : `${base} · Annie`
   }, [location.pathname])
 
   const title =
@@ -219,16 +238,13 @@ function App({ onLogout }) {
 
   return (
     <div className="app">
-      <Sidebar pendingTasks={dashboard.data?.pending_tasks?.length ?? 0} />
+      <Sidebar pendingTasks={shell.data?.research_pending ?? 0} />
 
       <div className="main">
         <header className="topbar">
           <h1 className="topbar__title">{title}</h1>
           <div className="topbar__actions">
-            <Freshness
-              seconds={dashboard.data?.data_freshness_seconds}
-              at={dashboard.data?.last_ingestion_at}
-            />
+            <Freshness at={shell.data?.data_freshness} />
             <button
               className="btn btn--ghost btn--icon"
               onClick={toggle}
@@ -250,23 +266,33 @@ function App({ onLogout }) {
 
         <main className="content">
           <Routes>
-            <Route path="/" element={<Dashboard />} />
+            <Route path="/" element={<Today />} />
             <Route path="/annie" element={<AnniePage />} />
+            <Route path="/memory" element={<Memory />} />
+            <Route path="/ideas" element={<Ideas />} />
 
-            <Route path="/trends" element={<Trends />} />
+            {/* "Signals" is the current name; /trends stays as an alias so an
+                existing bookmark or a link Annie wrote into memory before the
+                rename still resolves. */}
+            <Route path="/signals" element={<Trends />} />
+            <Route path="/signals/:slug" element={<TrendDetail />} />
+            <Route path="/trends" element={<Navigate to="/signals" replace />} />
             <Route path="/trends/:slug" element={<TrendDetail />} />
+
+            {/* Same for tokens -> movers: the ledger holds what moved, not a
+                catalogue of everything seen, and the label should say so. */}
+            <Route path="/movers" element={<Tokens />} />
+            <Route path="/tokens" element={<Navigate to="/movers" replace />} />
+            <Route path="/tokens/:mint" element={<TokenDetail />} />
+
+            <Route path="/creators" element={<Creators />} />
+            <Route path="/creators/:wallet" element={<CreatorDetail />} />
+            <Route path="/launchpads" element={<Launchpads />} />
+            <Route path="/launchpads/:slug" element={<LaunchpadDetail />} />
+            <Route path="/narratives" element={<Narratives />} />
             <Route path="/research" element={<Research />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/reports/:id" element={<Reports />} />
-            <Route path="/memory" element={<Memory />} />
-
-            <Route path="/tokens" element={<Tokens />} />
-            <Route path="/tokens/:mint" element={<TokenDetail />} />
-            <Route path="/launchpads" element={<Launchpads />} />
-            <Route path="/launchpads/:slug" element={<LaunchpadDetail />} />
-            <Route path="/creators" element={<Creators />} />
-            <Route path="/creators/:wallet" element={<CreatorDetail />} />
-            <Route path="/narratives" element={<Narratives />} />
 
             <Route path="/sources" element={<DataSources />} />
             <Route path="/health" element={<SystemHealth />} />

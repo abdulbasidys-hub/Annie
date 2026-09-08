@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -112,151 +112,13 @@ def _signal_with_series(row: dict[str, Any]) -> dict[str, Any]:
 # -----------------------------------------------------------------------------
 
 
-@router.get("/dashboard")
-async def dashboard(
-    window_days: int = Query(7, ge=1, le=365),
-    repo: FirestoreRepo = Depends(get_repo),
-    settings: Settings = Depends(get_settings),
-) -> dict[str, Any]:
-    """The overview page.
-
-    Counts, tiers and signals come from the local ledger — free, so this
-    page is cheap to open and cheap to refresh. Research notes, tasks and
-    anomalies still come from Firestore, which is right for them: a handful
-    of operator-initiated documents that need to be visible across
-    processes.
-
-    The old version of this route issued a Firestore query per tier per
-    window, streamed the whole trends collection, then fetched a 14-point
-    observation series per displayed trend — dozens to hundreds of document
-    reads every time someone opened the dashboard.
-    """
-    from app.memory import index, ledger, signals
-
-    now = datetime.now(timezone.utc)
-    start = now - timedelta(days=window_days)
-    prior_start = start - timedelta(days=window_days)
-
-    def tier_counts(frm: datetime, to: datetime) -> dict[str, int]:
-        return {
-            str(tier): len(ledger.qualified_in_window(frm, to, min_tier=float(tier)))
-            for tier in DEFAULT_TIERS
-        }
-
-    stats = ledger.stats()
-    signal_counts = signals.counts()
-
-    def signals_with_series(status: str, n: int = 5) -> list[dict[str, Any]]:
-        return [
-            _signal_with_series(row)
-            for row in signals.listing(status=status, limit=n, include_thin=False)
-        ]
-
-    launchpads, _ = await repo.list_launchpads(limit=200)
-    emerging = sorted(
-        [lp for lp in launchpads if lp.lifecycle in ("emerging", "growing")],
-        key=lambda lp: lp.growth_rate_7d or 0,
-        reverse=True,
-    )[:5]
-
-    notes = await repo.list_research_notes(current_only=True, limit=5)
-    tasks, _ = await repo.list_research_tasks(limit=50)
-    pending_tasks = [
-        t for t in tasks if t.status in (ResearchTaskStatus.QUEUED, ResearchTaskStatus.RESEARCHING)
-    ]
-    pending_tasks.sort(key=lambda t: t.priority or 0, reverse=True)
-
-    anomalies = await repo.list_anomalies(unacknowledged_only=True, limit=50)
-    anomalies.sort(key=lambda a: a.severity or 0, reverse=True)
-
-    provider_health = await repo.list_provider_health()
-
-    return {
-        "launches_seen_24h": stats["sightings_24h"],
-        "currently_watching": stats["watching"],
-        "tokens_collected": stats["sightings_total"],
-        "tokens_qualified": stats["qualified_total"],
-        "qualified_24h": stats["qualified_24h"],
-        "creators_seen": stats["creators_total"],
-        "creators_tracked": stats["creators_tracked"],
-        "creator_movements_24h": stats["moves_24h"],
-        "launchpads_24h": stats["launchpads"],
-        "counts_by_tier": tier_counts(start, now),
-        "counts_by_tier_previous": tier_counts(prior_start, start),
-        "window_days": window_days,
-        "memory_files": index.stats()["files"],
-        "trends_active": sum(v for k, v in signal_counts.items()
-                             if k not in ("dead", "meaningful")),
-        "trends_new": signal_counts.get("new", 0),
-        "trends_rising": signal_counts.get("rising", 0),
-        "trends_declining": signal_counts.get("declining", 0),
-        "trends_meaningful": signal_counts.get("meaningful", 0),
-        "rising_trends": signals_with_series("rising"),
-        "new_trends": signals_with_series("new"),
-        "declining_trends": signals_with_series("declining"),
-        "movers": [
-            {
-                "mint": m.mint, "symbol": m.symbol, "name": m.name,
-                "peak_market_cap": m.peak_market_cap, "market_cap": m.market_cap,
-                "creator_wallet": m.creator, "launchpad_slug": m.launchpad,
-            }
-            for m in ledger.movers(since_hours=24, limit=10)
-        ],
-        "emerging_launchpads": [
-            {
-                "id": lp.slug, "slug": lp.slug, "name": lp.name, "lifecycle": lp.lifecycle,
-                "launch_count": lp.launch_count, "qualified_count": lp.qualified_count,
-                "success_rate": lp.success_rate, "market_share": lp.market_share,
-                "growth_rate_7d": lp.growth_rate_7d, "growth_rate_30d": lp.growth_rate_30d,
-                "is_known": lp.is_known, "first_seen_at": lp.first_seen_at,
-                "last_seen_at": lp.last_seen_at,
-            }
-            for lp in emerging
-        ],
-        "recent_notes": [
-            {
-                "id": n.id, "title": n.title, "body": n.body, "claim_type": n.claim_type,
-                "confidence": n.confidence, "category": n.category, "tags": n.tags,
-                "sample_size": n.sample_size, "period_start": n.period_start,
-                "period_end": n.period_end, "created_at": n.created_at,
-                "is_current": n.is_current, "evidence": n.evidence,
-                "counter_evidence": n.counter_evidence,
-            }
-            for n in notes
-        ],
-        "pending_tasks": [
-            {
-                "id": t.id, "question": t.question, "reason": t.reason, "origin": t.origin,
-                "status": t.status, "priority": t.priority, "confidence": t.confidence,
-                "created_at": t.created_at, "started_at": t.started_at,
-                "completed_at": t.completed_at, "cost_usd": t.cost_usd,
-            }
-            for t in pending_tasks[:5]
-        ],
-        "open_anomalies": [
-            {
-                "id": a.id, "kind": a.kind, "severity": a.severity, "summary": a.summary,
-                "detected_at": a.detected_at, "acknowledged": a.acknowledged,
-            }
-            for a in anomalies[:5]
-        ],
-        "data_freshness": stats.get("last_sighting_at"),
-        "last_ingestion_at": stats.get("last_sighting_at"),
-        "degraded_capabilities": [
-            c for c in settings.capability_report() if c["status"] != "available"
-        ],
-        "provider_health": [
-            {
-                "provider": h.provider, "status": h.status, "requests_24h": h.requests_24h,
-                "errors_24h": h.errors_24h, "p50_latency_ms": h.p50_latency_ms,
-                "p95_latency_ms": h.p95_latency_ms, "estimated_cost_24h_usd": h.estimated_cost_24h_usd,
-                "last_success_at": h.last_success_at, "last_error_at": h.last_error_at,
-                "last_error": h.last_error,
-            }
-            for h in provider_health
-        ],
-        "capabilities": settings.capability_report(),
-    }
+# The /dashboard endpoint lived here until 2026-09-08. It was the data-era
+# front page — counts by tier, this period against the last — and it issued
+# five Firestore queries (launchpads, notes, tasks, anomalies, provider
+# health) on every page load because the app shell used it for one sidebar
+# number. app/api/routes/today.py replaced it: local reads plus a single
+# query, and a shape that leads with what Annie concluded rather than how
+# much material went past.
 
 
 @router.get("/trends")

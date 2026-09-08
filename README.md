@@ -251,29 +251,59 @@ The data model enforces the same discipline the prompt asks for:
 
 ## The web app
 
-Fourteen destinations in the sidebar, grouped by what you're doing rather
-than by data model:
+**Restructured 2026-09-08, with the rest of the rewrite.** The old sidebar
+grouped things as Intelligence / **Catalogue** / System — "catalogue" being,
+literally, the raw material. That was honest about what the product was then:
+a collection of tokens you could browse.
+
+It is the wrong shape now. What Annie *thinks* is the product; the ledger is
+disposable evidence pruned within 48 hours. So the four things she actually
+produces sit at the top with no group heading at all, and everything backing
+them is demoted:
 
 | Group | Pages |
 |---|---|
-| — | **Dashboard** (overview + freshness), **Annie** (chat) |
-| Intelligence | Trends, Research, Reports, **Memory** |
-| Catalogue | Tokens, Launchpads, Creators, Narratives |
-| System | Data Sources, System Health, Settings, **Personality** |
+| — | **Today**, **Annie**, **Memory**, **Ideas** |
+| Evidence | Movers, Creators, Signals, Narratives, Launchpads, Research, Reports |
+| System | System Health, Data Sources, Settings, Personality |
 
-Tokens, Trends, Launchpads and Creators each open onto a detail page for one
-record (`/tokens/:mint`, `/trends/:slug`, and so on) — not separate nav
-destinations, but real pages with their own URLs. **System Health** is where
-you check whether every provider is reachable and configured, and where the
-three pipeline stages (Discovery / Enrichment / Trend analysis) can be run
-on demand. **Memory** is Annie's durable work memory — long-term findings,
-daily activity logs, the research behind them, and (once there's history to
-show) consolidation runs — separate from the chat history on the Annie page.
-**Personality** is where her voice is configured (tone, communication style,
-how skeptical she sounds, how hard she pushes back) — deliberately separate
-from the hard rules in `app/annie/persona.py`, which aren't editable from
-here or anywhere in the UI. Six of the fourteen destinations also appear in
-a mobile tab bar.
+**Today** replaced the dashboard. The dashboard led with counts — tokens
+collected, qualified by tier, this period against the last — which measures
+how much raw material passed through, not what anyone learned from it. Today
+leads with Annie's headline from the last cycle, then what she thinks is
+working (verbatim from `core/whats-working.md`), then what moved and who she
+is watching, then the statistics so a claim can be checked. Scale — 16,000
+launches a day, almost all discarded — is one quiet line at the bottom,
+because the interesting number is how little survived, not how much went
+past.
+
+**Ideas** is new, and is the point of everything else. Ask for a launch idea
+and she generates one grounded in what is winning now, what her notebook says
+has worked, and what is already crowded. Every idea comes back labelled
+`observed`, `inferred` or `speculative` — on a deployment with no history
+they will all be speculative, which is the correct answer rather than a
+broken one. A panel below shows what a generation *would* be built on before
+you spend anything, so you can tell those cases apart. It is the only page
+that costs a model call, and only when you press the button.
+
+**Memory** is the notebook: cards showing an excerpt of each file, click to
+read it whole, edit in place to correct her, or create one by hand. See
+[MEMORY.md](MEMORY.md).
+
+**Signals** is what "Trends" was called — the same statistics under the name
+the system now uses. **Movers** is what "Tokens" was: the ledger holds what
+moved, not a catalogue of everything seen. Both old URLs redirect, so a
+bookmark or a link Annie wrote into memory before the rename still resolves.
+
+**System Health** is where you check whether the pipeline is actually
+working. It carries a banner naming *why* there is no data — a webhook that
+never started, a volume that keeps wiping, a stream that stopped, or a
+deployment that is simply new — because those need completely different
+fixes and produce identical zeros without something classifying them.
+
+**Personality** configures her voice (tone, how skeptical she sounds, how
+hard she pushes back), deliberately separate from the hard rules in
+`app/annie/persona.py`, which are not editable from the UI.
 
 Logging in requires the single operator credential you set as
 `AUTH_USERNAME` / `AUTH_PASSWORD` — see [Design decisions worth

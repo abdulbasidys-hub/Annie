@@ -429,12 +429,20 @@ export function ClickableRow({ to, children, ...props }) {
 }
 
 export function Freshness({ seconds, at }) {
-  if (seconds === null || seconds === undefined) {
+  // Accepts either an age in seconds or the timestamp itself. /api/today
+  // sends the timestamp, which is the truer datum — the server knows when
+  // the last launch arrived, not how long ago that was from the reader's
+  // clock. Deriving the age here costs a little clock skew and saves the
+  // server from guessing at the viewer's notion of "now".
+  const age =
+    seconds ?? (at ? Math.max(0, (Date.now() - new Date(at).getTime()) / 1000) : null)
+
+  if (age === null || age === undefined || Number.isNaN(age)) {
     return <span className="faint" style={{ fontSize: 'var(--text-xs)' }}>Freshness unknown</span>
   }
   // Anything older than a day means the daily cycle did not complete, which is
   // an operational fact the operator needs before reading any number below it.
-  const stale = seconds > 86_400
+  const stale = age > 86_400
   return (
     <span
       className="row gap-1"
@@ -442,7 +450,7 @@ export function Freshness({ seconds, at }) {
       title={at ? `Last update ${at}` : undefined}
     >
       <span className="badge__dot" style={{ background: 'currentColor' }} />
-      Data {relative(Date.now() - seconds * 1000)}
+      Data {relative(Date.now() - age * 1000)}
       {stale && ' — stale'}
     </span>
   )

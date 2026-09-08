@@ -609,43 +609,8 @@ const PIPELINE_RESULTS = {
 }
 
 const routes = [
-  ['GET', /^\/api\/dashboard$/, (q) => {
-    const windowDays = Number(q.get('window_days') || 7)
-    const scale = windowDays / 7
-    return {
-      launches_seen_24h: 15840,
-      currently_watching: 2140,
-      tokens_collected: 3120,
-      tokens_qualified: 668,
-      qualified_24h: 61,
-      creators_seen: 18420,
-      creators_tracked: 214,
-      creator_movements_24h: 15840,
-      memory_files: 412,
-      launchpads_24h: LAUNCHPADS.slice(0, 4).map((l) => ({ launchpad: l.slug, n: l.launch_count })),
-      movers: TOKENS.slice(0, 8).map((t) => ({
-        mint: t.mint, symbol: t.symbol, name: t.name,
-        peak_market_cap: t.peak_market_cap, market_cap: t.market_cap,
-        creator_wallet: t.creator_wallet, launchpad_slug: t.launchpad_slug,
-      })),
-      counts_by_tier: { 100000: Math.round(61 * scale), 250000: Math.round(24 * scale), 500000: Math.round(11 * scale), 1000000: Math.round(18 * scale / 7 * 7 / 7) || 3 },
-      counts_by_tier_previous: { 100000: Math.round(54 * scale), 250000: Math.round(26 * scale), 500000: Math.round(11 * scale), 1000000: 5 },
-      window_days: windowDays,
-      trends_active: 41, trends_new: 2, trends_rising: 4, trends_declining: 2, trends_meaningful: 6,
-      rising_trends: TRENDS.filter((t) => t.status === 'rising'),
-      new_trends: TRENDS.filter((t) => t.status === 'new'),
-      declining_trends: TRENDS.filter((t) => t.status === 'declining'),
-      emerging_launchpads: LAUNCHPADS.filter((l) => l.lifecycle === 'emerging' || l.lifecycle === 'growing'),
-      recent_notes: NOTES,
-      pending_tasks: TASKS.filter((t) => t.status === 'queued' || t.status === 'researching'),
-      open_anomalies: ANOMALIES.filter((a) => !a.acknowledged),
-      data_freshness_seconds: 1800,
-      last_ingestion_at: iso(30 * 60_000),
-      last_trend_run_at: iso(3 * HOUR),
-      provider_health: PROVIDERS,
-      degraded_capabilities: CAPABILITIES.filter((c) => c.status !== 'available'),
-    }
-  }],
+  // /api/dashboard was retired 2026-09-08 — /api/today replaced it. See
+  // app/api/routes/today.py for why the shape changed.
 
   ['GET', /^\/api\/tokens$/, (q) => {
     // The ledger holds sightings, so `qualified_only` is a filter here rather
@@ -892,6 +857,133 @@ const routes = [
 
   // Healthy by default so the banner stays hidden — flip `state` to
   // 'never_started' or 'stream_stopped' to see the failure UI.
+  // -- Today: Annie's current read, not counts of what went past ----------
+  ['GET', /^\/api\/today$/, (q) => ({
+    research_pending: TASKS.filter((t) => t.status === 'queued' || t.status === 'researching').length,
+    data_freshness: iso(90_000),
+    pipeline: { state: 'healthy', headline: 'Data is arriving and being kept.', what_to_check: [] },
+    latest_read: {
+      headline:
+        'Cat-adjacent names are still outperforming, but the edge is specificity rather than the theme — the generic ones cleared at baseline again this window.',
+      at: iso(2 * HOUR),
+      edits: [
+        { path: 'core/whats-working.md', op: 'rewrite' },
+        { path: 'notes/cat-specificity.md', op: 'append' },
+      ],
+      skipped: null,
+    },
+    whats_working: {
+      path: 'core/whats-working.md',
+      title: "What's working right now",
+      updated: iso(2 * HOUR),
+      body: MEMORY_FILES.find((f) => f.path === 'core/whats-working.md').body,
+      truncated: false,
+    },
+    market_model: {
+      path: 'core/market-model.md',
+      title: 'Market model',
+      updated: iso(2 * HOUR),
+      body: MEMORY_FILES.find((f) => f.path === 'core/market-model.md').body.slice(0, 700),
+      truncated: true,
+    },
+    open_questions: {
+      path: 'core/open-questions.md',
+      title: 'Open questions',
+      updated: iso(1 * DAY),
+      body: MEMORY_FILES.find((f) => f.path === 'core/open-questions.md').body.slice(0, 600),
+      truncated: true,
+    },
+    watching: {
+      // Raw ledger rows, matching what top_creators actually returns — the
+      // API-shaped CREATORS objects use total_launches, which rendered as an
+      // em-dash on the front page until this was mirrored properly.
+      creators: CREATORS.filter((c) => c.is_tracked).slice(0, 5).map((c) => ({
+        wallet: c.wallet, launches: c.total_launches, winners: c.winners,
+        best_market_cap: c.best_market_cap, best_mint: c.best_mint,
+        tracked: 1, first_seen: c.first_seen, last_seen: c.last_seen,
+        dossier_path: c.dossier_path, recent_launches: c.launches_in_window,
+      })),
+      narratives: ['Animal (token)', 'Capybara (name)', 'unknown-9fk2mq1a (launchpad)'],
+    },
+    movers: TOKENS.slice(0, 10).map((t) => ({
+      mint: t.mint, symbol: t.symbol, name: t.name, launchpad: t.launchpad_slug,
+      creator: t.creator_wallet, peak_market_cap: t.peak_market_cap,
+      market_cap: t.market_cap, tier: t.peak_tier, qualified_at: t.qualified_at,
+      round_tripped: t.round_tripped,
+    })),
+    signals: TRENDS.slice(0, 6).map((t) => ({
+      slug: t.slug, name: t.name, status: t.status, category: t.category,
+      recent_count: t.recent.count, recent_total: t.recent.total,
+      recent_freq: t.recent.frequency, baseline_freq: t.baseline.frequency,
+      lift: t.lift, tier: Number(t.cohort_threshold_usd), thin_sample: false,
+      persistence: t.persistence_days, p_value: t.p_value, confidence: t.confidence,
+    })),
+    recent_thinking: MEMORY_FILES
+      .filter((f) => ['core', 'playbook', 'notes', 'narratives'].includes(f.section))
+      .slice(0, 6)
+      .map(({ body, ...rest }) => rest),
+    scale: {
+      seen_24h: 15840, held: 3120, qualified_24h: 61,
+      creators_tracked: 214, memory_files: MEMORY_FILES.length,
+    },
+    window_hours: Number(q.get('window_hours') || 24),
+  })],
+
+  // -- Ideas: the only surface that spends anything ------------------------
+  ['GET', /^\/api\/ideas\/context$/, () => ({
+    movers: TOKENS.slice(0, 10),
+    winning_characteristics: TRENDS.slice(0, 6).map((t) => ({
+      slug: t.slug, name: t.name, recent_count: t.recent.count,
+      recent_total: t.recent.total, recent_freq: t.recent.frequency, tier: 100000,
+    })),
+    saturated: TRENDS.filter((t) => t.recent.frequency >= 0.3).map((t) => ({
+      slug: t.slug, name: t.name, recent_freq: t.recent.frequency,
+    })),
+    memories_that_would_be_used: [
+      { path: 'playbook/what-worked.md', title: 'What worked', section: 'playbook', snippet: '', score: 2.2 },
+      { path: 'core/whats-working.md', title: "What's working right now", section: 'core', snippet: '', score: 1.9 },
+      { path: 'notes/burst-launchers.md', title: 'Burst launchers', section: 'notes', snippet: '', score: 1.1 },
+    ],
+  })],
+  ['POST', /^\/api\/ideas$/, (q, m, body) => ({
+    read_of_the_market:
+      'Cat-adjacent names are three weeks into a run and still clearing tiers, but the generic ones are at baseline — what is working is the oddly-specific joke, not the animal. AI agents are saturated and politics has been rolling over for eleven days.',
+    ideas: [
+      {
+        name: 'Cat Lawyer', ticker: 'LAWCAT',
+        angle: 'A cat in a courtroom, filing motions on behalf of bag-holders. Specific enough to be a joke rather than a category entry.',
+        why_now: 'Cat-adjacent is in its third week and the specific variants are clearing tiers at roughly 3x the generic ones.',
+        evidence: 'Animal (token) at 26.4% of $100k+ qualifiers vs 28.1% baseline overall — but the modified names inside that cohort cleared at 11 of 14 this week.',
+        grounding: 'observed',
+        risk: 'Week three is usually where a theme saturates. Being late here is the most common way this fails.',
+      },
+      {
+        name: 'Unemployed Capybara', ticker: 'NOJOB',
+        angle: 'Capybara doing nothing, extremely well. Sits between the capybara run and the absurd/self-deprecating register.',
+        why_now: 'Capybara (name) is rising at 9.8% against a 4.1% baseline, and absurd naming has been quietly steady all month.',
+        evidence: 'Capybara (name) 6/61 of $100k+ this window, p=0.021, held four days.',
+        grounding: 'inferred',
+        risk: 'Two themes crossed is a smaller audience than either alone, not a larger one.',
+      },
+      {
+        name: 'Notary', ticker: 'NOTARY',
+        angle: 'Deliberately boring institutional-sounding name in a market of loud ones. A contrarian shape bet rather than a theme bet.',
+        why_now: 'Nothing in the data supports this. It is a bet that the naming register itself is what is crowded.',
+        evidence: 'None. Ticker-shape signals show no advantage for any register, and I have not observed a token like this clear a tier.',
+        grounding: 'speculative',
+        risk: 'Most likely simply invisible. Boring names have no reason to spread.',
+      },
+    ],
+    avoid: ['AI (token)', 'Politics (token)', 'Short ticker (≤3 chars)'],
+    generated_at: iso(0),
+    grounded_in: {
+      movers: 10, signals: 6,
+      memories: ['playbook/what-worked.md', 'core/whats-working.md'],
+    },
+    input_tokens: 2180, output_tokens: 740,
+  })],
+  ['POST', /^\/api\/ideas\/keep$/, () => ({ saved: true, path: 'playbook/ideas-2026-09-08.md' })],
+
   ['GET', /^\/api\/system\/pipeline-status$/, () => ({
     state: 'healthy',
     headline: 'Data is arriving and being kept.',

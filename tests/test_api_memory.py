@@ -224,36 +224,65 @@ class TestSignalShapeForTheFrontend:
         assert "recent_series" in detail
         assert "related_memories" in detail
 
-    def test_the_dashboard_renders_without_firestore_token_reads(self, client, with_signals):
-        """The counts come from the ledger; only the small operator-facing
-        collections still need a repo, and those are stubbed here so the
-        assertion is about where the *token* numbers came from."""
+    def test_the_front_page_is_her_read_not_a_count(self, client, with_signals):
+        """/api/today replaced /api/dashboard when the product stopped being a
+        database. The shape is the argument: her latest read and her core
+        files lead; scale is one field at the bottom.
+
+        The repo is stubbed because the only Firestore this endpoint touches
+        is a single query for the sidebar's research badge — everything that
+        makes the page is local.
+        """
         from app.db.repo import get_repo
         from app.main import app
 
         class StubRepo:
-            async def list_launchpads(self, **kwargs):
-                return [], 0
-
-            async def list_research_notes(self, **kwargs):
-                return []
-
             async def list_research_tasks(self, **kwargs):
                 return [], None
 
-            async def list_anomalies(self, **kwargs):
-                return []
+        app.dependency_overrides[get_repo] = lambda: StubRepo()
+        try:
+            body = client.get("/api/today", params={"window_hours": 24}).json()
+        finally:
+            app.dependency_overrides.pop(get_repo, None)
 
-            async def list_provider_health(self):
-                return []
+        # What she thinks comes first-class...
+        assert "latest_read" in body
+        assert "whats_working" in body
+        assert "market_model" in body
+        assert body["whats_working"]["path"] == "core/whats-working.md"
+
+        # ...and the evidence backs it, capped. A front page shows what
+        # moved, not everything held — the cap is the design, not a limit
+        # that happened to be hit.
+        assert 0 < len(body["movers"]) <= 12
+        assert body["signals"], "no signals surfaced on the front page"
+        assert body["watching"]["creators"] is not None
+
+        # Scale is present but demoted to one small object, not the headline.
+        assert body["scale"]["qualified_24h"] == 25
+        assert body["scale"]["seen_24h"] == 25
+
+        # And the shell's two fields ride along, so it needs no second call.
+        assert "research_pending" in body
+        assert "data_freshness" in body
+
+    def test_the_front_page_says_why_when_there_is_nothing(self, client, isolated_memory):
+        """An empty deployment must get a cause, not a page of zeros."""
+        from app.db.repo import get_repo
+        from app.main import app
+
+        class StubRepo:
+            async def list_research_tasks(self, **kwargs):
+                return [], None
 
         app.dependency_overrides[get_repo] = lambda: StubRepo()
         try:
-            body = client.get("/api/dashboard", params={"window_days": 7}).json()
+            body = client.get("/api/today").json()
         finally:
             app.dependency_overrides.pop(get_repo, None)
-        assert body["tokens_qualified"] == 25
-        assert body["counts_by_tier"]["250000"] == 25
-        assert "movers" in body
-        assert "memory_files" in body
-        assert isinstance(body["degraded_capabilities"], list)
+
+        assert body["pipeline"]["state"] == "never_started"
+        assert body["pipeline"]["headline"]
+        assert body["pipeline"]["what_to_check"]
+        assert body["latest_read"]["headline"] is None

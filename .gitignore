@@ -43,3 +43,6 @@ logs/
 # you want to read the deployment's instead.
 /memory/
 /memory-pulled/
+
+# Screenshot harness output (tools/shoot.js) — regenerated on demand.
+/tools/shots/

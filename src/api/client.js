@@ -129,7 +129,9 @@ export const api = {
   // frontend depends on is enumerable in one place. When the backend contract
   // changes, this list is the checklist.
 
-  dashboard: (windowDays) => request('GET', '/api/dashboard', { params: { window_days: windowDays } }),
+  // Annie's current read — what she makes of the market, not counts of it.
+  // One request backs the whole front page.
+  today: (windowHours) => request('GET', '/api/today', { params: { window_hours: windowHours } }),
 
   tokens: (params) => request('GET', '/api/tokens', { params }),
   token: (mint) => request('GET', `/api/tokens/${mint}`),
