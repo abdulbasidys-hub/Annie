@@ -136,12 +136,15 @@ class AnnieAgent:
         capabilities_note = _capabilities_note(self.settings)
         channel_note = _channel_note(self.platform_context)
         sender_note = _sender_context_note(self.platform_context)
+        instructions_note = _standing_instructions_note()
         personality_overrides = await _personality_overrides(self.repo)
         messages: list[dict[str, Any]] = [
             {
                 "role": "system",
                 "content": persona.system_prompt(
-                    capabilities_note=capabilities_note + channel_note + sender_note,
+                    capabilities_note=(
+                        capabilities_note + channel_note + sender_note + instructions_note
+                    ),
                     personality_overrides=personality_overrides,
                 ),
             },
@@ -344,21 +347,28 @@ class AnnieAgent:
 
 
 async def _tool_dashboard_summary(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
-    """Where things stand overall — launches seen, what cleared a tier, what
-    Annie is tracking, and how big her memory is.
+    """Where things stand — and, when nothing is there, why.
 
-    Reads the local ledger and search index, so it is free and can be called
-    freely. ``*_raw`` counts every signal regardless of sample size;
+    The ``why`` is the part that matters. A deployment whose webhook is
+    misconfigured and one that started ten minutes ago produce identical
+    zeros, and reporting those zeros without distinguishing them is honest
+    but useless. :mod:`app.memory.health` classifies which it is, and that
+    verdict is attached here so the answer can name a cause instead of
+    listing counts.
+
+    ``*_raw`` counts every signal regardless of sample size;
     ``signals_meaningful`` applies the statistical bars. Both are reported
     rather than picking one, after a real inconsistency where a raw count of
     18 "new" trends sat next to a filtered list returning zero of them with
     nothing in either result explaining the gap.
     """
-    from app.memory import index, ledger, signals
+    from app.memory import health, index, ledger, signals
 
     stats = ledger.stats()
     counts = signals.counts()
-    return {
+    diagnosis = health.diagnose()
+
+    result: dict[str, Any] = {
         "launches_seen_24h": stats["sightings_24h"],
         "currently_watching": stats["watching"],
         "reached_a_tier_24h": stats["qualified_24h"],
@@ -370,12 +380,39 @@ async def _tool_dashboard_summary(agent: AnnieAgent, args: dict[str, Any]) -> di
         "signals_raw": {k: v for k, v in counts.items() if k != "meaningful"},
         "signals_meaningful": counts.get("meaningful", 0),
         "memory_files": index.stats()["files"],
-        "note": (
+        "pipeline_state": diagnosis["state"],
+    }
+
+    if diagnosis["state"] != "healthy":
+        result["why_there_is_nothing"] = diagnosis["headline"]
+        result["what_the_operator_should_check"] = diagnosis["what_to_check"]
+        result["note"] = (
+            "There is no usable data, and the reason is above. Tell them what "
+            "is actually wrong and what to check, in plain words. Do NOT "
+            "present this as a market finding, and do NOT recite the zeros "
+            "back at them — 'nothing has arrived' is the answer, the counts "
+            "are just how you know."
+        )
+    else:
+        result["note"] = (
             "Launches seen is everything sighted; almost none of it is kept. "
             "signals_raw counts every characteristic regardless of sample size "
             "— use list_signals (not the raw count) to cite anything specific."
-        ),
-    }
+        )
+    return result
+
+
+async def _tool_system_status(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """Is the pipeline actually working, and if not, what is wrong.
+
+    Call this when someone asks why you have no data, why nothing is
+    updating, or whether something is broken. It distinguishes a webhook
+    that is not delivering from a deployment that is simply new, which the
+    raw counts cannot.
+    """
+    from app.memory import health
+
+    return health.diagnose()
 
 
 async def _tool_search_tokens(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
@@ -719,36 +756,281 @@ async def _tool_read_memory(agent: AnnieAgent, args: dict[str, Any]) -> dict[str
     }
 
 
-async def _tool_write_memory(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
-    """Add something to the notebook mid-conversation.
+#: Files Annie must never delete from chat. These four are seeded on boot and
+#: every cycle reads them as established context; losing one mid-conversation
+#: would quietly change how she thinks until someone noticed. They can still
+#: be *rewritten* — emptying one is the intended way to reset a belief.
+_UNDELETABLE = frozenset(
+    {
+        "core/market-model.md",
+        "core/whats-working.md",
+        "core/open-questions.md",
+        "core/watchlist.md",
+        "core/instructions.md",
+    }
+)
 
-    Deliberately append-only and restricted to ``notes/``. The scheduled
-    cycle is where memory is properly curated, against a full window of
-    evidence; a chat turn sees one person's question and should not be
-    rewriting standing beliefs off the back of it. Anything genuinely
-    durable written here gets picked up and promoted by a later cycle, which
-    is the right order.
+
+def _memory_path_from(args: dict[str, Any], *, default_section: str = "notes") -> str:
+    """Turn what someone said in chat into a real memory path.
+
+    People do not talk in paths. They say "make me a file called crowded
+    narratives" or "put this in the playbook", so this takes a loose name
+    plus an optional section and produces ``section/slug.md``. A path the
+    model has already formed properly is passed through untouched.
+    """
+    from app.memory.paths import SECTIONS, slug
+
+    raw = str(args.get("path") or args.get("name") or args.get("topic") or "").strip()
+    if not raw:
+        raise ValueError("a name or path is required")
+
+    if "/" in raw:
+        return raw  # already sectioned; safe_relpath validates it downstream
+
+    section = str(args.get("section") or default_section).strip().lower()
+    if section not in SECTIONS:
+        section = default_section
+    return f"{section}/{slug(raw)}.md"
+
+
+async def _tool_create_memory(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """Create a named memory file because the operator asked for one.
+
+    This is the "make me a file called X" path. It exists because the
+    operator wants to be able to direct what Annie keeps — she watches the
+    market, but they know things she does not, and a system that can only
+    write what it inferred is missing half its memory.
+
+    Creating it empty is allowed and normal: the usual shape of this
+    conversation is "make a file called crowded narratives" followed by
+    several messages of content, so the file has to exist before the content
+    arrives.
     """
     from app.memory import service
-    from app.memory.paths import MemoryPathError, slug
+    from app.memory.paths import MemoryPathError, safe_relpath
+
+    try:
+        path = safe_relpath(_memory_path_from(args))
+    except (MemoryPathError, ValueError) as exc:
+        return {"created": False, "error": str(exc)}
+
+    if service.exists(path):
+        existing = service.read(path)
+        return {
+            "created": False,
+            "path": path,
+            "already_exists": True,
+            "current_content": (existing.body if existing else "")[:2000],
+            "note": "This file already exists — its current content is above. "
+                    "Use write_memory to add to it or replace it; do not create it again.",
+        }
+
+    body = str(args.get("text") or "").strip()
+    title = str(args.get("title") or "").strip()
+
+    memory = await service.write(
+        path,
+        body=body or "_Created from chat. Nothing written yet._",
+        title=title or path.rsplit("/", 1)[-1].removesuffix(".md").replace("-", " ").title(),
+        tags=[str(t) for t in (args.get("tags") or [])][:6] or ["from-chat"],
+        keys=[str(k) for k in (args.get("keys") or [])][:8],
+        importance=max(0.0, min(1.0, float(args.get("importance") or 0.6))),
+        source="operator-directed",
+    )
+    return {
+        "created": True,
+        "path": memory.path,
+        "empty": not body,
+        "note": "Created. Tell them the path so they know where it went, and "
+                "ask what should go in it if it is empty.",
+    }
+
+
+async def _tool_write_memory(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """Write into a memory file — appending by default, replacing on request.
+
+    Two different situations use this, and the distinction is who decided:
+
+    * **The operator dictated it.** They said what to write and where. Any
+      section is fair game, including ``core/``, because they are allowed to
+      correct what Annie believes — that is the point of a notebook you can
+      both write in.
+    * **Annie noticed something mid-conversation.** Then it belongs in
+      ``notes/`` and nowhere else, because a chat turn sees one person's
+      question and is not the place to rewrite standing beliefs. The
+      scheduled cycle promotes anything durable later, against a full window
+      of evidence.
+
+    Appending is the default because it is non-destructive: the failure mode
+    of a replace is silently losing prose nobody can get back, and the model
+    will not always be sure which one was meant.
+    """
+    from app.memory import service
+    from app.memory.paths import MemoryPathError, safe_relpath
 
     text = str(args.get("text") or "").strip()
     if not text:
         return {"saved": False, "error": "text is required"}
-    topic = str(args.get("topic") or "").strip() or "from-chat"
 
     try:
+        path = safe_relpath(_memory_path_from(args))
+    except (MemoryPathError, ValueError) as exc:
+        return {"saved": False, "error": str(exc)}
+
+    replace = bool(args.get("replace"))
+    existed = service.exists(path)
+
+    try:
+        if replace and existed:
+            previous = service.read(path)
+            memory = await service.write(
+                path,
+                body=text,
+                title=str(args.get("title") or "").strip() or (previous.title if previous else None),
+                tags=[str(t) for t in (args.get("tags") or [])][:6],
+                keys=[str(k) for k in (args.get("keys") or [])][:8],
+                importance=(
+                    max(0.0, min(1.0, float(args["importance"])))
+                    if args.get("importance") is not None
+                    else (previous.importance if previous else 0.6)
+                ),
+                source="operator-directed",
+            )
+            return {
+                "saved": True, "path": memory.path, "mode": "replaced",
+                "replaced_length": len(previous.body) if previous else 0,
+                "note": "The previous content is gone. Say so plainly when confirming.",
+            }
+
         memory = await service.append(
-            f"notes/{slug(topic)}.md",
+            path,
             text,
             heading=_now_heading(),
-            title=topic[:80],
-            tags=["from-chat"],
+            title=str(args.get("title") or "").strip() or None,
+            tags=[str(t) for t in (args.get("tags") or [])][:6],
             keys=[str(k) for k in (args.get("keys") or [])][:8],
         )
     except MemoryPathError as exc:
         return {"saved": False, "error": str(exc)}
-    return {"saved": True, "path": memory.path}
+
+    return {
+        "saved": True,
+        "path": memory.path,
+        "mode": "appended" if existed else "created",
+        "note": "Confirm with the path, so they know exactly where it landed.",
+    }
+
+
+async def _tool_remember_instruction(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """Record a standing instruction — something to keep doing from now on.
+
+    Distinct from ``write_memory`` on purpose. A note is something Annie
+    knows; an instruction is something she *does*, every cycle, whether or
+    not the current question reminded her of it. They need different
+    handling, and collapsing them would mean a directive sitting in
+    ``notes/`` where only a matching search would ever surface it.
+
+    ``core/instructions.md`` is loaded whole into every cycle and every
+    conversation, so anything recorded here is genuinely standing.
+    """
+    from app.memory import service
+
+    text = str(args.get("instruction") or "").strip()
+    if not text:
+        return {"saved": False, "error": "instruction is required"}
+
+    existing = service.read("core/instructions.md")
+    body = existing.body if existing else ""
+    # The seed placeholder should disappear the moment there is a real one,
+    # rather than sitting above the list contradicting it.
+    body = body.replace("_No standing instructions yet._", "").rstrip()
+
+    entry = f"- {text}"
+    if args.get("applies_to"):
+        entry += f"\n  - Applies to: {args['applies_to']}"
+
+    await service.write(
+        "core/instructions.md",
+        body=f"{body}\n\n{entry}".strip(),
+        title="Standing instructions",
+        tags=["core", "instructions"],
+        importance=1.0,
+        confidence="high",
+        source="operator-directed",
+    )
+    return {
+        "saved": True,
+        "path": "core/instructions.md",
+        "instruction": text,
+        "note": "Recorded. You will read this at the start of every cycle and "
+                "every conversation from now on. Confirm it back to them in "
+                "their own words so they can tell you got it right.",
+    }
+
+
+async def _tool_delete_memory(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """Delete a memory file, when explicitly told to.
+
+    Real deletion. A memory system that only accumulates is a database with
+    extra steps, and being told "that was wrong, forget it" is exactly the
+    correction that keeps the rest worth reading.
+
+    The four seeded ``core/`` files are refused: every cycle reads them as
+    established context, so losing one would quietly change how Annie thinks
+    until someone noticed. Emptying one with a replace is the intended way
+    to reset a belief.
+    """
+    from app.memory import service
+    from app.memory.paths import MemoryPathError, safe_relpath
+
+    try:
+        path = safe_relpath(_memory_path_from(args))
+    except (MemoryPathError, ValueError) as exc:
+        return {"deleted": False, "error": str(exc)}
+
+    if path in _UNDELETABLE:
+        return {
+            "deleted": False,
+            "path": path,
+            "error": f"{path} is one of the four core files every cycle reads. "
+                     "It cannot be deleted, but you can replace its contents with "
+                     "write_memory (replace=true) to reset it.",
+        }
+
+    if not service.exists(path):
+        return {"deleted": False, "path": path, "error": "no such memory file"}
+
+    removed = await service.forget(path)
+    return {"deleted": removed, "path": path}
+
+
+async def _tool_list_memory(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """What files exist, so "add to the file about X" can find the right one.
+
+    Metadata only, never bodies — listing the whole notebook's contents into
+    a chat turn is the exact failure this system was rebuilt to avoid.
+    """
+    from app.memory import service
+
+    section = str(args.get("section") or "").strip().lower() or None
+    tree = service.tree()
+    sections = {section: tree.get(section, [])} if section else tree
+
+    return {
+        "files": [
+            {
+                "path": entry["path"],
+                "title": entry["title"],
+                "section": name,
+                "updated": entry["updated"],
+                "summary": entry["summary"],
+            }
+            for name, entries in sections.items()
+            for entry in entries
+        ][:60],
+        "total": sum(len(v) for v in sections.values()),
+    }
 
 
 async def _tool_token_idea(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
@@ -867,9 +1149,14 @@ async def _tool_web_research(agent: AnnieAgent, args: dict[str, Any]) -> dict[st
 
 _TOOL_HANDLERS = {
     "dashboard_summary": _tool_dashboard_summary,
+    "system_status": _tool_system_status,
     "search_memory": _tool_search_memory,
     "read_memory": _tool_read_memory,
+    "list_memory": _tool_list_memory,
+    "create_memory": _tool_create_memory,
+    "remember_instruction": _tool_remember_instruction,
     "write_memory": _tool_write_memory,
+    "delete_memory": _tool_delete_memory,
     "search_tokens": _tool_search_tokens,
     "get_token": _tool_get_token,
     "live_token_lookup": _tool_live_token_lookup,
@@ -928,27 +1215,155 @@ def _tool_specs(settings: Settings, platform_context: PlatformContext | None = N
              "properties": {"path": {"type": "string", "description": "e.g. core/market-model.md"}}},
         ),
         _spec(
-            "write_memory",
-            "Add a note to the notebook when this conversation surfaced something worth "
-            "keeping — an observation, a correction, something the operator told you. "
-            "Appends to notes/ only; the scheduled cycle is what promotes anything durable "
-            "into standing belief. Do not use this to record ordinary chat.",
+            "list_memory",
+            "List what memory files exist, with titles and one-line summaries. Use this "
+            "when someone refers to a file by description (\"the file about crowded "
+            "narratives\") and you need its actual path before writing to it.",
             {
-                "type": "object", "required": ["text", "topic"], "additionalProperties": False,
+                "type": "object", "additionalProperties": False,
                 "properties": {
-                    "text": {"type": "string", "description": "The note, in your own words."},
-                    "topic": {"type": "string", "description": "Short subject, becomes the filename."},
+                    "section": {
+                        "type": "string",
+                        "enum": ["core", "daily", "weekly", "monthly", "creators",
+                                 "tokens", "narratives", "playbook", "notes"],
+                        "description": "Omit for everything.",
+                    }
+                },
+            },
+        ),
+        _spec(
+            "create_memory",
+            "CREATE A NEW MEMORY FILE when the operator asks for one — \"make me a file "
+            "called X\", \"start a note on Y\", \"create a playbook entry for Z\". "
+            "Creating it empty is fine and normal: they will usually tell you what goes "
+            "in it over the next few messages, so make the file, tell them the path, and "
+            "ask what should go in it. Then use write_memory as they dictate.",
+            {
+                "type": "object", "required": ["name"], "additionalProperties": False,
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "What they called it, in plain words. Becomes the filename.",
+                    },
+                    "section": {
+                        "type": "string",
+                        "enum": ["core", "creators", "tokens", "narratives", "playbook", "notes"],
+                        "description": "Where it belongs. Default notes. Use playbook for "
+                                       "what works, narratives for a theme, core only if they "
+                                       "explicitly mean a standing belief.",
+                    },
+                    "title": {"type": "string", "description": "Human title. Defaults from the name."},
+                    "text": {
+                        "type": "string",
+                        "description": "Starting content, if they already gave you some. "
+                                       "Leave empty if they have not said yet.",
+                    },
+                    "tags": {"type": "array", "items": {"type": "string"}},
                     "keys": {
                         "type": "array", "items": {"type": "string"},
                         "description": "Mints/wallets/tickers this is about, so it is findable later.",
                     },
+                    "importance": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+            },
+        ),
+        _spec(
+            "write_memory",
+            "WRITE INTO A MEMORY FILE. Two uses:\n"
+            "(1) The operator is dictating — they told you what to write and where. Any "
+            "section is allowed, including core/, because they are entitled to correct "
+            "what you believe. Write what they actually said; do not paraphrase their "
+            "instruction into your own summary of it unless they asked you to.\n"
+            "(2) You noticed something yourself worth keeping. Then use notes/ and "
+            "nothing else — a chat turn is not the place to rewrite standing beliefs, and "
+            "the scheduled cycle promotes anything durable later.\n"
+            "Appends by default. Only set replace=true when they clearly meant to "
+            "overwrite (\"rewrite it\", \"replace that with\", \"start it over\") — a "
+            "replace destroys the previous content and cannot be undone.",
+            {
+                "type": "object", "required": ["text"], "additionalProperties": False,
+                "properties": {
+                    "text": {"type": "string", "description": "What to write."},
+                    "path": {
+                        "type": "string",
+                        "description": "Existing file path, e.g. playbook/what-worked.md. "
+                                       "Get it from list_memory or search_memory.",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Alternative to path: a plain name, used with section. "
+                                       "Creates the file if it does not exist.",
+                    },
+                    "section": {
+                        "type": "string",
+                        "enum": ["core", "daily", "weekly", "monthly", "creators",
+                                 "tokens", "narratives", "playbook", "notes"],
+                    },
+                    "replace": {
+                        "type": "boolean",
+                        "description": "Default false (append). True overwrites everything "
+                                       "already in the file.",
+                    },
+                    "title": {"type": "string"},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "keys": {"type": "array", "items": {"type": "string"}},
+                    "importance": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+            },
+        ),
+        _spec(
+            "remember_instruction",
+            "RECORD A STANDING INSTRUCTION — something the operator wants you to keep "
+            "doing from now on, not a one-off note. Triggers: \"from now on…\", "
+            "\"whenever you see X, write it in Y\", \"always include…\", \"stop "
+            "bothering with…\", \"keep track of…\". Anything recorded here is loaded "
+            "into every future cycle and every conversation, so it actually persists. "
+            "Use write_memory instead for a fact or observation; use this for a rule "
+            "about how you should behave.",
+            {
+                "type": "object", "required": ["instruction"], "additionalProperties": False,
+                "properties": {
+                    "instruction": {
+                        "type": "string",
+                        "description": "The instruction in their words, phrased so it still "
+                                       "makes sense read cold in three weeks.",
+                    },
+                    "applies_to": {
+                        "type": "string",
+                        "description": "Optional: the file, section or situation it applies to, "
+                                       "e.g. 'playbook/what-worked.md' or 'the morning brief'.",
+                    },
+                },
+            },
+        ),
+        _spec(
+            "delete_memory",
+            "Delete a memory file, when explicitly told to forget something. Being told "
+            "\"that was wrong, drop it\" is a real correction and worth acting on. Never "
+            "delete on your own initiative. The four seeded core/ files cannot be deleted; "
+            "replace their contents instead.",
+            {
+                "type": "object", "additionalProperties": False,
+                "properties": {
+                    "path": {"type": "string", "description": "e.g. notes/old-idea.md"},
+                    "name": {"type": "string"},
+                    "section": {"type": "string"},
                 },
             },
         ),
         _spec(
             "dashboard_summary",
             "Where things stand overall: launches seen, what cleared a tier, creators "
-            "tracked, memory size. Free to call.",
+            "tracked, memory size. When there is no data it also tells you WHY — use "
+            "that, do not just report the zeros. Free to call.",
+            {"type": "object", "properties": {}, "additionalProperties": False},
+        ),
+        _spec(
+            "system_status",
+            "Is the pipeline actually working? Call this when someone asks why you "
+            "have nothing, why nothing is updating, or whether something is broken. "
+            "Distinguishes a webhook that is not delivering from a deployment that is "
+            "simply new — the raw counts cannot tell those apart.",
             {"type": "object", "properties": {}, "additionalProperties": False},
         ),
         _spec(
@@ -1119,6 +1534,32 @@ def _tool_specs(settings: Settings, platform_context: PlatformContext | None = N
 
 def _spec(name: str, description: str, parameters: dict[str, Any]) -> dict[str, Any]:
     return {"type": "function", "function": {"name": name, "description": description, "parameters": parameters}}
+
+
+def _standing_instructions_note() -> str:
+    """What the operator has told Annie to keep doing, in every turn.
+
+    Loaded rather than retrieved. An instruction that only surfaces when a
+    search happens to match it is not standing — the whole point is that it
+    applies whether or not this particular question reminded her of it. The
+    file is small by design and a local read, so this costs nothing.
+    """
+    try:
+        from app.memory.bootstrap import standing_instructions
+
+        text = standing_instructions()
+    except Exception:  # memory unavailable must never break a conversation
+        log.warning("standing_instructions_unavailable", exc_info=True)
+        return ""
+
+    if not text:
+        return ""
+    return (
+        "\n\n# Standing instructions from the operator\n\n"
+        "These were given to you directly and apply to every conversation. "
+        "They outrank your own judgement about what is worth doing or "
+        "recording. Follow them.\n\n" + text
+    )
 
 
 async def _personality_overrides(repo: FirestoreRepo) -> dict[str, str] | None:

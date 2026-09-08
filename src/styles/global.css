@@ -872,82 +872,209 @@ a { color: inherit; text-decoration: none; }
 .timeline__title { font-size: var(--text-sm); font-weight: var(--weight-medium); }
 .timeline__meta { font-size: var(--text-xs); color: var(--text-muted); font-family: var(--font-mono); }
 
-/* ------------------------------------------------------- Memory browser -- */
-/* Memory is a folder of markdown files (app/memory/), so the page is a file
-   browser: a section tree on the left, the file itself on the right, rendered
-   as prose rather than as fields. Collapses to a single column on narrow
-   screens with the tree above the reader — on a phone the tree is how you
-   navigate, so it must come first. */
+/* -------------------------------------------------------- Memory cards -- */
+/* Memory is a folder of markdown files, and each one is a piece of writing
+   with a point — so they are cards showing an excerpt, not table rows showing
+   a filename. Opening one is a dialog rather than a route, because reading a
+   memory is a glance, not a destination you navigate to and back from. */
 
-.memory-layout {
+.memory-toolbar { gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+
+.memory-filter {
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  /* Section names are lowercase in the data and reading them shouted is
+     worse than reading them plain. */
+  text-transform: none;
+}
+.memory-filter .faint { margin-left: 4px; font-family: var(--font-mono); }
+
+.memory-resultnote, .memory-indexnote {
+  font-size: var(--text-2xs);
+  font-family: var(--font-mono);
+  margin: 0 0 12px;
+}
+.memory-indexnote { margin: var(--space-5) 0 0; }
+
+.memory-grid {
   display: grid;
-  grid-template-columns: minmax(200px, 260px) minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+  align-items: stretch;
 }
 
-@media (max-width: 860px) {
-  .memory-layout { grid-template-columns: 1fr; }
-  .memory-tree { max-height: 240px; }
-}
-
-.memory-tree {
+.memcard {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  max-height: calc(100dvh - 260px);
-  overflow-y: auto;
-  position: sticky;
-  top: 12px;
-}
-
-.memory-tree__section {
-  font-size: var(--text-2xs);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-muted);
-  font-weight: var(--weight-medium);
-  padding: 2px 6px;
-}
-
-.memory-tree__file {
-  display: block;
-  width: 100%;
+  gap: 8px;
+  padding: 14px 16px;
   text-align: left;
-  padding: 5px 8px;
-  border: 0;
-  border-radius: calc(var(--radius) - 3px);
-  background: transparent;
-  color: var(--text);
-  font-size: var(--text-sm);
-  font-family: inherit;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: inherit;
+  font: inherit;
   cursor: pointer;
   min-width: 0;
+  transition: border-color 120ms ease, transform 120ms ease;
 }
-.memory-tree__file:hover { background: var(--surface-hover); }
-.memory-tree__file.is-active {
-  background: var(--surface-active, var(--surface-hover));
-  color: var(--text-strong, var(--text));
-  font-weight: var(--weight-medium);
+.memcard:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
 }
+.memcard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.memory-tree__empty { padding: 2px 8px; font-size: var(--text-2xs); }
-.memory-tree__foot {
-  margin-top: auto;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
+.memcard__head { display: flex; align-items: center; gap: 8px; }
+.memcard__age {
+  margin-left: auto;
   font-size: var(--text-2xs);
   font-family: var(--font-mono);
 }
 
-.memory-reader { min-width: 0; }
+.memcard__title {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+  line-height: 1.3;
+}
 
-/* A clickable search result. Button, not a div, so it is reachable by keyboard
-   and announced as actionable. */
+/* Four lines of the actual prose. Enough to tell two memories apart, short
+   enough that a grid of them stays scannable. */
+.memcard__excerpt {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.memcard__foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: var(--text-2xs);
+  color: var(--text-faint);
+  min-width: 0;
+}
+.memcard__flag {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+}
+
+/* ------------------------------------------------------------- Dialogs -- */
+
+.modal__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 0.55);
+  backdrop-filter: blur(2px);
+}
+@media (max-width: 720px) {
+  .modal__backdrop { padding: 0; align-items: stretch; }
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: min(860px, 100%);
+  max-height: 100%;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+@media (max-width: 720px) {
+  .modal { border-radius: 0; border: 0; }
+}
+.modal:focus { outline: none; }
+
+.modal__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.modal__title {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  margin: 0;
+}
+.modal__meta {
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  min-width: 0;
+}
+.modal__meta code { word-break: break-all; }
+
+.modal__actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+  align-items: center;
+}
+@media (max-width: 560px) {
+  .modal__head { flex-direction: column; }
+  .modal__actions { margin-left: 0; width: 100%; }
+}
+
+.modal__body {
+  padding: 18px 20px 24px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.modal__warn {
+  margin: 0 0 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--alert);
+  border-radius: 3px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.modal__hint { font-size: var(--text-2xs); margin: 8px 0 0; }
+
+.textarea {
+  width: 100%;
+  padding: 12px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  resize: vertical;
+}
+.textarea:focus { outline: none; border-color: var(--accent); }
+
+/* Tall enough to write a real paragraph in without scrolling, capped so the
+   save button never leaves the viewport. */
+.modal__editor { min-height: 340px; max-height: 60dvh; }
+
+/* A clickable list row. Button, not a div, so it is keyboard-reachable and
+   announced as actionable. Used by search results and TokenDetail. */
 .listrow {
   display: block;
   width: 100%;
@@ -961,30 +1088,34 @@ a { color: inherit; text-decoration: none; }
   cursor: pointer;
 }
 .listrow:last-child { border-bottom: 0; }
-.listrow:hover { background: var(--surface-hover); }
+.listrow:hover { background: var(--bg-hover); }
 
-/* Memory prose. Generous line height because these are paragraphs meant to be
-   read, not table cells meant to be scanned. */
+/* Rendered markdown — Annie's own writing, wherever it is shown. Generous
+   line height because these are paragraphs meant to be read, not table cells
+   meant to be scanned, and a measure cap because full-width prose at this
+   size is genuinely hard to track back across. */
 .prose { font-size: var(--text-sm); line-height: 1.65; max-width: 68ch; }
 .prose h3 {
   font-size: var(--text-base);
   font-weight: var(--weight-medium);
-  margin: 18px 0 6px;
+  margin: 20px 0 6px;
 }
+.prose h3:first-child { margin-top: 0; }
 .prose h4 {
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   color: var(--text-muted);
-  margin: 14px 0 4px;
+  margin: 16px 0 4px;
   font-family: var(--font-mono);
 }
 .prose p { margin: 0 0 2px; }
-.prose__li { display: flex; gap: 8px; margin: 1px 0; }
+.prose em { font-style: italic; color: var(--text); }
+.prose__li { display: flex; gap: 8px; margin: 2px 0; }
 .prose__bullet { color: var(--text-faint); flex-shrink: 0; }
 .prose code {
   font-family: var(--font-mono);
   font-size: 0.92em;
-  background: var(--surface-hover);
+  background: var(--bg-hover);
   padding: 1px 4px;
   border-radius: 3px;
   word-break: break-all;
@@ -993,7 +1124,7 @@ a { color: inherit; text-decoration: none; }
 .chip {
   display: inline-block;
   padding: 2px 6px;
-  background: var(--surface-hover);
+  background: var(--bg-hover);
   border: 1px solid var(--border);
   border-radius: 3px;
   font-size: var(--text-2xs);

@@ -98,13 +98,36 @@ class MemoryFile:
         """Hash of the rendered file, used to skip no-op Firestore snapshots."""
         return sha256(self.render().encode("utf-8")).hexdigest()
 
-    def summary(self, limit: int = 240) -> str:
-        """First meaningful prose line, for listings and digests."""
+    def summary(self, limit: int = 280) -> str:
+        """An excerpt of the opening prose, for card listings and digests.
+
+        Joins consecutive prose lines rather than returning the first one.
+        Annie hard-wraps at around 75 columns, so "the first line" is an
+        arbitrary fragment ending mid-sentence — which made every card in the
+        Memory page show a truncated clause instead of a thought. Headings,
+        bullets and quotes end the excerpt, since those mark a shift from
+        "what this file is about" to its contents.
+        """
+        collected: list[str] = []
         for line in self.body.splitlines():
-            stripped = line.strip().lstrip("#").strip()
-            if stripped and not stripped.startswith(("-", "*", "|", ">")):
-                return stripped[:limit]
-        return self.body.strip()[:limit]
+            stripped = line.strip()
+            if not stripped:
+                if collected:
+                    break  # a blank line ends the opening paragraph
+                continue
+            if stripped.startswith(("#", "-", "*", "|", ">")):
+                if collected:
+                    break
+                continue  # skip a leading heading to reach the prose under it
+            collected.append(stripped)
+            if sum(len(c) + 1 for c in collected) >= limit:
+                break
+
+        excerpt = " ".join(collected).strip() or self.body.strip()
+        if len(excerpt) <= limit:
+            return excerpt
+        # Cut on a word boundary — a card ending mid-word reads as a bug.
+        return excerpt[:limit].rsplit(" ", 1)[0].rstrip(",;:") + "…"
 
     def render(self) -> str:
         header = [

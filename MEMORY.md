@@ -111,12 +111,99 @@ rewrite — quietly widening until the whole notebook is in the prompt again.
 
 ## Reading it yourself
 
-- **Website** → Memory page. Browse the tree, read the files, search, edit,
-  delete.
+- **Website** → Memory page. Cards showing an excerpt of each file; click one
+  to read it whole, edit it in place, or delete it. "New memory" creates one
+  by hand.
 - **Chat / Discord / Telegram** → `search_memory`. Paste a CA or a wallet and
   it resolves straight to the file about it.
 - **Your machine** → `python -m tools.memory_pull`, which walks the API and
   writes the same files locally. `--search <CA>` prints excerpts instead.
+
+---
+
+## Writing to it yourself
+
+The notebook is not only Annie's. You know things she cannot infer from
+watching the market, and a memory only she can write is missing half its
+content — so you can dictate it, from the website or from chat.
+
+From Telegram or Discord, the conversation looks like this:
+
+> **you:** make me a file called crowded narratives
+> **Annie:** Created `notes/crowded-narratives.md`. What should go in it?
+> **you:** stop launching into AI agents, every desk is doing it, the last
+> four I watched round-tripped inside an hour
+> **Annie:** Saved to `notes/crowded-narratives.md`.
+
+The rules she follows:
+
+- **Creating it empty is normal.** She makes the file, tells you the path,
+  and asks what goes in it — because that is how the conversation actually
+  goes.
+- **She writes what you said, not her summary of it.** Compressing your words
+  into her own would lose them.
+- **Appending is the default.** "Rewrite it", "replace that", "start it
+  over" mean replace; anything else adds. An accidental overwrite loses prose
+  nobody can recover, so the safe operation is the one that happens by
+  default.
+- **You can correct `core/`.** Those are her standing beliefs and you are
+  entitled to change them. On her own initiative she stays in `notes/` and
+  lets the scheduled cycle promote anything durable.
+- **"That was wrong, delete it" works.** The four seeded `core/` files are
+  the exception — every cycle reads them as context, so they get emptied
+  rather than removed.
+- **She always confirms with the path**, so you know where it landed.
+
+One thing she will tell you rather than silently work around:
+`core/watchlist.md` is regenerated from the ledger every cycle, so hand
+edits there get overwritten. She suggests a different file instead.
+
+The tools behind this are `create_memory`, `write_memory`, `delete_memory`
+and `list_memory` in `app/annie/agent.py`; the rules she reads are in
+`app/annie/persona.py` under "Being told what to remember".
+
+### Standing instructions
+
+A *note* is something she knows. An *instruction* is something she does —
+every cycle, whether or not that moment happened to remind her of it.
+
+> **you:** from now on, keep track of which narratives are getting crowded
+> **Annie:** Noted — I'll track that from here. It's in
+> `core/instructions.md`, so I read it at the start of every cycle.
+
+These go to `core/instructions.md`, which is loaded **whole** into every
+cycle prompt and every conversation rather than retrieved by search. That
+distinction is the entire point: an instruction that only surfaces when a
+query matches it is not standing. It sits last in the cycle prompt, where it
+is the most recent thing read before she decides what to write.
+
+Instructions outrank her own judgement about what is worth keeping — if you
+ask her to track something she would not have bothered with, she tracks it.
+
+---
+
+## When there is nothing
+
+"No data" has several causes that need completely different actions, and
+undistinguished they all produce the same useless reply: a list of zeros.
+`app/memory/health.py` classifies which one it is, and Annie leads with that
+instead of reciting counts.
+
+| State | What it means | What to do |
+|---|---|---|
+| `never_started` | Nothing has ever arrived — a wiring problem, not a quiet market | Check the Helius webhook URL and `HELIUS_WEBHOOK_SECRET` |
+| `memory_not_durable` | Data arrives but nothing survives a redeploy | Attach the Railway Volume |
+| `stream_stopped` | It worked and went quiet — the webhook died | Same webhook checks |
+| `warming_up` | Real data, just not enough of it yet | Nothing; wait |
+| `healthy` | Arriving and being kept | — |
+
+`stream_stopped` is the one that used to be invisible: a dead webhook and a
+quiet market produce identical numbers, so without something classifying
+them, a broken pipeline looked exactly like a slow night.
+
+Surfaced three ways — a banner on System Health (silent when healthy),
+`GET /api/system/pipeline-status`, and the `system_status` tool so Annie can
+answer "why don't you have anything?" with a cause rather than a shrug.
 
 ---
 

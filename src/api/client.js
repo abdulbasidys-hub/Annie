@@ -209,6 +209,7 @@ export const api = {
   // skipped entirely if the window was quiet.
   runCycle: () => request('POST', '/api/system/run/cycle'),
   cost: () => request('GET', '/api/system/cost'),
+  pipelineStatus: () => request('GET', '/api/system/pipeline-status'),
   pipelineRun: (id) => request('GET', `/api/system/pipeline-runs/${id}`),
   pipelineRuns: (params) => request('GET', '/api/system/pipeline-runs', { params }),
 

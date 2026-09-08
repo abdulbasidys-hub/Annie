@@ -890,6 +890,19 @@ const routes = [
     firestore: FIRESTORE_BUDGET,
   })],
 
+  // Healthy by default so the banner stays hidden — flip `state` to
+  // 'never_started' or 'stream_stopped' to see the failure UI.
+  ['GET', /^\/api\/system\/pipeline-status$/, () => ({
+    state: 'healthy',
+    headline: 'Data is arriving and being kept.',
+    what_to_check: [],
+    stream: { sightings_last_hour: 640, last_sighting_at: iso(90_000), hours_since_last_sighting: 0.02, expected_rate: 'roughly 11 launches a minute at real Pump.fun volume' },
+    ledger: { held: 3120, seen_24h: 15840, qualified_total: 668, creators_seen: 18420, creators_tracked: 214 },
+    notebook: { files: MEMORY_FILES.length, only_seeded_placeholders: false },
+    durability: { root: '/data/memory', configured: true, looks_like_volume: true, writable: true, note: '' },
+    jobs: { last_cycle_at: iso(2 * HOUR), hours_since_cycle: 2, last_watch_at: iso(4 * 60_000) },
+  })],
+
   ['GET', /^\/api\/system\/cost$/, () => ({
     firestore: FIRESTORE_BUDGET,
     memory: { files: MEMORY_FILES.length, keys: 1515, fts: true },

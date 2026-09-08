@@ -200,6 +200,20 @@ async def run_narratives_now(
     return {"run_id": run.id}
 
 
+@router.get("/pipeline-status")
+async def pipeline_status() -> dict[str, Any]:
+    """Is the pipeline working, and if not, what is wrong.
+
+    Exists because "no data" has several causes needing different fixes, and
+    a page of zeros cannot tell them apart. A deployment whose webhook is
+    misconfigured and one that started ten minutes ago look identical until
+    something classifies them.
+    """
+    from app.memory import health
+
+    return health.diagnose()
+
+
 @router.get("/cost")
 async def cost_report() -> dict[str, Any]:
     """Where this deployment's spend actually is, and how much headroom is left.

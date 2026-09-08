@@ -36,7 +36,7 @@ from typing import Any
 
 import structlog
 
-from app.memory import index, ledger, signals
+from app.memory import bootstrap, index, ledger, signals
 from app.memory.index import Hit
 
 log = structlog.get_logger(__name__)
@@ -73,6 +73,11 @@ class CycleDigest:
     words: list[dict[str, Any]] = field(default_factory=list)
     recalled: list[Hit] = field(default_factory=list)
     core: list[Hit] = field(default_factory=list)
+    #: Raw text of ``core/instructions.md`` — what the operator has told her
+    #: to keep doing. Carried separately from ``core`` so it can be placed
+    #: last in the prompt, where an instruction is least likely to be lost
+    #: behind a wall of market data.
+    instructions: str = ""
 
     @property
     def is_empty(self) -> bool:
@@ -179,6 +184,20 @@ class CycleDigest:
             for hit in self.recalled:
                 lines.append(f"- `{hit.path}` — {hit.title}: {hit.snippet.strip()[:300]}")
 
+        # Last, deliberately. An instruction placed above several hundred
+        # lines of market data competes with them for attention; placed at
+        # the end it is the most recent thing read before answering.
+        if self.instructions:
+            lines += [
+                "",
+                "## Standing instructions from the operator",
+                "",
+                "These were given to you directly. They outrank your own judgement "
+                "about what is worth writing down — follow them this cycle.",
+                "",
+                self.instructions,
+            ]
+
         return "\n".join(lines)
 
 
@@ -215,6 +234,7 @@ def build(*, window_hours: int = 6, now: datetime | None = None) -> CycleDigest:
         words=words,
         recalled=recalled,
         core=index.core_context(limit=4),
+        instructions=bootstrap.standing_instructions(),
     )
     log.info(
         "digest_built",

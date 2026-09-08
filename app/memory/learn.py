@@ -80,6 +80,10 @@ process that logs events. Specifically:
   wallet. These are how the notebook gets searched later.
 - Never state as fact something the digest does not show. If you are
   inferring, say so in the text.
+- If the digest ends with standing instructions from the operator, those are
+  not suggestions. They were given to you directly and they outrank your own
+  judgement about what is worth keeping. Follow them this cycle, even when
+  the thing they ask for would not have met your own bar.
 
 Edit operations:
 - `append`: add a paragraph to an existing file (or create it). Use for

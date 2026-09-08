@@ -204,6 +204,66 @@ function Pipeline({ onRan }) {
  * holding, and — the one that bites silently — whether memory is on a
  * persistent volume or will vanish on the next redeploy.
  */
+/**
+ * Is the pipeline actually working?
+ *
+ * Sits above everything because it answers the question a page of zeros
+ * cannot: a deployment whose webhook is misconfigured and one that started
+ * ten minutes ago produce identical counts, and only one of them needs
+ * fixing. Silent when healthy — a banner that is always there is one nobody
+ * reads.
+ */
+function PipelineStatus() {
+  const state = useApi(() => api.pipelineStatus(), [])
+  const d = state.data
+  if (!d || d.state === 'healthy') return null
+
+  const tone = d.state === 'warming_up' ? 'new' : 'alert'
+  return (
+    <Panel
+      title="Nothing is coming through"
+      meta={<Badge status={tone}>{d.state.replace(/_/g, ' ')}</Badge>}
+    >
+      <p style={{ margin: '0 0 12px' }}>{d.headline}</p>
+
+      {d.what_to_check?.length > 0 && (
+        <div className="stack" style={{ gap: 6 }}>
+          <span className="faint" style={{ fontSize: 'var(--text-2xs)' }}>
+            What to check
+          </span>
+          {d.what_to_check.map((action, i) => (
+            <div key={i} className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
+              <span className="faint">·</span>
+              <span style={{ fontSize: 'var(--text-sm)' }}>{action}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <dl className="deflist" style={{ marginTop: 'var(--space-4)' }}>
+        <dt>Launches last hour</dt>
+        <dd>
+          {count(d.stream?.sightings_last_hour)}
+          <span className="faint"> · {d.stream?.expected_rate}</span>
+        </dd>
+        <dt>Last launch seen</dt>
+        <dd>{d.stream?.last_sighting_at ? relative(d.stream.last_sighting_at) : 'never'}</dd>
+        <dt>Held in ledger</dt>
+        <dd>{count(d.ledger?.held)}</dd>
+        <dt>Memory files</dt>
+        <dd>
+          {count(d.notebook?.files)}
+          {d.notebook?.only_seeded_placeholders && (
+            <span className="faint"> · only the seeded placeholders</span>
+          )}
+        </dd>
+        <dt>Last cycle</dt>
+        <dd>{d.jobs?.last_cycle_at ? relative(d.jobs.last_cycle_at) : 'never run'}</dd>
+      </dl>
+    </Panel>
+  )
+}
+
 function Cost() {
   const state = useApi(() => api.cost(), [])
 
@@ -302,6 +362,8 @@ export default function SystemHealth() {
           with poor coverage is excluded from comparisons rather than averaged over.
         </p>
       </div>
+
+      <PipelineStatus />
 
       <Cost />
 
