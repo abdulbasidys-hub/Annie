@@ -277,14 +277,16 @@ launches a day, almost all discarded — is one quiet line at the bottom,
 because the interesting number is how little survived, not how much went
 past.
 
-**Ideas** is new, and is the point of everything else. Ask for a launch idea
-and she generates one grounded in what is winning now, what her notebook says
-has worked, and what is already crowded. Every idea comes back labelled
-`observed`, `inferred` or `speculative` — on a deployment with no history
-they will all be speculative, which is the correct answer rather than a
-broken one. A panel below shows what a generation *would* be built on before
-you spend anything, so you can tell those cases apart. It is the only page
-that costs a model call, and only when you press the button.
+**Ideas** is new, and is the point of everything else. Three arrive every day
+with the brief, generated from what moved over the preceding 24 hours; ask
+any time for more. Each one carries the four fields a launchpad form actually
+asks for — name, ticker, description copy, image — plus why now, the evidence
+it rests on, and the strongest reason it fails. Every idea is labelled
+`observed`, `inferred` or `speculative`; on a deployment with no history they
+will all be speculative, which is the correct answer rather than a broken
+one. A panel below shows what a generation *would* be built on before you
+spend anything, so you can tell those cases apart. See
+[MEMORY.md](MEMORY.md#launch-ideas) for the full format.
 
 **Memory** is the notebook: cards showing an excerpt of each file, click to
 read it whole, edit in place to correct her, or create one by hand. See

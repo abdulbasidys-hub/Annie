@@ -183,7 +183,8 @@ export const api = {
 
   // On demand only — this is the one read path that costs a model call.
   generateIdeas: (body) => request('POST', '/api/ideas', { body }),
-  keepIdeas: (body) => request('POST', '/api/ideas/keep', { body }),
+  latestIdeas: (origin) => request('GET', '/api/ideas/latest', { params: { origin } }),
+  ideaHistory: (limit) => request('GET', '/api/ideas/history', { params: { limit } }),
   ideaContext: (brief) => request('GET', '/api/ideas/context', { params: { brief } }),
 
   personality: () => request('GET', '/api/personality'),

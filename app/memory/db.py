@@ -200,6 +200,24 @@ SCHEMA: tuple[str, ...] = (
     # Counters the Firestore budget guard reads (app/db/budget.py) and the
     # scheduler's last-run state, both moved off Firestore so that merely
     # *measuring* cost does not cost anything.
+    # -- Launch ideas ---------------------------------------------------------
+    # Kept structured as well as written to the playbook. The markdown is what
+    # Annie reads back on later cycles; this is what the Ideas page renders as
+    # cards, and parsing her prose back into fields to do that would be both
+    # fragile and pointless when the generator already had the structure.
+    """
+    CREATE TABLE IF NOT EXISTS ideas (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        generated_at TEXT NOT NULL,
+        day          TEXT NOT NULL,
+        origin       TEXT NOT NULL,
+        brief        TEXT,
+        payload      TEXT NOT NULL,
+        memory_path  TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_ideas_day ON ideas(day DESC, generated_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_ideas_origin ON ideas(origin, generated_at DESC)",
     """
     CREATE TABLE IF NOT EXISTS counters (
         name    TEXT NOT NULL,

@@ -69,7 +69,7 @@ async def _cycle(registry: ProviderRegistry, repo: FirestoreRepo, settings) -> d
     """
     from zoneinfo import ZoneInfo
 
-    from app.memory import bootstrap, ledger, rollup, service, signals, snapshot
+    from app.memory import bootstrap, ideas, ledger, rollup, service, signals, snapshot
     from app.memory.learn import learn_from_window
     from app.pipeline.watch import enrich_qualified, refresh_tracked_creators
 
@@ -108,6 +108,11 @@ async def _cycle(registry: ProviderRegistry, repo: FirestoreRepo, settings) -> d
 
     if is_day_boundary:
         await stage("daily_log", rollup.write_daily_log(now=now))
+        # Once a day, not once a cycle. Ideas are a judgement about what to
+        # do next, and one that changes every six hours is noise — a day is
+        # roughly the shortest window over which "what is working" means
+        # anything here. Skips itself when nothing moved.
+        await stage("ideas", ideas.generate_daily(registry, settings, count=3, now=now))
 
     try:
         tracked = ledger.top_creators(limit=12, tracked_only=True)

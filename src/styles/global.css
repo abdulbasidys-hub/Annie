@@ -1194,6 +1194,52 @@ a { color: inherit; text-decoration: none; }
 .ideacard__name { font-size: var(--text-lg); line-height: 1.25; }
 .ideacard__ticker { font-size: var(--text-xs); color: var(--text-muted); }
 
+/* The four fields a launchpad form actually asks for, set apart from the
+   reasoning below them because these are meant to be used rather than read.
+   Each is copyable — retyping a description out of a card is exactly the kind
+   of small friction that stops a tool getting used. */
+.ideafield {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+}
+
+.ideafield__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.ideafield__label {
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+
+.ideafield__hint { font-size: var(--text-2xs); }
+
+.ideafield__copy {
+  margin-left: auto;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+.ideafield__copy:hover { border-color: var(--border-strong); color: var(--text); }
+
+.ideafield__value {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.55;
+}
+
 .ideacard__angle {
   margin: 0;
   font-size: var(--text-sm);

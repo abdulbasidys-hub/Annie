@@ -298,32 +298,10 @@ def _memory_for_mint(mint: str, related: list[Any]) -> Any:
     return None
 
 
-# -----------------------------------------------------------------------------
-# Signals (what the `trends` Firestore collection used to hold)
-# -----------------------------------------------------------------------------
-
-
-@router.get("/signals")
-async def list_signals(
-    status: str | None = Query(None, description="new | rising | stable | declining | dead"),
-    limit: int = Query(25, ge=1, le=100),
-    include_thin: bool = Query(
-        False, description="Include cohorts too small for statistical significance."
-    ),
-) -> dict[str, Any]:
-    items = signals.listing(status=status, limit=limit, include_thin=include_thin)
-    return {"items": items, "total": len(items), "counts": signals.counts()}
-
-
-@router.get("/signals/{slug}")
-async def get_signal(slug: str) -> dict[str, Any]:
-    found = signals.get(slug)
-    if found is None:
-        raise HTTPException(status_code=404, detail=f"No signal {slug}")
-    return found
-
-
-@router.post("/signals/recompute")
-async def recompute_signals() -> dict[str, Any]:
-    """Recompute from the ledger. Free — local reads and pure statistics."""
-    return signals.recompute().to_dict()
+# Signals used to be served from here as well as from
+# app/api/routes/intelligence.py — two routers registering /api/signals and
+# /api/signals/{slug} with different shapes, where which one answered came
+# down to include order in app/main.py. intelligence.py owns them now, since
+# it also owns the /trends aliases and the serializer the frontend renders.
+# Recomputation lives at POST /api/system/run/signals with the other manual
+# stage triggers.

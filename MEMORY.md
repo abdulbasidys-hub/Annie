@@ -69,9 +69,14 @@ free   update the watchlist, prune, reindex
 free   mirror changed files to Firestore          only files whose hash moved
 ```
 
-A quiet window skips the paid call entirely. Weekly and monthly rollups add
-one call each — and the monthly reads the weeklies, never raw data, which is
-what keeps cost flat as history grows.
+At the 00:00 WAT boundary the cycle also writes the day's deterministic log
+and generates three launch ideas (one more call), which go out with the
+brief.
+
+A quiet window skips the paid call entirely, and the daily ideas are skipped
+outright when nothing moved. Weekly and monthly rollups add one call each —
+and the monthly reads the weeklies, never raw data, which is what keeps cost
+flat as history grows.
 
 Measured at production scale (16,000 launches, 400 winners, 560 memory files
 representing six months of accumulation):
@@ -181,6 +186,63 @@ is the most recent thing read before she decides what to write.
 
 Instructions outrank her own judgement about what is worth keeping — if you
 ask her to track something she would not have bothered with, she tracks it.
+
+---
+
+## Launch ideas
+
+Three arrive every day with the brief, generated from what moved over the
+preceding 24 hours. More on request from the Ideas page, chat, or the bots.
+
+Once a day rather than once a cycle, deliberately: an idea is a judgement
+about what to do next, and one that changes every six hours is noise. A day
+is roughly the shortest window over which "what is working" means anything
+here.
+
+**Skipped entirely when nothing moved.** Three speculative ideas generated
+from an empty ledger would arrive looking exactly like grounded ones, which
+is worse than sending none.
+
+### What one looks like
+
+Every idea carries the four fields a launchpad form actually asks for, plus
+the reasoning behind them:
+
+| Field | What it is |
+|---|---|
+| `name` | The token name, as it should appear. Not a description of a name. |
+| `ticker` | Uppercase, 3-8 characters, no `$`. |
+| `description` | The launchpad description copy, written to paste in as-is. |
+| `image` | What the image shows — subject, style, and what it must *not* look like. |
+| `angle` | The concept in a sentence or two. |
+| `why_now` | What in the current market makes it timely. |
+| `evidence` | The specific signal, token or memory it rests on. |
+| `grounding` | `observed` · `inferred` · `speculative` |
+| `risk` | The strongest reason it fails. |
+
+Plus, per set: `read_of_the_market` (what is working, in two or three
+sentences) and `avoid` (themes too crowded to propose into).
+
+`grounding` is the field to read first. `observed` means she can point at
+tokens that cleared a tier this week with that characteristic. `speculative`
+means she is guessing and says so in the evidence field. A deployment with no
+history will produce nothing but `speculative`, which is the correct answer
+rather than a broken one.
+
+### Where it turns up
+
+- **Ideas page** — cards, with the four launch fields copyable so nothing has
+  to be retyped. Today's set is there on arrival; no button needed.
+- **Discord** — as its own message after the brief, not appended to it. Three
+  ideas with copy and image notes exceed Discord's 2,000-character message
+  cap on their own, and they are a different kind of thing from a status
+  update.
+- **The playbook** — `playbook/ideas-YYYY-MM-DD.md`, so later ideas can build
+  on earlier ones and she can tell you an angle has been tried.
+
+Stored twice on purpose: structured in SQLite for the page to render as
+cards, prose in the notebook for her to read back months later.
+Reconstructing either from the other would be lossy in both directions.
 
 ---
 

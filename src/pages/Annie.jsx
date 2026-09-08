@@ -7,10 +7,10 @@ import { count, relative } from '../lib/format.js'
 
 const SUGGESTIONS = [
   'What changed today?',
-  'What are the strongest current trends?',
-  'What separates $1M+ tokens from $100k ones?',
-  'Which launchpads are gaining momentum?',
-  'Find me something interesting.',
+  "What's working right now?",
+  'Give me a launch idea.',
+  'Which creators are worth watching?',
+  'What are you unsure about?',
 ]
 
 /**
@@ -133,7 +133,7 @@ export default function AnniePage() {
         <textarea
           ref={inputRef}
           className="chat__input"
-          placeholder="Ask about trends, launchpads, creators, narratives…"
+          placeholder="Ask her anything — or paste a contract address"
           value={draft}
           rows={1}
           onChange={(e) => setDraft(e.target.value)}

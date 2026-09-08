@@ -37,32 +37,50 @@ async def generate_ideas(
     the brief but unsupported by the data still comes back marked
     speculative.
     """
+    brief = str(body.get("brief") or "").strip()
     result = await ideas.generate(
-        registry,
-        settings,
-        brief=str(body.get("brief") or "").strip(),
-        count=int(body.get("count") or 3),
+        registry, settings, brief=brief, count=int(body.get("count") or 3)
     )
     if "error" in result:
         raise HTTPException(status_code=503, detail=result["error"])
+
+    # Recorded on generation, not on a separate "keep" press. An idea set the
+    # operator never sees again because they forgot to save it is worse than
+    # a playbook with a few unremarkable entries in it, and `origin` keeps
+    # requested sets distinguishable from the daily ones either way.
+    result["memory_path"] = await ideas.record(result, origin="requested", brief=brief)
     return result
 
 
-@router.post("/ideas/keep")
-async def keep_ideas(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    """Save an idea set into the playbook.
+# POST /ideas/keep was removed 2026-09-08. Generation now records the set
+# itself, so "keep" would have written the same ideas a second time — and an
+# idea set the operator never sees again because they forgot to press save is
+# worse than a playbook with a few unremarkable entries. Requested and daily
+# sets stay distinguishable through `origin`.
 
-    Explicit on purpose. Auto-saving every generated idea would fill the
-    playbook with unvetted model output and then feed it back in as if it
-    were evidence — a memory poisoning itself one cycle at a time.
+
+@router.get("/ideas/latest")
+async def latest_ideas(
+    origin: str | None = Query(
+        "daily", description="daily | requested. Omit for whichever is newest."
+    ),
+) -> dict[str, Any]:
+    """The most recent idea set, so the page has something without asking.
+
+    Defaults to the daily set — generated after the brief from what moved
+    over the preceding 24 hours — because that is the one that arrived on
+    its own and is most likely to be the thing someone opening this page
+    wants to see.
     """
-    payload = body.get("payload")
-    if not isinstance(payload, dict) or not payload.get("ideas"):
-        raise HTTPException(status_code=422, detail="`payload` must be a generated idea set.")
-    path = await ideas.save_as_playbook_entry(payload, note=str(body.get("note") or ""))
-    if path is None:
-        raise HTTPException(status_code=422, detail="Nothing to save.")
-    return {"saved": True, "path": path}
+    found = ideas.latest(origin=origin or None)
+    return {"found": found is not None, "ideas": found}
+
+
+@router.get("/ideas/history")
+async def idea_history(limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
+    """Past idea sets. Free — read from the local store, not regenerated."""
+    items = ideas.history(limit=limit)
+    return {"items": items, "total": len(items)}
 
 
 @router.get("/ideas/context")

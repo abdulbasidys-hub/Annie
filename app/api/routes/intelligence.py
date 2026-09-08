@@ -121,20 +121,20 @@ def _signal_with_series(row: dict[str, Any]) -> dict[str, Any]:
 # much material went past.
 
 
+@router.get("/signals")
 @router.get("/trends")
-async def list_trends(
+async def list_signals(
     status: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     include_low_confidence: bool = Query(False),
 ) -> dict[str, Any]:
-    """Signals, under the route the frontend already calls "trends".
+    """Characteristics over-represented among tokens that cleared a tier.
 
-    Same concept as before — a characteristic's frequency among tokens that
-    cleared a tier, compared against baseline — recomputed from the local
-    ledger instead of a Firestore collection. ``/api/signals`` is the same
-    data under its current name; this alias stays so an existing bookmark or
-    a saved query does not break.
+    Served at both ``/api/signals`` (the current name) and ``/api/trends``
+    (what it was called when this was a Firestore collection), because links
+    to the old path exist in bookmarks and in memory files Annie wrote before
+    the rename.
     """
     from app.memory import signals
 
@@ -150,9 +150,11 @@ async def list_trends(
     }
 
 
+@router.get("/signals/{slug}")
 @router.get("/trends/{slug}")
-async def get_trend(slug: str) -> dict[str, Any]:
-    """One signal in full, with its daily series and fitted slope."""
+async def get_signal(slug: str) -> dict[str, Any]:
+    """One signal in full: daily series, the tokens carrying it, and any note
+    Annie has written about it."""
     from app.memory import index, signals
 
     found = signals.get(slug)
@@ -162,10 +164,38 @@ async def get_trend(slug: str) -> dict[str, Any]:
         point["freq"] for point in reversed(found.get("series") or [])
         if point.get("freq") is not None
     ]
+    # Which tokens actually had this characteristic. Derived on read from the
+    # ledger rather than stored — the same pure feature extraction the signal
+    # engine uses, over the cohort it was computed from. Without this the
+    # detail page could show a frequency with nothing to check it against.
+    from datetime import datetime, timedelta, timezone
+
+    from app.memory import ledger, signals as signals_module
+
+    subject = (found.get("namespace") or "", found.get("key") or "", found.get("value"))
+    now = datetime.now(timezone.utc)
+    examples = [
+        {
+            "mint": t.mint,
+            "symbol": t.symbol,
+            "name": t.name,
+            "peak_market_cap": t.peak_market_cap,
+            "launchpad": t.launchpad,
+            "qualified_at": t.qualified_at,
+        }
+        for t in ledger.qualified_in_window(
+            now - timedelta(days=signals_module.RECENT_DAYS),
+            now,
+            min_tier=float(found.get("tier") or 0),
+        )
+        if subject in signals_module._subjects_of(t)
+    ][:12]
+
     return {
         **_signal_summary(found, series),
         "series": found.get("series") or [],
         "slope": found.get("slope"),
+        "example_tokens": examples,
         # Anything Annie has actually written about this characteristic —
         # usually far more useful than the numbers, which are all above.
         "related_memories": [h.to_dict() for h in index.search(found["name"], limit=4)],

@@ -16,9 +16,15 @@ nothing else:
 3. **What is already crowded** — the same signals read the other way. A
    theme at 40% of winners is not an opportunity, it is a queue.
 
-Costs nothing until asked. There is no scheduled job here: ideas are
-generated on demand from chat, the bots, or the API, because an unrequested
-idea is spend with no reader.
+Two entry points. On demand — from chat, the bots, or the Ideas page — and
+once a day alongside the brief, grounded in what moved over the preceding
+24 hours. The daily set exists because "what should I launch" is a question
+worth answering before you think to ask it; everything else here still costs
+nothing until requested.
+
+The daily set is skipped outright when nothing moved. Three speculative
+ideas generated from an empty ledger would be worse than none, because they
+would arrive looking exactly like the grounded ones.
 
 The output names its evidence per idea. An idea that cannot point at
 something in memory is required to say so and be labelled speculative —
@@ -57,11 +63,31 @@ IDEA_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "additionalProperties": False,
                 "required": [
-                    "name", "ticker", "angle", "why_now", "evidence", "grounding", "risk",
+                    "name", "ticker", "description", "image", "angle",
+                    "why_now", "evidence", "grounding", "risk",
                 ],
                 "properties": {
-                    "name": {"type": "string"},
-                    "ticker": {"type": "string", "description": "Uppercase, 3-8 characters."},
+                    "name": {
+                        "type": "string",
+                        "description": "The token name exactly as it should appear on the "
+                        "launchpad. Not a description of a name — the name itself.",
+                    },
+                    "ticker": {
+                        "type": "string",
+                        "description": "Uppercase, 3-8 characters, no $ prefix.",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "The launchpad description field, written to be pasted "
+                        "in as-is. One or two lines in the register the token is aiming at — "
+                        "not an explanation of the strategy, the actual copy.",
+                    },
+                    "image": {
+                        "type": "string",
+                        "description": "What the image should show, concretely enough to hand "
+                        "to an artist or an image model. Subject, style, and what it must not "
+                        "look like.",
+                    },
                     "angle": {"type": "string", "description": "The concept, in one or two sentences."},
                     "why_now": {"type": "string", "description": "What in the current market makes this timely."},
                     "evidence": {
@@ -106,8 +132,12 @@ Rules:
   unclaimed corner of that space, not another generic cat.
 - Tickers should look like what actually wins in the data you are shown —
   match the observed shape, not a house style.
-- Be concrete. "Animal theme with a twist" is not an idea; a name, a ticker
-  and a one-line concept someone could act on today is."""
+- Be concrete. "Animal theme with a twist" is not an idea. Give a name, a
+  ticker, the description copy and the image, all ready to use — someone
+  should be able to open a launchpad and fill the form from your answer
+  without writing anything themselves.
+- The description field is the copy that goes on the token, not a note about
+  the copy. Write it in the register the token is aiming at."""
 
 
 async def generate(
@@ -260,40 +290,204 @@ def _render_context(
     return "\n".join(lines)
 
 
-async def save_as_playbook_entry(payload: dict[str, Any], *, note: str = "") -> str | None:
-    """Keep an idea set the operator liked, so later ideas can build on it.
+def _render_markdown(payload: dict[str, Any], *, note: str = "") -> str:
+    """The prose form Annie reads back on later cycles.
 
-    Only called explicitly. Auto-saving every generated idea would fill the
-    playbook with unvetted output and then feed it back in as if it were
-    evidence — a memory poisoning itself one cycle at a time.
+    Stored alongside the structured record rather than instead of it: the
+    markdown is what she retrieves months later when deciding whether an
+    angle has been tried, and the JSON is what the Ideas page renders as
+    cards. Reconstructing one from the other would be lossy in both
+    directions.
     """
+    lines = [payload.get("read_of_the_market") or "", ""]
+
+    for idea in payload.get("ideas") or []:
+        lines += [
+            f"### {idea.get('name')} (`{idea.get('ticker')}`)",
+            "",
+            f"- **Description:** {idea.get('description') or '—'}",
+            f"- **Image:** {idea.get('image') or '—'}",
+            f"- **Angle:** {idea.get('angle')}",
+            f"- **Why now:** {idea.get('why_now')}",
+            f"- **Evidence:** {idea.get('evidence')} [{idea.get('grounding')}]",
+            f"- **Risk:** {idea.get('risk')}",
+            "",
+        ]
+
+    if payload.get("avoid"):
+        lines += ["**Avoided as saturated:** " + ", ".join(payload["avoid"]), ""]
+    if note:
+        lines += [f"**Note:** {note}", ""]
+
+    return "\n".join(lines).strip()
+
+
+async def record(
+    payload: dict[str, Any],
+    *,
+    origin: str = "requested",
+    brief: str = "",
+    now: datetime | None = None,
+) -> str | None:
+    """Persist one idea set — structured for the page, prose for the notebook.
+
+    ``origin`` separates the daily set from one the operator asked for, so
+    the Ideas page can show "today's" without a request being mistaken for
+    it.
+    """
+    from app.memory import db
+
     ideas = payload.get("ideas") or []
     if not ideas:
         return None
 
-    stamp = datetime.now(timezone.utc)
-    lines = [
-        payload.get("read_of_the_market") or "",
-        "",
-        "## Ideas kept",
-    ]
-    for idea in ideas:
-        lines.append(
-            f"- **{idea.get('name')}** (`{idea.get('ticker')}`) — {idea.get('angle')}\n"
-            f"  - Why now: {idea.get('why_now')}\n"
-            f"  - Evidence: {idea.get('evidence')} [{idea.get('grounding')}]\n"
-            f"  - Risk: {idea.get('risk')}"
-        )
-    if note:
-        lines += ["", f"**Operator note:** {note}"]
-
+    stamp = now or datetime.now(timezone.utc)
     path = f"playbook/ideas-{stamp.date().isoformat()}.md"
+
     await service.append(
         path,
-        "\n".join(lines),
-        heading=stamp.strftime("%H:%M UTC"),
+        _render_markdown(payload, note=brief),
+        heading=f"{stamp.strftime('%H:%M UTC')}"
+        + (" — daily set" if origin == "daily" else " — requested"),
         title=f"Launch ideas — {stamp.date().isoformat()}",
         tags=["playbook", "ideas"],
         importance=0.6,
     )
+
+    db.execute(
+        "INSERT INTO ideas (generated_at, day, origin, brief, payload, memory_path) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            stamp.isoformat(),
+            stamp.date().isoformat(),
+            origin,
+            brief or None,
+            json.dumps(payload),
+            path,
+        ),
+    )
     return path
+
+
+def latest(origin: str | None = None) -> dict[str, Any] | None:
+    """The most recent idea set, optionally restricted to one origin."""
+    from app.memory import db
+
+    if origin:
+        row = db.query_one(
+            "SELECT * FROM ideas WHERE origin = ? ORDER BY generated_at DESC LIMIT 1",
+            (origin,),
+        )
+    else:
+        row = db.query_one("SELECT * FROM ideas ORDER BY generated_at DESC LIMIT 1")
+    return _row(row)
+
+
+def history(*, limit: int = 20) -> list[dict[str, Any]]:
+    from app.memory import db
+
+    rows = db.query("SELECT * FROM ideas ORDER BY generated_at DESC LIMIT ?", (limit,))
+    return [r for r in (_row(row) for row in rows) if r]
+
+
+def _row(row: Any) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    try:
+        payload = json.loads(row["payload"])
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return {
+        "id": row["id"],
+        "generated_at": row["generated_at"],
+        "day": row["day"],
+        "origin": row["origin"],
+        "brief": row["brief"],
+        "memory_path": row["memory_path"],
+        **payload,
+    }
+
+
+async def generate_daily(
+    registry: ProviderRegistry,
+    settings: Settings,
+    *,
+    count: int = 3,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """The set that lands with the daily brief, from what moved yesterday.
+
+    Runs once a day rather than per cycle, deliberately. Ideas are a
+    judgement about what to do next, and a judgement that changes every six
+    hours is noise — a day is roughly the shortest window over which "what
+    is working" means anything in this market.
+
+    Skips silently when there is nothing to ground it in. Three speculative
+    ideas generated from an empty ledger would be worse than none, because
+    they would arrive looking exactly like the grounded ones.
+    """
+    now = now or datetime.now(timezone.utc)
+
+    if not settings.is_available("ai"):
+        return {"skipped": "ai not configured"}
+
+    movers = ledger.movers(since_hours=24, limit=20)
+    if not movers:
+        log.info("daily_ideas_skipped", reason="nothing moved in the last 24h")
+        return {"skipped": "nothing moved in the last 24h"}
+
+    payload = await generate(registry, settings, count=count, now=now)
+    if "error" in payload:
+        return {"error": payload["error"]}
+
+    path = await record(payload, origin="daily", now=now)
+    log.info(
+        "daily_ideas_generated",
+        count=len(payload.get("ideas") or []),
+        path=path,
+        input_tokens=payload.get("input_tokens"),
+    )
+    return {
+        "generated": len(payload.get("ideas") or []),
+        "path": path,
+        "grounded_in_movers": len(movers),
+        "input_tokens": payload.get("input_tokens"),
+        "output_tokens": payload.get("output_tokens"),
+    }
+
+
+def format_for_delivery(payload: dict[str, Any], *, limit: int = 3) -> str:
+    """The Discord/Telegram form. Short enough to read on a phone."""
+    ideas = (payload.get("ideas") or [])[:limit]
+    if not ideas:
+        return ""
+
+    lines = ["**Launch ideas from yesterday's movers**", ""]
+    if payload.get("read_of_the_market"):
+        lines += [payload["read_of_the_market"], ""]
+
+    for idea in ideas:
+        lines += [
+            f"**{idea.get('name')}**  `${idea.get('ticker')}`  _{idea.get('grounding')}_",
+            f"{idea.get('description') or idea.get('angle')}",
+            f"· Image: {idea.get('image')}",
+            f"· Why now: {idea.get('why_now')}",
+            f"· Risk: {idea.get('risk')}",
+            "",
+        ]
+
+    if payload.get("avoid"):
+        lines.append(f"_Avoiding: {', '.join(payload['avoid'][:4])}_")
+    return "\n".join(lines)
+
+
+async def save_as_playbook_entry(payload: dict[str, Any], *, note: str = "") -> str | None:
+    """Keep an idea set the operator liked, so later ideas can build on it.
+
+    Only called explicitly for a *requested* set. Auto-saving every generated
+    idea would fill the playbook with unvetted output and then feed it back
+    in as if it were evidence — a memory poisoning itself one cycle at a
+    time. The daily set is the deliberate exception: it is recorded because
+    it was asked for by the schedule rather than by a passing whim.
+    """
+    return await record(payload, origin="requested", brief=note)

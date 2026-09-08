@@ -608,6 +608,49 @@ const PIPELINE_RESULTS = {
   cycle: { learning: { headline: 'Cat-themed names keep outperforming.' } },
 }
 
+const IDEA_SET = {
+  read_of_the_market:
+    'Cat-adjacent names are three weeks into a run and still clearing tiers, but the generic ones are at baseline — what is working is the oddly-specific joke, not the animal. AI agents are saturated and politics has been rolling over for eleven days.',
+  ideas: [
+    {
+      name: 'Cat Lawyer', ticker: 'LAWCAT',
+      description: 'objection your honour. my bags are down bad and i am filing a motion.',
+      image: 'A tabby in an ill-fitting grey suit behind a courtroom bench, papers everywhere. Flat vector, muted palette, thick outlines. Not photoreal, not a 3D render, no gradients.',
+      angle: 'A cat in a courtroom, filing motions on behalf of bag-holders. Specific enough to be a joke rather than a category entry.',
+      why_now: 'Cat-adjacent is in its third week and the specific variants are clearing tiers at roughly 3x the generic ones.',
+      evidence: 'Animal (token) at 26.4% of $100k+ qualifiers vs 28.1% baseline overall — but the modified names inside that cohort cleared at 11 of 14 this week.',
+      grounding: 'observed',
+      risk: 'Week three is usually where a theme saturates. Being late here is the most common way this fails.',
+    },
+    {
+      name: 'Unemployed Capybara', ticker: 'NOJOB',
+      description: 'no job. no plans. no stress. capybara has already won.',
+      image: 'A capybara lying flat in a hot spring, eyes closed, steam rising. Soft flat illustration, warm palette. No sunglasses, no suit — the joke is that it is doing nothing.',
+      angle: 'Capybara doing nothing, extremely well. Sits between the capybara run and the absurd/self-deprecating register.',
+      why_now: 'Capybara (name) is rising at 9.8% against a 4.1% baseline, and absurd naming has been quietly steady all month.',
+      evidence: 'Capybara (name) 6/61 of $100k+ this window, p=0.021, held four days.',
+      grounding: 'inferred',
+      risk: 'Two themes crossed is a smaller audience than either alone, not a larger one.',
+    },
+    {
+      name: 'Notary', ticker: 'NOTARY',
+      description: 'this document has been witnessed and sealed. nothing else happens here.',
+      image: 'An embossed notary seal on cream paper, photographed straight on. Deliberately dull, institutional, no character, no colour beyond the paper.',
+      angle: 'Deliberately boring institutional-sounding name in a market of loud ones. A contrarian shape bet rather than a theme bet.',
+      why_now: 'Nothing in the data supports this. It is a bet that the naming register itself is what is crowded.',
+      evidence: 'None. Ticker-shape signals show no advantage for any register, and I have not observed a token like this clear a tier.',
+      grounding: 'speculative',
+      risk: 'Most likely simply invisible. Boring names have no reason to spread.',
+    },
+  ],
+  avoid: ['AI (token)', 'Politics (token)', 'Short ticker (≤3 chars)'],
+  grounded_in: {
+    movers: 10, signals: 6,
+    memories: ['playbook/what-worked.md', 'core/whats-working.md'],
+  },
+  input_tokens: 2180, output_tokens: 740,
+}
+
 const routes = [
   // /api/dashboard was retired 2026-09-08 — /api/today replaced it. See
   // app/api/routes/today.py for why the shape changed.
@@ -845,7 +888,28 @@ const routes = [
 
   // -- Signals (the trends alias points at the same data) ------------------
   ['GET', /^\/api\/signals$/, (q) => ({ ...page(TRENDS, q), counts: { rising: 4, new: 2, declining: 2, stable: 5, dead: 1, meaningful: 6 } })],
-  ['GET', /^\/api\/signals\/(.+)$/, (q, [slug]) => TRENDS.find((t) => t.slug === slug) || TRENDS[0]],
+  ['GET', /^\/api\/signals\/(.+)$/, (q, [slug]) => {
+    const t = TRENDS.find((x) => x.slug === slug) || TRENDS[0]
+    return {
+      ...t,
+      series: Array.from({ length: 14 }, (_, n) => ({
+        day: new Date(Date.now() - n * DAY).toISOString().slice(0, 10),
+        count: Math.max(0, t.recent.count - n),
+        total: t.recent.total,
+        freq: Math.max(0, t.recent.frequency - n * 0.006),
+      })),
+      slope: 0.004,
+      example_tokens: TOKENS.filter((x) => x.is_qualified).slice(0, 6).map((x) => ({
+        mint: x.mint, symbol: x.symbol, name: x.name,
+        peak_market_cap: x.peak_market_cap, launchpad: x.launchpad_slug,
+        qualified_at: x.qualified_at,
+      })),
+      related_memories: [
+        { path: 'core/whats-working.md', title: "What's working right now", section: 'core', snippet: '… the cat-adjacent run is still going and the specificity pattern held again …', score: 2.4 },
+        { path: 'notes/burst-launchers.md', title: 'Burst launchers', section: 'notes', snippet: '… they account for a large share of total launches and roughly their fair share of winners …', score: 1.2 },
+      ],
+    }
+  }],
 
   ['GET', /^\/api\/ledger\/stats$/, () => ({
     ledger: { sightings_total: 3120, sightings_24h: 15840, watching: 2140, qualified_total: 668, qualified_24h: 61, creators_total: 18420, creators_tracked: 214, moves_24h: 15840 },
@@ -946,43 +1010,29 @@ const routes = [
     ],
   })],
   ['POST', /^\/api\/ideas$/, (q, m, body) => ({
-    read_of_the_market:
-      'Cat-adjacent names are three weeks into a run and still clearing tiers, but the generic ones are at baseline — what is working is the oddly-specific joke, not the animal. AI agents are saturated and politics has been rolling over for eleven days.',
-    ideas: [
-      {
-        name: 'Cat Lawyer', ticker: 'LAWCAT',
-        angle: 'A cat in a courtroom, filing motions on behalf of bag-holders. Specific enough to be a joke rather than a category entry.',
-        why_now: 'Cat-adjacent is in its third week and the specific variants are clearing tiers at roughly 3x the generic ones.',
-        evidence: 'Animal (token) at 26.4% of $100k+ qualifiers vs 28.1% baseline overall — but the modified names inside that cohort cleared at 11 of 14 this week.',
-        grounding: 'observed',
-        risk: 'Week three is usually where a theme saturates. Being late here is the most common way this fails.',
-      },
-      {
-        name: 'Unemployed Capybara', ticker: 'NOJOB',
-        angle: 'Capybara doing nothing, extremely well. Sits between the capybara run and the absurd/self-deprecating register.',
-        why_now: 'Capybara (name) is rising at 9.8% against a 4.1% baseline, and absurd naming has been quietly steady all month.',
-        evidence: 'Capybara (name) 6/61 of $100k+ this window, p=0.021, held four days.',
-        grounding: 'inferred',
-        risk: 'Two themes crossed is a smaller audience than either alone, not a larger one.',
-      },
-      {
-        name: 'Notary', ticker: 'NOTARY',
-        angle: 'Deliberately boring institutional-sounding name in a market of loud ones. A contrarian shape bet rather than a theme bet.',
-        why_now: 'Nothing in the data supports this. It is a bet that the naming register itself is what is crowded.',
-        evidence: 'None. Ticker-shape signals show no advantage for any register, and I have not observed a token like this clear a tier.',
-        grounding: 'speculative',
-        risk: 'Most likely simply invisible. Boring names have no reason to spread.',
-      },
-    ],
-    avoid: ['AI (token)', 'Politics (token)', 'Short ticker (≤3 chars)'],
+    ...IDEA_SET,
     generated_at: iso(0),
-    grounded_in: {
-      movers: 10, signals: 6,
-      memories: ['playbook/what-worked.md', 'core/whats-working.md'],
-    },
-    input_tokens: 2180, output_tokens: 740,
+    memory_path: 'playbook/ideas-2026-09-08.md',
   })],
-  ['POST', /^\/api\/ideas\/keep$/, () => ({ saved: true, path: 'playbook/ideas-2026-09-08.md' })],
+  ['GET', /^\/api\/ideas\/latest$/, () => ({
+    found: true,
+    ideas: {
+      ...IDEA_SET,
+      id: 1,
+      generated_at: iso(6 * HOUR),
+      day: '2026-09-08',
+      origin: 'daily',
+      brief: null,
+      memory_path: 'playbook/ideas-2026-09-08.md',
+    },
+  })],
+  ['GET', /^\/api\/ideas\/history$/, (q) => ({
+    items: [
+      { ...IDEA_SET, id: 1, generated_at: iso(6 * HOUR), day: '2026-09-08', origin: 'daily', memory_path: 'playbook/ideas-2026-09-08.md' },
+      { ...IDEA_SET, id: 2, generated_at: iso(30 * HOUR), day: '2026-09-07', origin: 'daily', memory_path: 'playbook/ideas-2026-09-07.md' },
+    ],
+    total: 2,
+  })],
 
   ['GET', /^\/api\/system\/pipeline-status$/, () => ({
     state: 'healthy',

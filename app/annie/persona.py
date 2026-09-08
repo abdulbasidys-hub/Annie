@@ -399,8 +399,8 @@ def _personality_override_section(overrides: dict[str, str]) -> str:
 #: Shown in the chat panel before the user's first message.
 EMPTY_STATE_PROMPTS = [
     "What changed today?",
-    "What are the strongest current trends?",
-    "What separates $1M+ tokens from $100k ones?",
-    "Which launchpads are gaining momentum?",
-    "Find me something interesting.",
+    "What's working right now?",
+    "Give me a launch idea.",
+    "Which creators are worth watching?",
+    "What are you unsure about?",
 ]
