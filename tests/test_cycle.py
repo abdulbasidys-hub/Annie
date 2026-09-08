@@ -265,3 +265,92 @@ class TestFullCycle:
         # this is the deterministic half, and it must not depend on the model.
         assert f"Mint{0:040d}" in log.body
         assert "W0" in log.body
+
+
+class TestTheDayBoundary:
+    """What actually broke in production on 2026-09-09.
+
+    The cycle decided "am I the midnight run" by reading the wall clock. The
+    scheduler self-heals a missed slot by firing it late, so a 00:00 slot
+    starting at 01:30 after a redeploy saw hour 1 — and silently skipped the
+    daily log, the launch ideas and the full-day brief for the whole day.
+    Nothing errored. The brief simply never arrived.
+    """
+
+    async def test_the_midnight_slot_does_the_daily_work_however_late_it_fires(
+        self, seeded
+    ):
+        from app.config import get_settings
+        from app.scheduling.jobs import _cycle
+
+        # slot=0 is the midnight run. The wall clock is whatever it is —
+        # that is the point.
+        result = await _cycle(FakeRegistry(EDITS), FakeRepo(), get_settings(), slot=0)
+
+        assert result["day_boundary"] is True
+        assert result["slot"] == 0
+        assert "daily_log" in result, "the daily log was skipped on the midnight slot"
+        assert "ideas" in result, "launch ideas were skipped on the midnight slot"
+
+    async def test_a_six_hourly_slot_does_not_do_the_daily_work(self, seeded):
+        from app.config import get_settings
+        from app.scheduling.jobs import _cycle
+
+        result = await _cycle(FakeRegistry(EDITS), FakeRepo(), get_settings(), slot=12)
+
+        assert result["day_boundary"] is False
+        assert "daily_log" not in result
+        assert "ideas" not in result
+
+    async def test_the_daily_log_is_written_even_with_nothing_qualified(
+        self, isolated_memory
+    ):
+        """A quiet day still gets a log. It is a deterministic record of what
+        happened, and "nothing qualified" is a fact worth recording — an
+        absent file is indistinguishable from a failed job."""
+        from app.config import get_settings
+        from app.memory import bootstrap, service
+        from app.scheduling.jobs import _cycle
+
+        bootstrap._seed_files()
+        result = await _cycle(FakeRegistry(EDITS), FakeRepo(), get_settings(), slot=0)
+
+        assert "daily_log" in result
+        written = service.read(result["daily_log"]["path"])
+        assert written is not None
+        assert "Qualified today" in written.body
+
+    async def test_a_missing_brief_channel_is_reported_not_swallowed(self, seeded):
+        """The other half of "no brief arrived": everything ran and there was
+        nowhere to send it. That has to be legible without reading logs."""
+        from app.config import get_settings
+        from app.scheduling.jobs import _cycle
+
+        result = await _cycle(FakeRegistry(EDITS), FakeRepo(), get_settings(), slot=0)
+
+        assert result["delivered"] is False
+        assert result["reason"], "no reason given for an undelivered brief"
+
+    async def test_the_diagnosis_surfaces_an_undelivered_brief(self, seeded):
+        from app.memory import db, health
+
+        db.kv_set(
+            "scheduler:scheduler_cycle",
+            json.dumps(
+                {
+                    "last_run_at": datetime.now(timezone.utc).isoformat(),
+                    "last_slot": 0,
+                    "last_result": {
+                        "delivered": False,
+                        "reason": "no Discord channel is set up with purpose "
+                                  "'morning_brief' — ask Annie in Discord to create one",
+                    },
+                }
+            ),
+        )
+
+        delivery = health.diagnose()["delivery"]
+
+        assert delivery["status"] == "undelivered"
+        assert "morning_brief" in delivery["detail"]
+        assert "Everything else ran" in delivery["fix"]

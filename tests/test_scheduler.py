@@ -97,7 +97,7 @@ class TestTriggerTiming:
     async def test_fires_when_past_todays_trigger_time_and_not_yet_run(self, repo):
         calls = []
 
-        async def job(registry, repo, settings):
+        async def job(registry, repo, settings, *, slot=None):
             calls.append(1)
             return {"ok": True}
 
@@ -112,7 +112,7 @@ class TestTriggerTiming:
     async def test_does_not_fire_before_todays_trigger_time(self, repo):
         calls = []
 
-        async def job(registry, repo, settings):
+        async def job(registry, repo, settings, *, slot=None):
             calls.append(1)
 
         now = datetime.now(timezone.utc)
@@ -126,7 +126,7 @@ class TestTriggerTiming:
     async def test_never_fires_twice_in_the_same_local_day(self, repo):
         calls = []
 
-        async def job(registry, repo, settings):
+        async def job(registry, repo, settings, *, slot=None):
             calls.append(1)
 
         scheduled = _job(job, hour=0, minute=0)  # always past trigger
@@ -140,7 +140,7 @@ class TestTriggerTiming:
     async def test_disabled_job_never_fires(self, repo):
         calls = []
 
-        async def job(registry, repo, settings):
+        async def job(registry, repo, settings, *, slot=None):
             calls.append(1)
 
         scheduled = _job(job, hour=0, minute=0, enabled=False)
@@ -155,7 +155,7 @@ class TestTriggerTiming:
         # the whole day waiting for a minute that already passed.
         calls = []
 
-        async def job(registry, repo, settings):
+        async def job(registry, repo, settings, *, slot=None):
             calls.append(1)
 
         now = datetime.now(timezone.utc)
@@ -184,7 +184,7 @@ class TestFixedTimesTiming:
     async def test_fires_for_the_current_hour_slot(self, repo):
         calls = []
 
-        async def job(registry, repo, settings):
+        async def job(registry, repo, settings, *, slot=None):
             calls.append(1)
 
         now = datetime.now(timezone.utc)
@@ -197,7 +197,7 @@ class TestFixedTimesTiming:
     async def test_does_not_fire_twice_for_the_same_slot_same_day(self, repo):
         calls = []
 
-        async def job(registry, repo, settings):
+        async def job(registry, repo, settings, *, slot=None):
             calls.append(1)
 
         now = datetime.now(timezone.utc)
@@ -212,7 +212,7 @@ class TestFixedTimesTiming:
     async def test_does_not_fire_before_the_slots_trigger_minute(self, repo):
         calls = []
 
-        async def job(registry, repo, settings):
+        async def job(registry, repo, settings, *, slot=None):
             calls.append(1)
 
         now = datetime.now(timezone.utc)
@@ -229,7 +229,7 @@ class TestFixedTimesTiming:
         entire day; fixed-times tracks per-slot via last_fired."""
         calls = []
 
-        async def job(registry, repo, settings):
+        async def job(registry, repo, settings, *, slot=None):
             calls.append(1)
 
         now = datetime.now(timezone.utc)
@@ -249,7 +249,7 @@ class TestFixedTimesTiming:
     async def test_disabled_fixed_times_job_never_fires(self, repo):
         calls = []
 
-        async def job(registry, repo, settings):
+        async def job(registry, repo, settings, *, slot=None):
             calls.append(1)
 
         now = datetime.now(timezone.utc)
@@ -260,7 +260,7 @@ class TestFixedTimesTiming:
         assert len(calls) == 0
 
     async def test_ensure_defaults_visible_writes_fixed_times_shape(self, repo):
-        async def job(registry, repo, settings):
+        async def job(registry, repo, settings, *, slot=None):
             pass
 
         scheduled = _fixed_times_job(job, hours=[0, 6, 12, 18], timezone_="Africa/Lagos")
@@ -292,7 +292,7 @@ class TestIntervalTiming:
     async def test_fires_immediately_when_never_run(self, repo):
         calls = []
 
-        async def job(registry, repo, settings):
+        async def job(registry, repo, settings, *, slot=None):
             calls.append(1)
 
         scheduled = _interval_job(job, minutes=15)
@@ -304,7 +304,7 @@ class TestIntervalTiming:
     async def test_does_not_fire_again_before_interval_elapses(self, repo):
         calls = []
 
-        async def job(registry, repo, settings):
+        async def job(registry, repo, settings, *, slot=None):
             calls.append(1)
 
         scheduled = _interval_job(job, minutes=15)
@@ -318,7 +318,7 @@ class TestIntervalTiming:
     async def test_fires_again_once_interval_has_elapsed(self, repo):
         calls = []
 
-        async def job(registry, repo, settings):
+        async def job(registry, repo, settings, *, slot=None):
             calls.append(1)
 
         scheduled = _interval_job(job, minutes=15)
@@ -334,7 +334,7 @@ class TestIntervalTiming:
     async def test_disabled_interval_job_never_fires(self, repo):
         calls = []
 
-        async def job(registry, repo, settings):
+        async def job(registry, repo, settings, *, slot=None):
             calls.append(1)
 
         scheduled = _interval_job(job, minutes=15, enabled=False)
@@ -344,7 +344,7 @@ class TestIntervalTiming:
         assert len(calls) == 0
 
     async def test_ensure_defaults_visible_writes_interval_shape(self, repo):
-        async def job(registry, repo, settings):
+        async def job(registry, repo, settings, *, slot=None):
             pass
 
         scheduled = _interval_job(job, minutes=10)
@@ -361,7 +361,7 @@ class TestRunState:
     """Run bookkeeping now lives in SQLite, not in the Firestore setting."""
 
     async def test_run_records_last_run_date_and_result(self, repo):
-        async def job(registry, repo, settings):
+        async def job(registry, repo, settings, *, slot=None):
             return {"evaluated": 3}
 
         scheduled = _job(job, hour=0, minute=0)
@@ -373,7 +373,7 @@ class TestRunState:
         assert state["last_run_date"] == datetime.now(timezone.utc).date().isoformat()
 
     async def test_a_raising_job_is_recorded_as_failed_not_crashed(self, repo):
-        async def job(registry, repo, settings):
+        async def job(registry, repo, settings, *, slot=None):
             raise RuntimeError("boom")
 
         scheduled = _job(job, hour=0, minute=0)
@@ -394,7 +394,7 @@ class TestRunState:
         20,000/day plan cap. Nothing about a run may touch the repo now.
         """
 
-        async def job(registry, repo, settings):
+        async def job(registry, repo, settings, *, slot=None):
             return {"ok": True}
 
         scheduled = _interval_job(job, minutes=10)
@@ -413,7 +413,7 @@ class TestRunState:
         indefinitely.
         """
 
-        async def job(registry, repo, settings):
+        async def job(registry, repo, settings, *, slot=None):
             return {"ok": True}
 
         scheduled = _interval_job(job, minutes=15)
@@ -431,7 +431,7 @@ class TestRunState:
         assert "last_run_at" not in config
 
     async def test_ensure_defaults_visible_writes_config_before_first_run(self, repo):
-        async def job(registry, repo, settings):
+        async def job(registry, repo, settings, *, slot=None):
             pass
 
         scheduled = _job(job, hour=5, minute=30, timezone_="America/New_York")
@@ -446,7 +446,7 @@ class TestRunState:
         assert setting.value["timezone"] == "America/New_York"
 
     async def test_ensure_defaults_visible_does_not_overwrite_existing_config(self, repo):
-        async def job(registry, repo, settings):
+        async def job(registry, repo, settings, *, slot=None):
             pass
 
         scheduled = _job(job, hour=5, minute=30)
@@ -458,3 +458,74 @@ class TestRunState:
         setting = await repo.get_setting("scheduler_test_job")
         assert setting.value["hour"] == 9  # operator's existing config preserved, not clobbered
         assert setting.value["enabled"] is False
+
+
+class TestSlotIsToldNotGuessed:
+    """The bug that lost a day's brief in production (2026-09-09).
+
+    The scheduler deliberately self-heals a missed slot by firing it late.
+    A job that then works out "am I the midnight run" from the wall clock
+    gets the wrong answer — a 00:00 slot firing at 01:30 after a redeploy
+    sees hour 1, and silently skips the daily log, the launch ideas and the
+    full-day brief for that entire day.
+    """
+
+    async def test_the_fired_slot_is_passed_to_the_job(self, repo):
+        seen = []
+
+        async def job(registry, repo, settings, *, slot=None):
+            seen.append(slot)
+
+        now = datetime.now(timezone.utc)
+        scheduled = _fixed_times_job(job, hours=[now.hour])
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[scheduled])
+
+        await scheduler._maybe_run(scheduled)
+
+        assert seen == [now.hour], "the job was not told which slot it was running for"
+
+    async def test_a_late_slot_reports_the_slot_not_the_current_hour(self, repo):
+        """The heart of it. An earlier slot firing now must identify as that
+        slot, never as whatever hour it happens to be."""
+        seen = []
+
+        async def job(registry, repo, settings, *, slot=None):
+            seen.append(slot)
+
+        now = datetime.now(timezone.utc)
+        earlier = (now.hour - 2) % 24
+        if earlier >= now.hour:
+            pytest.skip("degenerate near midnight — no earlier slot exists today")
+
+        scheduled = _fixed_times_job(job, hours=[earlier])
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[scheduled])
+
+        await scheduler._maybe_run(scheduled)
+
+        assert seen == [earlier]
+        assert seen[0] != now.hour, "a late slot reported itself as the current hour"
+
+    async def test_the_slot_is_recorded_for_inspection(self, repo):
+        async def job(registry, repo, settings, *, slot=None):
+            return {"ok": True}
+
+        now = datetime.now(timezone.utc)
+        scheduled = _fixed_times_job(job, hours=[now.hour])
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[scheduled])
+
+        await scheduler._maybe_run(scheduled)
+
+        assert job_status("scheduler_test_fixed_job")["last_slot"] == now.hour
+
+    async def test_non_slot_modes_pass_none(self, repo):
+        seen = []
+
+        async def job(registry, repo, settings, *, slot=None):
+            seen.append(slot)
+
+        scheduled = _job(job, hour=0, minute=0)  # daily mode — no slot concept
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[scheduled])
+
+        await scheduler._maybe_run(scheduled)
+
+        assert seen == [None]

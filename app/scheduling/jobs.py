@@ -46,7 +46,9 @@ from app.scheduling.scheduler import ScheduledJob
 log = structlog.get_logger(__name__)
 
 
-async def _watch(registry: ProviderRegistry, repo: FirestoreRepo, settings) -> dict[str, Any]:
+async def _watch(
+    registry: ProviderRegistry, repo: FirestoreRepo, settings, *, slot: int | None = None
+) -> dict[str, Any]:
     """Re-price the watchlist. Batched, local, no Firestore."""
     from app.pipeline.watch import run_watch
 
@@ -54,7 +56,13 @@ async def _watch(registry: ProviderRegistry, repo: FirestoreRepo, settings) -> d
     return run.to_dict()
 
 
-async def _cycle(registry: ProviderRegistry, repo: FirestoreRepo, settings) -> dict[str, Any]:
+async def _cycle(
+    registry: ProviderRegistry,
+    repo: FirestoreRepo,
+    settings,
+    *,
+    slot: int | None = None,
+) -> dict[str, Any]:
     """One full thinking cycle: observe, learn, tidy, back up.
 
     Ordered so that the paid step happens against the freshest free work,
@@ -66,6 +74,19 @@ async def _cycle(registry: ProviderRegistry, repo: FirestoreRepo, settings) -> d
     learning from running against the digest, and a Firestore snapshot
     failing at the end must not make the whole cycle look failed when the
     memory on disk is already correct.
+
+    ``slot`` is which configured hour this run is *for*, passed down by the
+    scheduler. It is not the current hour, and the difference is the whole
+    point: the scheduler self-heals a missed slot by firing it late, so a
+    midnight run that actually starts at 01:30 after a redeploy is still the
+    midnight run.
+
+    This used to read ``datetime.now(Africa/Lagos).hour == 0`` instead, with
+    a comment claiming that "stays correct even if a slot is ever missed and
+    fires late". It is exactly backwards — a late midnight slot sees hour 1
+    and silently skips the daily log, the launch ideas and the full-day
+    brief for that entire day. Confirmed in production 2026-09-09: a deploy
+    near midnight, and the day's brief never arrived.
     """
     from zoneinfo import ZoneInfo
 
@@ -74,8 +95,17 @@ async def _cycle(registry: ProviderRegistry, repo: FirestoreRepo, settings) -> d
     from app.pipeline.watch import enrich_qualified, refresh_tracked_creators
 
     now = datetime.now(timezone.utc)
-    is_day_boundary = datetime.now(ZoneInfo("Africa/Lagos")).hour == 0
-    result: dict[str, Any] = {"at": now.isoformat(timespec="seconds"), "day_boundary": is_day_boundary}
+    # Told, not guessed. Falls back to the wall clock only for a manual run,
+    # which has no slot — see run_cycle_now's `full_day` for forcing it.
+    is_day_boundary = (
+        slot == 0 if slot is not None
+        else datetime.now(ZoneInfo("Africa/Lagos")).hour == 0
+    )
+    result: dict[str, Any] = {
+        "at": now.isoformat(timespec="seconds"),
+        "slot": slot,
+        "day_boundary": is_day_boundary,
+    }
 
     async def stage(name: str, coro) -> None:
         try:
@@ -153,11 +183,26 @@ async def _deliver_brief(
     on request) sets one up — that is reported, not treated as a failure.
     """
     if not settings.is_available("discord"):
+        log.warning("brief_not_delivered", reason="discord not configured")
         return {"delivered": False, "reason": "discord not configured"}
 
     channel = await repo.get_discord_channel_by_purpose("morning_brief")
     if channel is None:
-        return {"delivered": False, "reason": "no channel configured for morning_brief"}
+        # Logged at warning, not info. This is the single most common reason
+        # a brief "never arrives": everything ran correctly and there was
+        # simply nowhere to send it. Silently returning a reason nobody reads
+        # made a working system look broken.
+        log.warning(
+            "brief_not_delivered",
+            reason="no Discord channel has purpose 'morning_brief'",
+            fix="ask Annie in Discord to create one, or set the purpose on an "
+                "existing channel",
+        )
+        return {
+            "delivered": False,
+            "reason": "no Discord channel is set up with purpose 'morning_brief' — "
+                      "ask Annie in Discord to create one",
+        }
 
     from app.bots.discord_bot import send_channel_message
     from app.memory import ledger
@@ -197,7 +242,9 @@ async def _deliver_brief(
     return {"delivered": delivered, "channel_id": channel.channel_id}
 
 
-async def _weekly_rollup(registry: ProviderRegistry, repo: FirestoreRepo, settings) -> dict[str, Any]:
+async def _weekly_rollup(
+    registry: ProviderRegistry, repo: FirestoreRepo, settings, *, slot: int | None = None
+) -> dict[str, Any]:
     from app.memory import snapshot
     from app.memory.rollup import write_weekly_summary
 
@@ -206,7 +253,9 @@ async def _weekly_rollup(registry: ProviderRegistry, repo: FirestoreRepo, settin
     return result
 
 
-async def _monthly_rollup(registry: ProviderRegistry, repo: FirestoreRepo, settings) -> dict[str, Any]:
+async def _monthly_rollup(
+    registry: ProviderRegistry, repo: FirestoreRepo, settings, *, slot: int | None = None
+) -> dict[str, Any]:
     from app.memory import snapshot
     from app.memory.rollup import prune_old_dailies, write_monthly_summary
 
@@ -216,7 +265,9 @@ async def _monthly_rollup(registry: ProviderRegistry, repo: FirestoreRepo, setti
     return result
 
 
-async def _housekeeping(registry: ProviderRegistry, repo: FirestoreRepo, settings) -> dict[str, Any]:
+async def _housekeeping(
+    registry: ProviderRegistry, repo: FirestoreRepo, settings, *, slot: int | None = None
+) -> dict[str, Any]:
     """Forgetting, on a schedule. The job that keeps this from becoming a database.
 
     Everything here is local and free, which is why it can afford to run

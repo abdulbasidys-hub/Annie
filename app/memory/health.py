@@ -86,8 +86,10 @@ def diagnose() -> dict[str, Any]:
     last_sighting_age = _age_hours(stats.get("last_sighting_at"))
 
     jobs = {j.name: job_status(j.settings_key) for j in JOBS}
-    last_cycle = jobs.get("cycle", {}).get("last_run_at")
+    cycle_state = jobs.get("cycle", {})
+    last_cycle = cycle_state.get("last_run_at")
     last_watch = jobs.get("watch", {}).get("last_run_at")
+    last_result = cycle_state.get("last_result") or {}
 
     ever_seen = stats["sightings_total"] > 0 or stats["creators_total"] > 0
     # Only the seeded placeholders means she has not written anything of her
@@ -135,8 +137,33 @@ def diagnose() -> dict[str, Any]:
             "hours_since_cycle": (
                 round(_age_hours(last_cycle), 1) if _age_hours(last_cycle) is not None else None
             ),
+            "last_cycle_slot": cycle_state.get("last_slot"),
             "last_watch_at": last_watch,
         },
+        # The most common reason a brief "never arrives" is that everything
+        # ran and there was nowhere to send it. Reported as its own state so
+        # it does not need reading out of a log.
+        "delivery": _delivery_state(last_result),
+    }
+
+
+def _delivery_state(last_result: dict[str, Any]) -> dict[str, Any]:
+    """Whether the last cycle's brief actually went anywhere."""
+    if not last_result:
+        return {"status": "unknown", "detail": "no cycle has completed yet"}
+    if last_result.get("delivered"):
+        return {"status": "delivered", "detail": None}
+    reason = last_result.get("reason") or "not delivered"
+    return {
+        "status": "undelivered",
+        "detail": reason,
+        "fix": (
+            "Ask Annie in Discord to create a channel for the morning brief, or "
+            "set that purpose on an existing one. Everything else ran — the brief "
+            "was written, it just had nowhere to go."
+            if "channel" in reason
+            else "Set DISCORD_BOT_TOKEN to have briefs delivered."
+        ),
     }
 
 

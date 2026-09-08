@@ -605,7 +605,12 @@ const PIPELINE_RESULTS = {
   watch: { checked: 900, priced: 214, unpriced: 686, qualified_count: 2, newly_qualified: [], new_peaks: 31, errors: [] },
   signals: { cohorts: 3, evaluated: 54, created: 2, updated: 52, promoted: ['token-theme-animal-250k'], faded: [] },
   narratives: { qualified_tokens_scanned: 668, seeded_narratives_updated: 9, emergent_narratives_found: 4 },
-  cycle: { learning: { headline: 'Cat-themed names keep outperforming.' } },
+  cycle: {
+    slot: 0, day_boundary: true, delivered: true,
+    learning: { headline: 'Cat-themed names keep outperforming.', applied: [{ path: 'core/whats-working.md', op: 'rewrite' }] },
+    daily_log: { path: 'daily/2026-09-08.md', qualified: 61 },
+    ideas: { generated: 3, path: 'playbook/ideas-2026-09-08.md' },
+  },
 }
 
 const IDEA_SET = {
@@ -1042,7 +1047,8 @@ const routes = [
     ledger: { held: 3120, seen_24h: 15840, qualified_total: 668, creators_seen: 18420, creators_tracked: 214 },
     notebook: { files: MEMORY_FILES.length, only_seeded_placeholders: false },
     durability: { root: '/data/memory', configured: true, looks_like_volume: true, writable: true, note: '' },
-    jobs: { last_cycle_at: iso(2 * HOUR), hours_since_cycle: 2, last_watch_at: iso(4 * 60_000) },
+    jobs: { last_cycle_at: iso(2 * HOUR), hours_since_cycle: 2, last_cycle_slot: 0, last_watch_at: iso(4 * 60_000) },
+    delivery: { status: 'delivered', detail: null },
   })],
 
   ['GET', /^\/api\/system\/cost$/, () => ({

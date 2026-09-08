@@ -210,7 +210,8 @@ export const api = {
   runNarratives: () => request('POST', '/api/system/run/narratives'),
   // The only manual trigger that spends money: one bounded model call,
   // skipped entirely if the window was quiet.
-  runCycle: () => request('POST', '/api/system/run/cycle'),
+  runCycle: (fullDay) =>
+    request('POST', '/api/system/run/cycle', { params: { full_day: fullDay || undefined } }),
   cost: () => request('GET', '/api/system/cost'),
   pipelineStatus: () => request('GET', '/api/system/pipeline-status'),
   pipelineRun: (id) => request('GET', `/api/system/pipeline-runs/${id}`),

@@ -69,7 +69,12 @@ CHECK_INTERVAL_SECONDS = 60
 #: count by 5x.
 CONFIG_CACHE_SECONDS = 300
 
-JobFn = Callable[[ProviderRegistry, FirestoreRepo, Settings], Awaitable[dict[str, Any]]]
+#: A job receives the registry, repo and settings, plus ``slot`` — which of
+#: its configured fixed-times hours this run is *for*. That is not always the
+#: current hour: the scheduler deliberately self-heals a missed slot by firing
+#: it late, so a job that needs to know "am I the midnight run" must be told,
+#: never infer it from the wall clock. See ``_run_job``.
+JobFn = Callable[..., Awaitable[dict[str, Any]]]
 
 
 @dataclass(slots=True)
@@ -277,7 +282,9 @@ class Scheduler:
                 if now_local < _trigger_at(now_local, hour, config.get("minute", 0)):
                     continue
                 last_fired[str(hour)] = today
-                await self._run_job(job, state, extra={"last_fired": last_fired})
+                await self._run_job(
+                    job, state, extra={"last_fired": last_fired}, slot=hour
+                )
                 return  # one slot per tick; the next tick picks up any other due slot
             return
 
@@ -301,7 +308,12 @@ class Scheduler:
         await self._run_job(job, state, extra={"last_run_date": today})
 
     async def _run_job(
-        self, job: ScheduledJob, state: _RunState, *, extra: dict[str, Any] | None = None
+        self,
+        job: ScheduledJob,
+        state: _RunState,
+        *,
+        extra: dict[str, Any] | None = None,
+        slot: int | None = None,
     ) -> None:
         """Record the start, run, record the result — all locally.
 
@@ -315,12 +327,33 @@ class Scheduler:
         even a mid-run kill leaves an accurate ``last_run_at`` behind.
         """
         started = datetime.now(timezone.utc)
-        state.save(last_run_at=started.isoformat(), **(extra or {}))
+        state.save(last_run_at=started.isoformat(), last_slot=slot, **(extra or {}))
         self._in_flight.add(job.name)
-        log.info("scheduled_job_starting", job=job.name)
+
+        # A slot firing well after its hour is the self-healing path working,
+        # not a fault — but it is worth seeing in the logs, because it is
+        # also the condition under which a job that guessed its slot from the
+        # wall clock would silently do the wrong work.
+        late_by = None
+        if slot is not None:
+            tz = _safe_zone(
+                (await self._config_for(job)).get("timezone", "UTC"), job.name
+            )
+            local = datetime.now(tz)
+            late_by = (local.hour - slot) % 24
+            if late_by:
+                log.warning(
+                    "scheduled_slot_fired_late",
+                    job=job.name,
+                    slot=slot,
+                    local_hour=local.hour,
+                    hours_late=late_by,
+                )
+
+        log.info("scheduled_job_starting", job=job.name, slot=slot)
 
         try:
-            result = await job.run(self._registry, self._repo, self._settings)
+            result = await job.run(self._registry, self._repo, self._settings, slot=slot)
             log.info("scheduled_job_complete", job=job.name, result=result)
         except Exception:
             log.error("scheduled_job_failed", job=job.name, exc_info=True)
@@ -349,6 +382,7 @@ class Scheduler:
                     "settings_key": job.settings_key,
                     "running": job.name in self._in_flight,
                     "last_run_at": state.get("last_run_at"),
+                    "last_slot": state.get("last_slot"),
                     "last_finished_at": state.get("last_finished_at"),
                     "last_duration_seconds": state.get("last_duration_seconds"),
                     "last_result": state.get("last_result"),

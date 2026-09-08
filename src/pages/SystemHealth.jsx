@@ -183,6 +183,32 @@ function Pipeline({ onRan }) {
             `${r.emergent_narratives_found ?? 0} emergent narrative(s) found.`
           }
         />
+        <PipelineAction
+          label="5. Full cycle"
+          hint="Everything above plus the thinking: build the digest, one model call to update her notebook, refresh dossiers, snapshot. This is the only button here that spends money."
+          stage="cycle"
+          onTrigger={() => api.runCycle(false)}
+          onRan={onRan}
+          formatResult={(r) =>
+            (r.learning?.headline || 'Quiet window — no model call made.') +
+            (r.learning?.applied?.length
+              ? ` ${r.learning.applied.length} memory file(s) updated.`
+              : '') +
+            (r.delivered === false && r.reason ? ` Not delivered: ${r.reason}` : '')
+          }
+        />
+        <PipelineAction
+          label="5b. Full cycle, as midnight"
+          hint="The same, run as the 00:00 slot — writes the daily log, generates the day's three launch ideas, and sends the full-day brief. Use this to recover a day whose midnight run was missed."
+          stage="cycle"
+          onTrigger={() => api.runCycle(true)}
+          onRan={onRan}
+          formatResult={(r) =>
+            `Daily log: ${r.daily_log?.path ?? 'not written'}. ` +
+            `Ideas: ${r.ideas?.generated ?? r.ideas?.skipped ?? 'none'}. ` +
+            (r.delivered ? 'Brief delivered.' : `Not delivered: ${r.reason ?? 'unknown'}`)
+          }
+        />
       </div>
     </Panel>
   )
@@ -216,15 +242,19 @@ function Pipeline({ onRan }) {
 function PipelineStatus() {
   const state = useApi(() => api.pipelineStatus(), [])
   const d = state.data
-  if (!d || d.state === 'healthy') return null
+  // An undelivered brief happens on a perfectly healthy pipeline — everything
+  // ran and there was nowhere to send it — so it has to keep the panel open
+  // even when the stream itself is fine.
+  const undelivered = d?.delivery?.status === 'undelivered'
+  if (!d || (d.state === 'healthy' && !undelivered)) return null
 
-  const tone = d.state === 'warming_up' ? 'new' : 'alert'
+  const tone = d.state === 'warming_up' ? 'new' : d.state === 'healthy' ? 'new' : 'alert'
   return (
     <Panel
-      title="Nothing is coming through"
+      title={d.state === 'healthy' ? 'The brief is not being delivered' : 'Nothing is coming through'}
       meta={<Badge status={tone}>{d.state.replace(/_/g, ' ')}</Badge>}
     >
-      <p style={{ margin: '0 0 12px' }}>{d.headline}</p>
+      {d.state !== 'healthy' && <p style={{ margin: '0 0 12px' }}>{d.headline}</p>}
 
       {d.what_to_check?.length > 0 && (
         <div className="stack" style={{ gap: 6 }}>
@@ -238,6 +268,13 @@ function PipelineStatus() {
             </div>
           ))}
         </div>
+      )}
+
+      {d.delivery?.status === 'undelivered' && (
+        <p className="modal__warn" style={{ marginTop: 12 }}>
+          <strong>The last brief was written but not sent.</strong> {d.delivery.detail}
+          {d.delivery.fix ? ` ${d.delivery.fix}` : ''}
+        </p>
       )}
 
       <dl className="deflist" style={{ marginTop: 'var(--space-4)' }}>

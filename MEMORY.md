@@ -310,7 +310,25 @@ accident:
 
 ---
 
-## One bug worth remembering
+## Two bugs worth remembering
+
+### A late slot lost the whole day
+
+The cycle worked out "am I the midnight run" by reading the wall clock:
+`datetime.now(Africa/Lagos).hour == 0`. The scheduler deliberately self-heals
+a missed slot by firing it late — so a 00:00 slot that actually starts at
+01:30 after a redeploy saw hour 1, and silently skipped the daily log, the
+launch ideas and the full-day brief for that entire day.
+
+Nothing errored. The cycle ran, the notebook was updated, and the brief just
+never arrived. The old comment claimed the wall-clock check "stays correct
+even if a slot is ever missed and fires late", which is exactly backwards.
+
+The scheduler now passes the fired slot down to the job, so the midnight run
+identifies as the midnight run whenever it happens to start. Recovering a
+missed day: System Health → *Full cycle, as midnight*.
+
+### A window query dropped the newest row
 
 Window queries compared timestamps as `>= start AND < end`. The clock has
 finite resolution (coarse on Windows), so a token qualified moments before a
