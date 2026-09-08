@@ -1,49 +1,50 @@
-"""In-process job scheduler — daily, fixed-multiple-times-daily, and frequent
-interval jobs.
+"""In-process job scheduler — interval, daily, fixed-times, weekly and monthly.
 
-No external queue, cron, or library — see README's former "no scheduler is
-wired up" gap this closes. Follows the exact background-task pattern
-``app/main.py``'s ``_bot_tasks`` already uses: a loop started in ``lifespan``,
+No external queue, cron, or library. Follows the same background-task pattern
+``app/main.py``'s ``_bot_tasks`` uses: a loop started in ``lifespan``,
 cancelled cleanly at shutdown, not a separate process.
 
-Each job's trigger is operator-configurable through the existing ``Setting``
-mechanism (System Health / Settings page, ``PATCH /api/system/settings/{key}``)
-rather than hardcoded or requiring a redeploy (see ``src/pages/Settings.jsx``).
-Three modes, picked by which fields a :class:`ScheduledJob` sets:
+Each job's trigger is operator-configurable through the ``Setting`` mechanism
+(Settings page, ``PATCH /api/system/settings/{key}``) rather than hardcoded.
+Five modes, picked by which fields a :class:`ScheduledJob` sets:
 
-- **Daily** (``default_hour``/``default_minute``/``default_timezone``): fires
-  once per calendar day in its own configured timezone, the first tick after
-  "today hasn't run yet, and local time is past the trigger minute". Setting
-  value shape: ``{"enabled", "hour", "minute", "timezone", "last_run_date"}``.
-- **Fixed times** (``default_hours``, a list): fires once per listed hour
-  per calendar day, same "hasn't fired at this slot today yet" rule applied
-  per slot rather than once for the whole job — added 2026-08-25 because an
-  operator explicitly wanted clock-anchored runs ("12am Nigerian time, then
-  every 6 hours from there, fixed not flexible"), which interval-mode
-  structurally cannot give: interval-mode's "N minutes since last run" drifts
-  with whenever the process happened to start or last restart, never lands
-  on a chosen wall-clock time. Setting value shape: ``{"enabled", "hours",
-  "minute", "timezone", "last_fired": {"<hour>": "<date last fired>"}}``.
-- **Interval** (``default_interval_minutes``): fires whenever at least that
-  many minutes have passed since its last run (or immediately, if it has
-  never run). This exists because a once-a-day cadence is structurally wrong
-  for anything reacting to a market that moves in minutes — the qualification
-  job was daily-only until 2026-08-25, when real production data showed
-  16,602 of 16,774 discovered tokens had *never* been evaluated because
-  everything discovered after the one daily run sat unchecked for up to 24h,
-  long past when a typical Pump.fun pump had already risen and reversed. See
-  ``app/scheduling/jobs.py``'s ``frequent_qualification``. Setting value
-  shape: ``{"enabled", "interval_minutes", "last_run_at"}``.
+- **Interval** (``default_interval_minutes``): fires whenever that many
+  minutes have passed since its last run. A once-a-day cadence is
+  structurally wrong for anything reacting to a market that moves in
+  minutes.
+- **Daily** (``default_hour``/``default_minute``/``default_timezone``): once
+  per calendar day in its own timezone.
+- **Fixed times** (``default_hours``, a list): once per listed hour per day.
+  Interval mode structurally cannot give a chosen wall-clock time — "N
+  minutes since last run" drifts with whenever the process last restarted —
+  which is why this mode exists (§ 2026-08-25, "fixed not flexible").
+- **Weekly** (``default_weekday``, 0=Monday): daily rules, plus a weekday gate.
+- **Monthly** (``default_day_of_month``): daily rules, plus a day gate, with
+  the day clamped to the month's length so 31 still fires in February.
+
+**Where run state lives (changed 2026-09-08).** Config — enabled, hour,
+interval, timezone — stays in Firestore, because that is what the operator
+edits and it must survive a redeploy. Run *state* — ``last_run_at``,
+``last_fired``, ``last_result`` — moved to local SQLite. The reason is
+arithmetic: the previous version wrote the whole setting document twice per
+job run and read it once per job per 60-second tick. With a job on a
+10-minute interval that is ~288 Firestore writes and ~8,600 reads a day for
+pure bookkeeping, on a plan allowing 20,000 writes total. Run state is
+per-deployment and reconstructible, so SQLite is simply where it belongs;
+config is read through a TTL cache (:data:`CONFIG_CACHE_SECONDS`) so an
+operator's edit still takes effect within a few minutes without a read on
+every tick.
 
 Checking every 60 seconds rather than sleeping until the exact instant means
 a missed process restart self-heals on the next tick instead of silently
-skipping a run, and a daily (or fixed-times) job can never fire twice for
-the same slot on the same local day.
+skipping a run, and a daily job can never fire twice for the same local day.
 """
 
 from __future__ import annotations
 
 import asyncio
+import calendar
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
@@ -53,25 +54,29 @@ import structlog
 
 from app.config import Settings
 from app.db.repo import FirestoreRepo
+from app.memory import db
 from app.providers.registry import ProviderRegistry
 
 log = structlog.get_logger(__name__)
 
-#: How often the loop wakes to check whether any job is due. A job's own
-#: configured hour/minute/interval controls *when* it fires, not this — this
-#: only bounds how late a fire can be relative to its target.
+#: How often the loop wakes to check whether any job is due.
 CHECK_INTERVAL_SECONDS = 60
+
+#: How long a job's Firestore-held config is reused before being re-read.
+#: The trade is "an operator's schedule edit takes up to this long to take
+#: effect" against "one Firestore read per job per minute, forever". Five
+#: minutes is comfortably fast for a scheduling change and cuts the read
+#: count by 5x.
+CONFIG_CACHE_SECONDS = 300
 
 JobFn = Callable[[ProviderRegistry, FirestoreRepo, Settings], Awaitable[dict[str, Any]]]
 
 
 @dataclass(slots=True)
 class ScheduledJob:
-    """One scheduled job — daily, fixed-times, or interval; see the module
-    docstring. Set exactly one of ``default_interval_minutes`` (interval),
-    ``default_hours`` (fixed times), or neither (falls back to the single-hour
-    daily mode using ``default_hour``/``default_minute``).
-    """
+    """One scheduled job. Set exactly one of ``default_interval_minutes``,
+    ``default_hours``, ``default_weekday``, ``default_day_of_month``, or none
+    of them for plain daily mode."""
 
     name: str
     settings_key: str
@@ -82,6 +87,50 @@ class ScheduledJob:
     default_enabled: bool = True
     default_interval_minutes: int | None = None
     default_hours: list[int] | None = None
+    #: 0 = Monday. Weekly jobs also honour ``default_hour``/``default_minute``.
+    default_weekday: int | None = None
+    #: 1-31, clamped to the month's actual length.
+    default_day_of_month: int | None = None
+
+    @property
+    def mode(self) -> str:
+        if self.default_interval_minutes is not None:
+            return "interval"
+        if self.default_hours is not None:
+            return "fixed_times"
+        if self.default_weekday is not None:
+            return "weekly"
+        if self.default_day_of_month is not None:
+            return "monthly"
+        return "daily"
+
+
+class _RunState:
+    """Per-job run bookkeeping, in local SQLite.
+
+    Deliberately not Firestore. This is high-frequency, single-deployment,
+    fully reconstructible state — the worst case for losing it is that a job
+    runs once more than it strictly needed to after a volume wipe.
+    """
+
+    def __init__(self, key: str) -> None:
+        self._key = f"scheduler:{key}"
+
+    def load(self) -> dict[str, Any]:
+        raw = db.kv_get(self._key)
+        if not raw:
+            return {}
+        try:
+            value = json.loads(raw)
+            return value if isinstance(value, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+
+    def save(self, **updates: Any) -> dict[str, Any]:
+        state = self.load()
+        state.update(updates)
+        db.kv_set(self._key, json.dumps(state, default=str))
+        return state
 
 
 class Scheduler:
@@ -98,24 +147,22 @@ class Scheduler:
         self._settings = settings
         self._jobs = jobs
         self._stopped = False
+        self._config_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        #: Jobs currently executing. The previous version relied on writing
+        #: last_run_at before the body ran; that is still done, but an
+        #: in-process guard is both cheaper and stricter — it makes a second
+        #: concurrent run of the same job impossible rather than unlikely.
+        self._in_flight: set[str] = set()
 
     async def run(self) -> None:
-        log.info("scheduler_started", jobs=[j.name for j in self._jobs])
+        log.info("scheduler_started", jobs=[(j.name, j.mode) for j in self._jobs])
         await self._ensure_defaults_visible()
         while not self._stopped:
             for job in self._jobs:
-                # Fire-and-forget, not awaited inline: this loop used to
-                # await each job's _maybe_run in turn, which meant a single
-                # long-running job (full_pipeline_and_brief's full-backlog
-                # drain can take hours against a large enough backlog)
-                # blocked every *other* job — including frequent_qualification,
-                # whose entire purpose is running every 10 minutes — from
-                # even being checked until it finished. Confirmed as a real
-                # risk 2026-08-25 once the backlog grew past 50,000 tokens.
-                # last_run_at is written before the job body runs (see
-                # _run_job), so a job already in flight correctly appears
-                # "recently started" to the next tick's check regardless of
-                # how long it's still running for.
+                # Fire-and-forget rather than awaited in turn: a single long
+                # job used to block every other job from even being checked
+                # until it finished — including the 10-minute one whose whole
+                # purpose is frequency.
                 asyncio.create_task(self._maybe_run_safe(job))
             await asyncio.sleep(CHECK_INTERVAL_SECONDS)
 
@@ -123,169 +170,154 @@ class Scheduler:
         try:
             await self._maybe_run(job)
         except Exception:
-            # A bug in one job's *scheduling check* (not the job itself,
-            # which already has its own try/except in _run_job) must not
-            # take every other job down with it.
+            # A bug in one job's scheduling *check* must not take the others
+            # down. The job body has its own guard in _run_job.
             log.error("scheduler_tick_failed", job=job.name, exc_info=True)
 
     def stop(self) -> None:
         self._stopped = True
 
+    # -- config ---------------------------------------------------------------
+
+    def _defaults(self, job: ScheduledJob) -> dict[str, Any]:
+        base: dict[str, Any] = {"enabled": job.default_enabled, "mode": job.mode}
+        if job.mode == "interval":
+            base["interval_minutes"] = job.default_interval_minutes
+            return base
+        base.update(
+            {"minute": job.default_minute, "timezone": job.default_timezone}
+        )
+        if job.mode == "fixed_times":
+            base["hours"] = list(job.default_hours or [])
+        else:
+            base["hour"] = job.default_hour
+        if job.mode == "weekly":
+            base["weekday"] = job.default_weekday
+        if job.mode == "monthly":
+            base["day_of_month"] = job.default_day_of_month
+        return base
+
     async def _ensure_defaults_visible(self) -> None:
-        """Write each job's default config the first time it's seen, so it
-        shows up as an editable row on the Settings page (and can be turned
-        off or rescheduled) before it has ever actually run — not only
-        after, which is when `_run_job` would otherwise first write it."""
+        """Write each job's default config the first time it is seen, so it
+        appears as an editable row on the Settings page before it has ever
+        run rather than only after."""
+        descriptions = {
+            "interval": "Edit interval_minutes/enabled as JSON.",
+            "fixed_times": "Edit hours (a list)/minute/timezone/enabled as JSON.",
+            "daily": "Edit hour/minute/timezone/enabled as JSON.",
+            "weekly": "Edit weekday (0=Monday)/hour/minute/timezone/enabled as JSON.",
+            "monthly": "Edit day_of_month/hour/minute/timezone/enabled as JSON.",
+        }
         for job in self._jobs:
-            existing = await self._repo.get_setting(job.settings_key)
-            if existing is None:
-                if job.default_interval_minutes is not None:
-                    value: dict[str, Any] = {
-                        "enabled": job.default_enabled,
-                        "interval_minutes": job.default_interval_minutes,
-                        "last_run_at": None,
-                        "last_result": None,
-                    }
-                    desc = (
-                        f"Scheduled job '{job.name}'. Edit interval_minutes/enabled as JSON "
-                        f"to change how often it runs — no redeploy needed."
-                    )
-                elif job.default_hours is not None:
-                    value = {
-                        "enabled": job.default_enabled,
-                        "hours": list(job.default_hours),
-                        "minute": job.default_minute,
-                        "timezone": job.default_timezone,
-                        "last_fired": {},
-                        "last_run_at": None,
-                        "last_result": None,
-                    }
-                    desc = (
-                        f"Scheduled job '{job.name}'. Edit hours (a list)/minute/timezone/enabled "
-                        f"as JSON to change when it runs — no redeploy needed."
-                    )
-                else:
-                    value = {
-                        "enabled": job.default_enabled,
-                        "hour": job.default_hour,
-                        "minute": job.default_minute,
-                        "timezone": job.default_timezone,
-                        "last_run_date": None,
-                        "last_run_at": None,
-                        "last_result": None,
-                    }
-                    desc = (
-                        f"Scheduled job '{job.name}'. Edit hour/minute/timezone/enabled as JSON "
-                        f"to change when it runs — no redeploy needed."
-                    )
-                await self._repo.upsert_setting(
-                    job.settings_key, value, description=desc, actor="scheduler"
-                )
+            if await self._repo.get_setting(job.settings_key) is not None:
+                continue
+            await self._repo.upsert_setting(
+                job.settings_key,
+                self._defaults(job),
+                description=(
+                    f"Scheduled job '{job.name}' ({job.mode}). "
+                    f"{descriptions[job.mode]} No redeploy needed. "
+                    f"Run history is kept locally, not here."
+                ),
+                actor="scheduler",
+            )
+
+    async def _config_for(self, job: ScheduledJob) -> dict[str, Any]:
+        cached = self._config_cache.get(job.settings_key)
+        loop_now = asyncio.get_running_loop().time()
+        if cached and loop_now - cached[0] < CONFIG_CACHE_SECONDS:
+            return cached[1]
+
+        base = self._defaults(job)
+        try:
+            setting = await self._repo.get_setting(job.settings_key)
+        except Exception:
+            # A Firestore blip must not stop the scheduler; defaults are a
+            # correct fallback and the next refresh picks up the real config.
+            log.warning("scheduler_config_read_failed", job=job.name, exc_info=True)
+            setting = None
+        if setting and isinstance(setting.value, dict):
+            base.update({k: v for k, v in setting.value.items() if k not in _RUN_STATE_KEYS})
+
+        self._config_cache[job.settings_key] = (loop_now, base)
+        return base
+
+    # -- scheduling -----------------------------------------------------------
 
     async def _maybe_run(self, job: ScheduledJob) -> None:
         config = await self._config_for(job)
-        if not config["enabled"]:
+        if not config.get("enabled", True):
+            return
+        if job.name in self._in_flight:
             return
 
-        if job.default_interval_minutes is not None:
-            last_run_at = config.get("last_run_at")
+        state = _RunState(job.settings_key)
+        current = state.load()
+
+        if job.mode == "interval":
+            last_run_at = current.get("last_run_at")
             if last_run_at:
-                elapsed = datetime.now(timezone.utc) - _parse_iso(last_run_at)
-                interval = timedelta(minutes=config.get("interval_minutes") or job.default_interval_minutes)
-                if elapsed < interval:
+                interval = timedelta(
+                    minutes=config.get("interval_minutes") or job.default_interval_minutes or 10
+                )
+                if datetime.now(timezone.utc) - _parse_iso(last_run_at) < interval:
                     return
-            await self._run_job(job, config)
+            await self._run_job(job, state)
             return
 
-        if job.default_hours is not None:
-            tz = _safe_zone(config["timezone"], job.name)
-            now_local = datetime.now(tz)
-            today = now_local.date().isoformat()
-            last_fired: dict[str, Any] = dict(config.get("last_fired") or {})
-
-            for hour in config["hours"]:
-                if last_fired.get(str(hour)) == today:
-                    continue
-                trigger = now_local.replace(hour=hour, minute=config["minute"], second=0, microsecond=0)
-                if now_local < trigger:
-                    continue
-                last_fired[str(hour)] = today
-                await self._run_job(job, config, extra={"last_fired": last_fired})
-                return  # at most one slot fires per tick; the next tick picks up any other due slot
-            return
-
-        tz = _safe_zone(config["timezone"], job.name)
+        tz = _safe_zone(config.get("timezone", "UTC"), job.name)
         now_local = datetime.now(tz)
         today = now_local.date().isoformat()
 
-        if config.get("last_run_date") == today:
-            return
-        trigger = now_local.replace(
-            hour=config["hour"], minute=config["minute"], second=0, microsecond=0
-        )
-        if now_local < trigger:
+        if job.mode == "fixed_times":
+            last_fired: dict[str, Any] = dict(current.get("last_fired") or {})
+            for hour in config.get("hours") or []:
+                if last_fired.get(str(hour)) == today:
+                    continue
+                if now_local < _trigger_at(now_local, hour, config.get("minute", 0)):
+                    continue
+                last_fired[str(hour)] = today
+                await self._run_job(job, state, extra={"last_fired": last_fired})
+                return  # one slot per tick; the next tick picks up any other due slot
             return
 
-        await self._run_job(job, config, extra={"last_run_date": today})
+        if current.get("last_run_date") == today:
+            return
 
-    async def _config_for(self, job: ScheduledJob) -> dict[str, Any]:
-        setting = await self._repo.get_setting(job.settings_key)
-        if job.default_interval_minutes is not None:
-            base: dict[str, Any] = {
-                "enabled": job.default_enabled,
-                "interval_minutes": job.default_interval_minutes,
-            }
-        elif job.default_hours is not None:
-            base = {
-                "enabled": job.default_enabled,
-                "hours": list(job.default_hours),
-                "minute": job.default_minute,
-                "timezone": job.default_timezone,
-                "last_fired": {},
-            }
-        else:
-            base = {
-                "enabled": job.default_enabled,
-                "hour": job.default_hour,
-                "minute": job.default_minute,
-                "timezone": job.default_timezone,
-            }
-        if setting and isinstance(setting.value, dict):
-            base.update(setting.value)
-        return base
+        if job.mode == "weekly":
+            if now_local.weekday() != int(config.get("weekday", job.default_weekday or 0)):
+                return
+        elif job.mode == "monthly":
+            wanted = int(config.get("day_of_month", job.default_day_of_month or 1))
+            # Clamp so a job set to the 31st still fires in a 30-day month,
+            # on its last day, rather than silently never running.
+            last_day = calendar.monthrange(now_local.year, now_local.month)[1]
+            if now_local.day != min(wanted, last_day):
+                return
+
+        if now_local < _trigger_at(now_local, config.get("hour", 0), config.get("minute", 0)):
+            return
+
+        await self._run_job(job, state, extra={"last_run_date": today})
 
     async def _run_job(
-        self, job: ScheduledJob, config: dict[str, Any], *, extra: dict[str, Any] | None = None
+        self, job: ScheduledJob, state: _RunState, *, extra: dict[str, Any] | None = None
     ) -> None:
-        """Records ``last_run_at`` *before* running the job, not only after —
-        confirmed as a real, actively-harmful bug (2026-08-25): a job whose
-        body can run for minutes to hours (``full_pipeline_and_brief``'s full
-        enrichment drain) only had its completion recorded in a ``finally``
-        block, so a process restart mid-run (a redeploy — several happened
-        in quick succession) killed the task before it ever wrote anything,
-        leaving Firestore's ``last_run_at`` stale. The next process's very
-        first tick then saw "hasn't run in ages" and fired again immediately
-        — observed firing every 6-16 minutes instead of the configured 360,
-        with multiple full cycles running concurrently by the time this was
-        caught. Writing the timestamp at start means even a mid-run kill
-        leaves an accurate, recent ``last_run_at`` behind, so the interval/
-        daily/fixed-times gate in ``_maybe_run`` holds across restarts
-        instead of only across clean completions.
+        """Record the start, run, record the result — all locally.
 
-        ``extra`` carries whichever slot-tracking field this mode uses
-        (``last_run_date`` for daily, ``last_fired`` for fixed-times, nothing
-        for interval) — kept generic here so this method doesn't need to
-        know which mode called it.
+        ``last_run_at`` is written *before* the body runs, not only after.
+        That is load-bearing: a job whose body can run for minutes had its
+        completion recorded only in a ``finally``, so a redeploy mid-run
+        killed the task before it wrote anything, and the next process's
+        first tick saw "hasn't run in ages" and fired again immediately —
+        observed firing every 6-16 minutes instead of the configured 360,
+        with several full cycles running concurrently. Writing at start means
+        even a mid-run kill leaves an accurate ``last_run_at`` behind.
         """
+        started = datetime.now(timezone.utc)
+        state.save(last_run_at=started.isoformat(), **(extra or {}))
+        self._in_flight.add(job.name)
         log.info("scheduled_job_starting", job=job.name)
-        tz = timezone.utc if job.default_interval_minutes is not None else _safe_zone(
-            config.get("timezone", "UTC"), job.name
-        )
-        started = datetime.now(tz)
-        if extra:
-            config.update(extra)
-        config["last_run_at"] = started.isoformat()
-        await self._repo.upsert_setting(job.settings_key, config, actor="scheduler", audit=False)
 
         try:
             result = await job.run(self._registry, self._repo, self._settings)
@@ -294,8 +326,55 @@ class Scheduler:
             log.error("scheduled_job_failed", job=job.name, exc_info=True)
             result = {"error": "job raised — see server logs for scheduled_job_failed"}
         finally:
-            config["last_result"] = result
-            await self._repo.upsert_setting(job.settings_key, config, actor="scheduler", audit=False)
+            self._in_flight.discard(job.name)
+            state.save(
+                last_result=result,
+                last_finished_at=datetime.now(timezone.utc).isoformat(),
+                last_duration_seconds=round(
+                    (datetime.now(timezone.utc) - started).total_seconds(), 1
+                ),
+            )
+
+    # -- introspection --------------------------------------------------------
+
+    def status(self) -> list[dict[str, Any]]:
+        """What each job is doing, for the System Health page. All local."""
+        rows = []
+        for job in self._jobs:
+            state = _RunState(job.settings_key).load()
+            rows.append(
+                {
+                    "name": job.name,
+                    "mode": job.mode,
+                    "settings_key": job.settings_key,
+                    "running": job.name in self._in_flight,
+                    "last_run_at": state.get("last_run_at"),
+                    "last_finished_at": state.get("last_finished_at"),
+                    "last_duration_seconds": state.get("last_duration_seconds"),
+                    "last_result": state.get("last_result"),
+                }
+            )
+        return rows
+
+
+#: Keys that used to live in the Firestore setting document and now live in
+#: SQLite. Filtered out when merging a stored config so an old document
+#: written by a previous deployment cannot resurrect stale run state.
+_RUN_STATE_KEYS = frozenset(
+    {"last_run_at", "last_run_date", "last_fired", "last_result", "last_finished_at",
+     "last_duration_seconds"}
+)
+
+
+def job_status(settings_key: str) -> dict[str, Any]:
+    """Run state for one job, readable without a Scheduler instance."""
+    return _RunState(settings_key).load()
+
+
+def _trigger_at(now_local: datetime, hour: Any, minute: Any) -> datetime:
+    return now_local.replace(
+        hour=int(hour or 0), minute=int(minute or 0), second=0, microsecond=0
+    )
 
 
 def _parse_iso(value: Any) -> datetime:

@@ -36,3 +36,10 @@ Thumbs.db
 *.log
 logs/
 .data/
+
+# Annie's local memory root (ANNIE_MEMORY_DIR unset -> ./memory). The files
+# here are hers, written at runtime, and the SQLite ledger inside can grow to
+# hundreds of megabytes. Pull a copy with `python -m tools.memory_pull` when
+# you want to read the deployment's instead.
+/memory/
+/memory-pulled/

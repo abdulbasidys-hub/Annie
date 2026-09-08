@@ -37,7 +37,7 @@ divergent implementation of the same comparison, not new coverage.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.analysis.features import SEED_THEMES, discover_ngrams, tokenize
 from app.db.base import slugify
@@ -57,19 +57,46 @@ class ClusteringRun:
 async def run_narrative_clustering(
     repo: FirestoreRepo, *, min_emergent_count: int = 3
 ) -> ClusteringRun:
+    """Group tokens that cleared a tier into seeded and emergent narratives.
+
+    Reads the local ledger, not Firestore. Two things changed with that, and
+    both were cost:
+
+    * The cohort is fetched once from SQLite instead of a paged Firestore
+      query over up to a thousand token documents.
+    * Themes are derived from each token's name and ticker by the same pure
+      functions the signals engine uses, rather than through
+      ``features_with_value``, which was a collection-group query per seeded
+      theme against per-token feature subcollections that no longer exist.
+
+    Narratives themselves stay in Firestore — there are a few dozen, they
+    change slowly, and the website reads them directly. That is exactly the
+    profile Firestore is still the right tool for.
+    """
+    from app.analysis.features import extract_all
+    from app.memory import ledger
+
     run = ClusteringRun(started_at=datetime.now(timezone.utc))
     now = datetime.now(timezone.utc)
 
-    tokens, total_qualified = await repo.list_tokens(qualified_only=True, limit=1000)
-    run.qualified_tokens_scanned = len(tokens)
-    if not tokens or not total_qualified:
+    # The whole qualified cohort — small by construction, since a token only
+    # gets here by actually clearing a tier.
+    tokens = ledger.qualified_in_window(now - timedelta(days=90), now)
+    total_qualified = len(tokens)
+    run.qualified_tokens_scanned = total_qualified
+    if not total_qualified:
         run.finished_at = now
         return run
 
-    # -- Seeded themes: one collection-group query per theme, not one read
-    #    per qualified token — see features_with_value's own docstring. --
+    # -- Seeded themes: derived in memory, one pass over the cohort. --
+    by_theme: dict[str, list[str]] = {}
+    for token in tokens:
+        for feature in extract_all(token.name, token.symbol, None):
+            if feature.namespace == "token" and feature.key == "theme" and feature.value:
+                by_theme.setdefault(feature.value, []).append(token.mint)
+
     for theme, keywords in SEED_THEMES.items():
-        mints = await repo.features_with_value(namespace="token", key="theme", value=theme)
+        mints = by_theme.get(theme) or []
         if not mints:
             continue
         await repo.upsert_narrative(
@@ -88,17 +115,16 @@ async def run_narrative_clustering(
         )
         run.seeded_narratives_updated += 1
 
-    # -- Emergent: n-gram discovery over qualified tokens' name+description,
-    #    tokenized the same way features.py tags a token's own themes, so a
-    #    short gram like "cat" can't match inside an unrelated word like
-    #    "concatenate". --
+    # -- Emergent: n-gram discovery over the cohort's names, tokenized the
+    #    same way features.py tags a token's own themes, so a short gram like
+    #    "cat" cannot match inside an unrelated word like "concatenate". --
     token_words: dict[str, tuple[list[str], list[str]]] = {}
-    for t in tokens:
-        words = tokenize(f"{t.name or ''} {t.description or ''}")
+    for token in tokens:
+        words = tokenize(f"{token.name or ''} {token.symbol or ''}")
         bigrams = [" ".join(words[i : i + 2]) for i in range(len(words) - 1)]
-        token_words[t.mint] = (words, bigrams)
+        token_words[token.mint] = (words, bigrams)
 
-    texts = [f"{t.name or ''} {t.description or ''}" for t in tokens]
+    texts = [f"{t.name or ''} {t.symbol or ''}" for t in tokens]
     discovered = discover_ngrams(texts, n=1, min_count=min_emergent_count, top_k=30)
     discovered += discover_ngrams(texts, n=2, min_count=max(2, min_emergent_count - 1), top_k=15)
 

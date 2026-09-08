@@ -156,11 +156,33 @@ export const api = {
   reports: (params) => request('GET', '/api/reports', { params }),
   report: (id) => request('GET', `/api/reports/${id}`),
 
-  memories: (params) => request('GET', '/api/memory', { params }),
-  memory: (id) => request('GET', `/api/memory/${id}`),
-  updateMemory: (id, body) => request('PATCH', `/api/memory/${id}`, { body }),
-  deleteMemory: (id) => request('DELETE', `/api/memory/${id}`),
-  consolidationRuns: (params) => request('GET', '/api/memory/consolidation-runs', { params }),
+  // Memory is a folder of markdown files, not a record store — these are
+  // filesystem verbs on purpose. See app/api/routes/memory.py.
+  memoryTree: () => request('GET', '/api/memory'),
+  memoryFile: (path) => request('GET', '/api/memory/file', { params: { path } }),
+  searchMemory: (q, params) => request('GET', '/api/memory/search', { params: { q, ...params } }),
+  memoryDigest: (windowHours) =>
+    request('GET', '/api/memory/digest', { params: { window_hours: windowHours } }),
+  writeMemoryFile: (body) => request('POST', '/api/memory/file', { body }),
+  appendMemoryFile: (body) => request('POST', '/api/memory/append', { body }),
+  deleteMemoryFile: (path) => request('DELETE', '/api/memory/file', { params: { path } }),
+  reindexMemory: () => request('POST', '/api/memory/reindex'),
+  restoreMemory: (force) => request('POST', '/api/memory/restore', { params: { force } }),
+
+  // The ledger — the cheap local record memory is built from.
+  ledgerStats: () => request('GET', '/api/ledger/stats'),
+  ledgerMovers: (params) => request('GET', '/api/ledger/movers', { params }),
+  ledgerCreators: (params) => request('GET', '/api/ledger/creators', { params }),
+  ledgerCreator: (wallet) => request('GET', `/api/ledger/creators/${wallet}`),
+  ledgerToken: (mint) => request('GET', `/api/ledger/token/${mint}`),
+
+  signals: (params) => request('GET', '/api/signals', { params }),
+  signal: (slug) => request('GET', `/api/signals/${slug}`),
+
+  // On demand only — this is the one read path that costs a model call.
+  generateIdeas: (body) => request('POST', '/api/ideas', { body }),
+  keepIdeas: (body) => request('POST', '/api/ideas/keep', { body }),
+  ideaContext: (brief) => request('GET', '/api/ideas/context', { params: { brief } }),
 
   personality: () => request('GET', '/api/personality'),
   updatePersonality: (body) => request('PATCH', '/api/personality', { body }),
@@ -180,9 +202,13 @@ export const api = {
   // automatically (app/scheduling/); these remain for an on-demand check
   // between scheduled runs, not as the only way these stages ever run.
   runDiscovery: (hours) => request('POST', '/api/system/run/discovery', { params: { hours } }),
-  runEnrichment: (batchSize) => request('POST', '/api/system/run/enrichment', { params: { batch_size: batchSize } }),
-  runTrends: () => request('POST', '/api/system/run/trends'),
+  runWatch: (batchSize) => request('POST', '/api/system/run/watch', { params: { batch_size: batchSize } }),
+  runSignals: () => request('POST', '/api/system/run/signals'),
   runNarratives: () => request('POST', '/api/system/run/narratives'),
+  // The only manual trigger that spends money: one bounded model call,
+  // skipped entirely if the window was quiet.
+  runCycle: () => request('POST', '/api/system/run/cycle'),
+  cost: () => request('GET', '/api/system/cost'),
   pipelineRun: (id) => request('GET', `/api/system/pipeline-runs/${id}`),
   pipelineRuns: (params) => request('GET', '/api/system/pipeline-runs', { params }),
 

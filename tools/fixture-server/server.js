@@ -63,25 +63,30 @@ const SYMBOLS = [
 const TOKENS = SYMBOLS.map(([symbol, name, themes], i) => {
   const lp = LAUNCHPADS[i % 4]
   const qualifiedAt = (i * 9 + 4) * HOUR
-  // A few tokens deliberately have no peak reading — the UI must render these
-  // as unknown rather than as zero.
+  // A few deliberately have no peak reading, and a few never qualified — the
+  // UI must render both as unknown/watching rather than as zero. Since the
+  // memory rewrite this list is *sightings*, not qualified-token documents:
+  // most of what the ledger holds never cleared a tier.
   const noPeak = i === 5 || i === 11
-  const peak = noPeak ? null : String(120000 + i * 137000 + (i % 3) * 410000)
+  const qualified = !noPeak && i % 5 !== 3
+  const peakNum = noPeak ? null : 120000 + i * 137000 + (i % 3) * 410000
+  const nowNum = peakNum === null ? null : Math.round(peakNum * (i % 4 === 1 ? 0.18 : 0.72))
   return {
     id: i + 1,
     mint: `${symbol.slice(0, 4)}${'x'.repeat(2)}${(i * 7919).toString(36).padStart(6, '0')}Zk4Qv9Lm2Rt8Wp3Nc7Hb${i}`,
     name,
     symbol,
-    image_url: null,
     launchpad_slug: lp.slug,
     creator_wallet: `Cr${(i * 104729).toString(36)}tRw9Km4Pz7Vn2Lb8Qs5Xd3Fj6Hg1Ay${i}`,
-    launched_at: iso(qualifiedAt + 6 * HOUR),
-    qualified_at: iso(qualifiedAt),
-    qualified_market_cap: String(100000 + i * 12000),
-    peak_market_cap: peak,
-    peak_tier: noPeak ? null : peak > '1000000' ? '1000000' : '250000',
-    is_qualified: true,
-    verification_status: i === 3 ? 'disputed' : i % 4 === 0 ? 'cross_verified' : 'verified',
+    first_seen: iso(qualifiedAt + 6 * HOUR),
+    qualified_at: qualified ? iso(qualifiedAt) : null,
+    market_cap: nowNum,
+    peak_market_cap: peakNum,
+    peak_tier: !qualified ? null : peakNum > 1000000 ? 1000000 : 250000,
+    is_qualified: qualified,
+    status: qualified ? 'qualified' : noPeak ? 'faded' : 'watching',
+    checks: 4 + i * 3,
+    round_tripped: peakNum !== null && nowNum !== null && nowNum < peakNum * 0.5,
     themes,
   }
 })
@@ -151,27 +156,35 @@ const TRENDS = TREND_DEFS.map(([slug, name, category, status, maturity, confiden
   evidence: { recent_count: rc, recent_total: rt, baseline_count: bc, baseline_total: bt, p_value: p, caveats },
 }))
 
-const CREATORS = Array.from({ length: 12 }, (_, i) => ({
-  id: i + 1,
-  wallet: `Cr${(i * 104729).toString(36)}tRw9Km4Pz7Vn2Lb8Qs5Xd3Fj6Hg1Ay${i}`,
-  total_launches: i === 0 ? 312 : i === 1 ? 1 : 4 + i * 11,
-  wins_100k: i === 0 ? 41 : i === 1 ? 1 : Math.max(0, 6 - Math.floor(i / 2)),
-  wins_250k: i === 0 ? 18 : i === 1 ? 1 : Math.max(0, 3 - Math.floor(i / 3)),
-  wins_500k: i === 0 ? 7 : i === 1 ? 0 : Math.max(0, 2 - Math.floor(i / 4)),
-  wins_1m: i === 0 ? 3 : 0,
-  success_rate: i === 0 ? 0.1314 : i === 1 ? 1.0 : Math.max(0, 6 - Math.floor(i / 2)) / (4 + i * 11),
-  best_market_cap: i === 1 ? null : String(2_400_000 - i * 180_000),
-  is_repeat_winner: i < 3,
-  first_launch_at: iso((300 - i * 12) * DAY),
-  last_launch_at: iso((i + 1) * DAY),
-  primary_launchpad_slug: LAUNCHPADS[i % 4].slug,
-  median_hours_between_launches: i === 1 ? null : 6 + i * 3,
-  launchpad_history: [
-    { slug: 'pumpfun', launches: 40 - i },
-    { slug: 'bonk-launch', launches: 12 + i },
-  ],
-  recent_tokens: TOKENS.slice(i, i + 5),
-}))
+const CREATORS = Array.from({ length: 12 }, (_, i) => {
+  const launches = i === 0 ? 312 : i === 1 ? 1 : 4 + i * 11
+  const winners = i === 0 ? 41 : i === 1 ? 1 : Math.max(0, 6 - Math.floor(i / 2))
+  return {
+    id: i + 1,
+    wallet: `Cr${(i * 104729).toString(36)}tRw9Km4Pz7Vn2Lb8Qs5Xd3Fj6Hg1Ay${i}`,
+    total_launches: launches,
+    launches_in_window: Math.max(0, Math.round(launches / 30)),
+    winners,
+    success_rate: launches ? winners / launches : null,
+    best_market_cap: i === 1 ? null : 2_400_000 - i * 180_000,
+    best_mint: i === 1 ? null : TOKENS[i % TOKENS.length].mint,
+    // "Tracked" replaced "repeat winner": a wallet earns it by launching a
+    // lot OR by having produced one real winner, and is never demoted.
+    is_tracked: i < 3 || launches >= 25,
+    first_seen: iso((300 - i * 12) * DAY),
+    last_seen: iso((i + 1) * DAY),
+    dossier_path: i < 3 ? `creators/Cr${(i * 104729).toString(36)}tRw9Km4Pz7Vn2Lb8Qs5Xd3Fj6Hg1Ay${i}.md` : null,
+  }
+})
+
+const CREATOR_MOVEMENTS = (wallet) =>
+  Array.from({ length: 24 }, (_, n) => ({
+    at: iso((n * 7 + 2) * HOUR),
+    kind: n % 8 === 3 ? 'qualified' : 'launch',
+    mint: TOKENS[n % TOKENS.length].mint,
+    market_cap: n % 8 === 3 ? 340000 : null,
+    wallet,
+  }))
 
 const NARRATIVES = [
   { id: 1, slug: 'ai', label: 'AI', category: 'technology', token_count: 1840, qualified_count: 88, share_of_qualified: 0.231, baseline_share: 0.118, is_emergent: false, first_seen_at: iso(210 * DAY), last_seen_at: iso(2 * HOUR) },
@@ -334,17 +347,291 @@ function page(items, query) {
   return { items: items.slice(offset, offset + limit), total: items.length, limit, offset }
 }
 
+const MEMORY_SECTIONS = ['core', 'playbook', 'narratives', 'creators', 'tokens', 'daily', 'weekly', 'monthly', 'notes']
+
+const MEMORY_SECTION_DESCRIPTIONS = {
+  core: "Annie's standing beliefs about the market.",
+  playbook: 'What has actually worked. Patterns with evidence behind them.',
+  narratives: 'One file per live narrative/theme.',
+  creators: 'One dossier per tracked creator wallet.',
+  tokens: 'One file per notable token: the ones that actually moved.',
+  daily: 'One file per day.',
+  weekly: 'One file per ISO week.',
+  monthly: 'One file per calendar month.',
+  notes: 'Loose thinking that has not earned a home yet.',
+}
+
+const MEMORY_FILES = [
+  {
+    path: 'core/market-model.md', section: 'core', title: 'Market model',
+    kind: 'core', tags: ['core', 'model'], keys: [], importance: 1.0,
+    confidence: 'medium', updated: iso(2 * HOUR), created: iso(90 * DAY),
+    summary: 'How I currently understand the Solana memecoin market.',
+    body: [
+      'How I currently understand the Solana memecoin market.',
+      '',
+      'This file is rewritten in place, not appended to — it is what I think',
+      '*now*, and the daily and weekly files are the record of how I got here.',
+      '',
+      '## What launches',
+      '',
+      'Around 16,000 a day, overwhelmingly on Pump.fun. Roughly one in 260',
+      'clears $100k. The distribution is not close to normal — a handful carry',
+      'the entire cohort and the median launch never trades at all.',
+      '',
+      '## What actually moves',
+      '',
+      'Two distinct kinds, and they behave differently enough that I have',
+      'stopped treating them as one population:',
+      '',
+      '- **Fast round-trips.** Peak inside the first hour, retrace 80%+ within',
+      '  three. Almost always a single-theme burst from a wallet that launches',
+      '  in bursts. These dominate the count of "winners" and teach very little.',
+      '- **Slow builds.** Six hours or more of steady climb, hold most of the',
+      '  peak overnight. Rare. These are the ones worth studying, and the ones',
+      '  the fast-round-trip noise makes hard to see in aggregate statistics.',
+      '',
+      '## What dies',
+      '',
+      'Everything with no liquidity, which is most of it. A market cap computed',
+      'from a $400 pool is not a measurement and I do not treat it as one.',
+      '',
+      '## Standing beliefs',
+      '',
+      '- Theme matters less than timing within a theme. Being third into a',
+      '  narrative beats being first; being twentieth is fatal.',
+      '- Creator history predicts launch *frequency* well and launch *success*',
+      '  poorly. I have not found a wallet whose hit rate survives its own',
+      '  volume.',
+    ].join('\n'),
+  },
+  {
+    path: 'core/whats-working.md', section: 'core', title: "What's working right now",
+    kind: 'core', tags: ['core', 'playbook'], keys: [], importance: 1.0,
+    confidence: 'low', updated: iso(6 * HOUR), created: iso(40 * DAY),
+    summary: 'The current, short-lived edge.',
+    body: [
+      'The current, short-lived edge. This file is supposed to churn — what',
+      'works here has a half-life measured in days.',
+      '',
+      '## This week',
+      '',
+      '- **Cat-adjacent names** are running about 3x baseline among $250k+',
+      '  tokens, third week in a row. Not generic cats — the specific,',
+      '  slightly-off ones ("Quantum Cat", "Cat Lawyer"). Generic ones are',
+      '  performing at baseline, which suggests the theme is not the edge; the',
+      '  specificity is.',
+      '- **Short tickers** remain common among winners and equally common in',
+      '  the baseline. Recorded here precisely so I stop re-noticing it.',
+      '',
+      '## Rolling over',
+      '',
+      '- Politics. Down to 4.9% of qualifiers from a 14.2% baseline, declining',
+      '  for eleven days. I would not launch into this.',
+    ].join('\n'),
+  },
+  {
+    path: 'core/open-questions.md', section: 'core', title: 'Open questions',
+    kind: 'core', tags: ['core', 'questions'], keys: [], importance: 0.8,
+    confidence: 'low', updated: iso(1 * DAY), created: iso(60 * DAY),
+    summary: 'Things I have noticed but cannot yet explain.',
+    body: [
+      'Things I have noticed but cannot yet explain, and what would settle each.',
+      '',
+      '- **Why do burst-launchers win at all?** A wallet firing eight tokens in',
+      '  two hours produces winners at roughly the base rate. If the tokens are',
+      '  interchangeable, the wins should be random — and so far they look',
+      '  random. Would settle it: compare within-burst winners against',
+      '  within-burst losers on every deterministic feature. If nothing',
+      '  separates them, that is itself the finding.',
+      '- **Is the launchpad or the narrative moving?** AI-themed tokens and',
+      '  BonkLaunch grew over the same window. Confounded. Would settle it: the',
+      '  same theme comparison restricted to Pump.fun alone.',
+    ].join('\n'),
+  },
+  {
+    path: 'core/watchlist.md', section: 'core', title: 'Watchlist',
+    kind: 'core', tags: ['core', 'watchlist'], keys: [], importance: 0.9,
+    confidence: 'high', updated: iso(2 * HOUR), created: iso(90 * DAY),
+    summary: 'Who and what I am actively paying attention to.',
+    body: [
+      'Who and what I am actively paying attention to. Maintained automatically',
+      'from the ledger — tokens by these creators are re-priced regardless of',
+      'market cap.',
+      '',
+      '## Creators',
+      '',
+      ...CREATORS.filter((c) => c.is_tracked).slice(0, 5).map(
+        (c) => `- \`${c.wallet}\` — ${c.total_launches} launches, ${c.winners} winners`
+      ),
+      '',
+      '## Narratives',
+      '',
+      '- cat-adjacent',
+      '- ai-agent',
+    ].join('\n'),
+  },
+  {
+    path: 'playbook/what-worked.md', section: 'playbook', title: 'What worked',
+    kind: 'playbook', tags: ['playbook'], keys: [], importance: 0.85,
+    confidence: 'medium', updated: iso(3 * DAY), created: iso(70 * DAY),
+    summary: 'Patterns that survived more than one week of evidence.',
+    body: [
+      'Patterns that survived more than one week of evidence. Everything here',
+      'has to point at something I actually observed.',
+      '',
+      '## Enter a theme on its second week, not its first',
+      '',
+      'Across four narratives now, tokens launched in a theme\'s second week',
+      'cleared a tier at roughly twice the rate of first-week entrants. The',
+      'plausible mechanism is that week one is dominated by the originator and',
+      'the immediate copies, week two is when attention arrives and supply has',
+      'not yet caught up, week three is saturation.',
+      '',
+      'Evidence: cat-adjacent (this window), ai-agent (3 weeks ago), capybara,',
+      'brainrot-slang. Confidence medium — four observations, one direction, no',
+      'counter-example yet, but four is not many.',
+    ].join('\n'),
+  },
+  {
+    path: 'daily/2026-09-08.md', section: 'daily', title: 'Daily log — 2026-09-08',
+    kind: 'daily', tags: ['daily'], keys: [], importance: 0.35,
+    confidence: 'high', updated: iso(4 * HOUR), created: iso(20 * HOUR),
+    summary: 'Launches sighted: 15,840. Reached a tier: 61.',
+    body: [
+      'Launches sighted: 15840. Reached a tier: 61. Currently watching: 2140.',
+      'Creator movements recorded: 15840.',
+      '',
+      '## Qualified today',
+      '',
+      ...TOKENS.filter((t) => t.is_qualified).slice(0, 4).map(
+        (t) => `- **${t.symbol}** — crossed $250k, peaked $${((t.peak_market_cap || 0) / 1000).toFixed(0)}k on ${t.launchpad_slug}\n  - CA: \`${t.mint}\`\n  - Creator: \`${t.creator_wallet}\``
+      ),
+      '',
+      '### 2026-09-08 12:00 UTC',
+      '',
+      'The cat-adjacent run is still going and the specificity pattern held',
+      'again — three of the four qualifiers were oddly-specific cats, the',
+      'generic one underperformed. Third week. Moving this from an observation',
+      'to the market model if next week holds.',
+    ].join('\n'),
+  },
+  {
+    path: 'weekly/2026-W36.md', section: 'weekly', title: 'Week of 2026-09-01',
+    kind: 'weekly', tags: ['weekly'], keys: [], importance: 0.7,
+    confidence: 'medium', updated: iso(1 * DAY), created: iso(1 * DAY),
+    summary: 'The week the cat run became hard to dismiss.',
+    body: [
+      'The week the cat run became hard to dismiss.',
+      '',
+      'Qualifiers were up slightly on the prior week (61 vs 54 at $100k+), but',
+      'the composition shifted more than the count did: politics fell out',
+      'almost entirely and cat-adjacent names took the space.',
+      '',
+      '## What changed',
+      '',
+      'I stopped treating "cat theme" as the variable. Generic cat tokens are',
+      'performing at baseline; the ones clearing tiers are specific in a way',
+      'that reads as a joke rather than a category. That reframing is the most',
+      'useful thing this week produced.',
+      '',
+      '## Lessons',
+      '',
+      '- **Specificity beats category within a running theme** (medium',
+      '  confidence)',
+      '  - Evidence: 11 of 14 cat-adjacent qualifiers this week had a modifier;',
+      '    the 9 generic ones cleared at 1 in 9.',
+    ].join('\n'),
+  },
+  {
+    path: 'notes/burst-launchers.md', section: 'notes', title: 'Burst launchers',
+    kind: 'note', tags: ['creator'], keys: [], importance: 0.5,
+    confidence: 'low', updated: iso(2 * DAY), created: iso(2 * DAY),
+    summary: 'Wallets that fire six to eight tokens in a couple of hours.',
+    body: [
+      'Wallets that fire six to eight tokens in a couple of hours, then go quiet',
+      'for days.',
+      '',
+      'They account for a large share of total launches and roughly their fair',
+      'share of winners — which is the interesting part, because it means the',
+      'strategy is not obviously worse than a considered one. Whether it is',
+      'better depends on cost per launch, which I cannot see.',
+      '',
+      'Not promoting this anywhere until I can separate within-burst winners',
+      'from losers on something other than luck.',
+    ].join('\n'),
+  },
+  ...TOKENS.filter((t) => t.is_qualified).slice(0, 5).map((t) => ({
+    path: `tokens/${t.mint}.md`, section: 'tokens', title: `${t.symbol} (${t.mint.slice(0, 6)}…)`,
+    kind: 'token', tags: ['token', t.launchpad_slug], keys: [t.mint, t.creator_wallet, t.symbol.toLowerCase()],
+    importance: 0.55, confidence: 'high', updated: iso(5 * HOUR), created: iso(20 * HOUR),
+    summary: `${t.symbol} peaked at $${((t.peak_market_cap || 0) / 1000).toFixed(0)}k.`,
+    body: [
+      `**${t.symbol}**`, '',
+      `- CA: \`${t.mint}\``,
+      `- Creator: \`${t.creator_wallet}\``,
+      `- Launchpad: ${t.launchpad_slug}`,
+      `- Peak market cap: $${((t.peak_market_cap || 0) / 1000).toFixed(0)}k`,
+    ].join('\n'),
+  })),
+  ...CREATORS.filter((c) => c.is_tracked).slice(0, 3).map((c) => ({
+    path: `creators/${c.wallet}.md`, section: 'creators', title: `Creator ${c.wallet.slice(0, 8)}…`,
+    kind: 'creator', tags: ['creator', 'tracked'], keys: [c.wallet],
+    importance: 0.6, confidence: 'high', updated: iso(3 * HOUR), created: iso(30 * DAY),
+    summary: `${c.total_launches} launches, ${c.winners} winners.`,
+    body: [
+      `Wallet: \`${c.wallet}\``, '',
+      `- Launches recorded: ${c.total_launches}`,
+      `- Tokens that reached a tier: ${c.winners}`,
+      `- Hit rate: ${(100 * (c.success_rate || 0)).toFixed(1)}%`,
+    ].join('\n'),
+  })),
+]
+
+const FIRESTORE_BUDGET = {
+  day: new Date().toISOString().slice(0, 10),
+  writes: 312,
+  write_budget: 4000,
+  writes_skipped: 0,
+  reads: 840,
+  read_budget: 12000,
+  write_headroom_pct: 92.2,
+  spark_plan_daily_caps: { writes: 20000, reads: 50000, deletes: 20000 },
+  note: "Counted for this process only. The Firebase console's Usage tab is the authority on what the project as a whole consumed.",
+}
+
+const PIPELINE_RESULTS = {
+  discovery: { launches_seen: 184, tokens_created: 171, tokens_already_known: 13, errors: [] },
+  watch: { checked: 900, priced: 214, unpriced: 686, qualified_count: 2, newly_qualified: [], new_peaks: 31, errors: [] },
+  signals: { cohorts: 3, evaluated: 54, created: 2, updated: 52, promoted: ['token-theme-animal-250k'], faded: [] },
+  narratives: { qualified_tokens_scanned: 668, seeded_narratives_updated: 9, emergent_narratives_found: 4 },
+  cycle: { learning: { headline: 'Cat-themed names keep outperforming.' } },
+}
+
 const routes = [
   ['GET', /^\/api\/dashboard$/, (q) => {
     const windowDays = Number(q.get('window_days') || 7)
     const scale = windowDays / 7
     return {
-      tokens_collected: 58420,
+      launches_seen_24h: 15840,
+      currently_watching: 2140,
+      tokens_collected: 3120,
       tokens_qualified: 668,
+      qualified_24h: 61,
+      creators_seen: 18420,
+      creators_tracked: 214,
+      creator_movements_24h: 15840,
+      memory_files: 412,
+      launchpads_24h: LAUNCHPADS.slice(0, 4).map((l) => ({ launchpad: l.slug, n: l.launch_count })),
+      movers: TOKENS.slice(0, 8).map((t) => ({
+        mint: t.mint, symbol: t.symbol, name: t.name,
+        peak_market_cap: t.peak_market_cap, market_cap: t.market_cap,
+        creator_wallet: t.creator_wallet, launchpad_slug: t.launchpad_slug,
+      })),
       counts_by_tier: { 100000: Math.round(61 * scale), 250000: Math.round(24 * scale), 500000: Math.round(11 * scale), 1000000: Math.round(18 * scale / 7 * 7 / 7) || 3 },
       counts_by_tier_previous: { 100000: Math.round(54 * scale), 250000: Math.round(26 * scale), 500000: Math.round(11 * scale), 1000000: 5 },
       window_days: windowDays,
-      trends_active: 41, trends_new: 2, trends_rising: 4, trends_declining: 2,
+      trends_active: 41, trends_new: 2, trends_rising: 4, trends_declining: 2, trends_meaningful: 6,
       rising_trends: TRENDS.filter((t) => t.status === 'rising'),
       new_trends: TRENDS.filter((t) => t.status === 'new'),
       declining_trends: TRENDS.filter((t) => t.status === 'declining'),
@@ -361,81 +648,111 @@ const routes = [
   }],
 
   ['GET', /^\/api\/tokens$/, (q) => {
+    // The ledger holds sightings, so `qualified_only` is a filter here rather
+    // than the default the old tokens collection implied.
     let items = TOKENS
-    const search = (q.get('q') || '').toLowerCase()
-    if (search) items = items.filter((t) => `${t.symbol} ${t.name} ${t.mint} ${t.creator_wallet}`.toLowerCase().includes(search))
-    const tier = q.get('min_tier')
-    if (tier) items = items.filter((t) => t.peak_market_cap && Number(t.peak_market_cap) >= Number(tier))
-    return page(items, q)
+    if (q.get('qualified_only') === 'true') items = items.filter((t) => t.is_qualified)
+    const lp = q.get('launchpad_slug')
+    if (lp) items = items.filter((t) => t.launchpad_slug === lp)
+    return { ...page(items, q), window_hours: Number(q.get('hours') || 168) }
   }],
   ['GET', /^\/api\/tokens\/(.+)$/, (q, [mint]) => {
     const t = TOKENS.find((x) => x.mint === mint) || TOKENS[0]
+    const creator = CREATORS.find((c) => c.wallet === t.creator_wallet) || CREATORS[0]
+    // A token that moved gets a memory file; one that did not, deliberately
+    // does not — the page must render that as "nothing worth writing down",
+    // not as an error, so the fixture covers both.
+    const memory = t.is_qualified
+      ? {
+          path: `tokens/${t.mint}.md`,
+          body: [
+            `**${t.symbol}**`,
+            '',
+            `- CA: \`${t.mint}\``,
+            `- Creator: \`${t.creator_wallet}\``,
+            `- Launchpad: ${t.launchpad_slug}`,
+            `- Peak market cap: $${(t.peak_market_cap / 1000).toFixed(0)}k`,
+            '',
+            '## What happened',
+            '',
+            t.round_tripped
+              ? 'Ran hard on the first hour then round-tripped almost entirely. The peak was real — liquidity held above $80k throughout — but nothing sustained it. Worth noting the creator sold into the top.'
+              : 'Steady climb over about six hours, still holding most of the peak. The name lines up with the theme that has been over-represented among winners this week.',
+          ].join('\n'),
+        }
+      : null
     return {
       ...t,
-      description: 'A token. The description field is where narrative language shows up, which is why it is analysed separately from the name.',
-      decimals: 6,
-      total_supply: '1000000000',
-      ecosystem: 'solana',
-      migrated_at: iso(20 * HOUR),
-      migration_platform: t.launchpad_slug,
-      destination_dex_slug: 'raydium',
-      minutes_launch_to_migration: 94,
-      latest_market_cap: t.peak_market_cap ? String(Math.round(Number(t.peak_market_cap) * 0.42)) : null,
-      latest_liquidity_usd: '84210',
-      latest_volume_24h_usd: '412000',
-      latest_holder_count: 2841,
-      market_data_at: iso(20 * 60_000),
-      website: null, twitter: 'https://x.com/example', telegram: null,
-      pipeline_stage: 'analysis',
-      data_sources: ['bitquery', 'helius', 'dexscreener'],
-      qualification_evidence: {
-        rule_version: 'qualification/v1',
-        market_cap: t.qualified_market_cap,
-        tier_reached: '250000',
-        provider: 'bitquery',
-        verification_status: t.verification_status,
-        reasons: t.verification_status === 'disputed'
-          ? ['Providers disagree materially (bitquery=$248,100, dexscreener=$332,400); recorded as disputed and queued for verification. No provider was silently preferred.']
-          : [`Market cap $${Number(t.qualified_market_cap).toLocaleString()} from bitquery meets the $100,000 threshold.`],
-        needs_verification: t.verification_status === 'disputed',
+      memory,
+      mentioned_in: t.is_qualified
+        ? [
+            {
+              path: 'daily/2026-09-08.md',
+              title: 'Daily log — 2026-09-08',
+              section: 'daily',
+              snippet: `… **${t.symbol}** — crossed $250k, peaked $${((t.peak_market_cap || 0) / 1000).toFixed(0)}k on ${t.launchpad_slug} …`,
+              score: 2.1,
+            },
+            {
+              path: 'core/whats-working.md',
+              title: "What's working right now",
+              section: 'core',
+              snippet: `… the ${t.themes[0]} theme keeps producing, ${t.symbol} being the clearest example this week …`,
+              score: 1.7,
+            },
+          ]
+        : [],
+      creator: {
+        wallet: creator.wallet,
+        launches: creator.total_launches,
+        winners: creator.winners,
+        best_market_cap: creator.best_market_cap,
+        tracked: creator.is_tracked,
       },
-      milestones: [
-        { kind: 'launch', threshold_usd: null, reached_at: t.launched_at, market_cap: '4200', token_age_minutes: 0, evidence: { verification_status: 'verified', source: 'bitquery' } },
-        { kind: 'migration', threshold_usd: null, reached_at: iso(20 * HOUR), market_cap: '68000', liquidity_usd: '31000', token_age_minutes: 94, evidence: { verification_status: 'verified', source: 'bitquery' } },
-        { kind: 'market_cap', threshold_usd: '100000', reached_at: t.qualified_at, market_cap: t.qualified_market_cap, liquidity_usd: '52000', holder_count: 940, token_age_minutes: 188, evidence: { verification_status: t.verification_status, source: 'bitquery' } },
-        ...(t.peak_market_cap ? [{ kind: 'peak', threshold_usd: null, reached_at: iso(12 * HOUR), market_cap: t.peak_market_cap, liquidity_usd: '184000', holder_count: 3120, token_age_minutes: 640, evidence: { verification_status: 'cross_verified', source: 'bitquery' } }] : []),
-      ],
-      features: [
-        ...t.themes.map((th) => ({ namespace: 'token', key: 'theme', value: th, source: 'deterministic' })),
-        { namespace: 'ticker', key: 'shape', value: t.symbol.length <= 3 ? 'short' : t.symbol.length <= 5 ? 'standard' : 'long', source: 'deterministic' },
-        { namespace: 'ticker', key: 'is_upper', value: 'true', source: 'deterministic' },
-        { namespace: 'name', key: 'word_count', value: String(t.name.split(' ').length), source: 'deterministic' },
-        { namespace: 'description', key: 'present', value: 'true', source: 'deterministic' },
-        { namespace: 'image', key: 'category', value: 'cartoon', source: 'llm' },
-        { namespace: 'image', key: 'category', value: 'animal', source: 'llm' },
-      ],
-      image_features: {
-        image_url: null,
-        categories: ['cartoon', 'animal', 'simple_graphic'],
-        subjects: ['capybara', 'sunglasses'],
-        style: 'flat vector illustration',
-        has_text: false, is_ai_generated_style: true, references_existing_meme: false,
-        model: 'gpt-5.6-luna', confidence: 0.82, failure_reason: null,
-      },
-      related_trends: TRENDS.slice(0, 3),
     }
   }],
 
   ['GET', /^\/api\/creators$/, (q) => {
     let items = CREATORS
-    const search = (q.get('q') || '').toLowerCase()
-    if (search) items = items.filter((c) => c.wallet.toLowerCase().includes(search))
-    if (q.get('repeat_winners')) items = items.filter((c) => c.is_repeat_winner)
+    if (q.get('tracked_only') === 'true') items = items.filter((c) => c.is_tracked)
+    if (q.get('winners_only') === 'true') items = items.filter((c) => c.winners > 0)
     return page(items, q)
   }],
   ['GET', /^\/api\/creators\/(.+)$/, (q, [wallet]) => {
     const c = CREATORS.find((x) => x.wallet === wallet) || CREATORS[0]
-    return { ...c, sample: { count: c.wins_100k, total: c.total_launches, frequency: c.success_rate } }
+    return {
+      ...c,
+      tokens: TOKENS.slice(0, 6),
+      movements: CREATOR_MOVEMENTS(c.wallet),
+      // The dossier is prose Annie wrote. A wallet only gets one once it is
+      // tracked, so the fixture covers the missing case too.
+      dossier: c.is_tracked
+        ? {
+            path: `creators/${c.wallet}.md`,
+            body: [
+              `Wallet: \`${c.wallet}\``,
+              '',
+              `- Launches recorded: ${c.total_launches}`,
+              `- Tokens that reached a tier: ${c.winners}`,
+              `- Hit rate: ${(100 * (c.success_rate || 0)).toFixed(1)}% of launches reached a tier`,
+              '',
+              '## What I make of this wallet',
+              '',
+              'Launches in bursts of six to eight over a couple of hours, almost always',
+              'around the same theme, then goes quiet for days. The winners are not',
+              'obviously different from the failures on name or ticker — what separates',
+              'them looks like timing rather than the token itself, which is worth',
+              'checking properly before I treat it as a finding.',
+              '',
+              '## Winners',
+              '',
+              ...TOKENS.filter((t) => t.is_qualified).slice(0, 3).map(
+                (t) => `- ${t.symbol} — $${((t.peak_market_cap || 0) / 1000).toFixed(0)}k peak\n  - CA: \`${t.mint}\``
+              ),
+            ].join('\n'),
+          }
+        : null,
+    }
   }],
 
   ['GET', /^\/api\/launchpads$/, (q) => page(LAUNCHPADS, q)],
@@ -448,7 +765,7 @@ const routes = [
       median_minutes_to_first_milestone: 188,
       counts_by_tier: { 100000: lp.qualified_count, 250000: Math.round(lp.qualified_count * 0.4), 500000: Math.round(lp.qualified_count * 0.16), 1000000: Math.round(lp.qualified_count * 0.05) },
       migration_destinations: [{ dex: 'raydium', share: 0.62 }, { dex: 'pumpswap', share: 0.31 }, { dex: 'meteora', share: 0.07 }],
-      top_creators: CREATORS.slice(0, 5),
+      top_creators: CREATORS.slice(0, 5).map((c, n) => ({ ...c, launches_here: 40 - n * 6 })),
       recent_tokens: TOKENS.slice(0, 6),
       share_history: [],
       notes: lp.is_known ? null : 'Discovered by launchpad sweep. No public documentation found — Tavily is not configured in this deployment, so no external research has been attempted.',
@@ -513,6 +830,114 @@ const routes = [
     }
   }],
   ['GET', /^\/api\/annie\/conversations$/, () => ({ items: [], total: 0, limit: 50, offset: 0 })],
+
+  // -- Memory: a folder of markdown files, browsed as one ------------------
+  ['GET', /^\/api\/memory$/, () => ({
+    sections: MEMORY_SECTIONS.map((name) => ({
+      name,
+      description: MEMORY_SECTION_DESCRIPTIONS[name],
+      files: MEMORY_FILES.filter((f) => f.section === name).map(({ body, ...rest }) => rest),
+      count: MEMORY_FILES.filter((f) => f.section === name).length,
+    })),
+    total_files: MEMORY_FILES.length,
+    index: { files: MEMORY_FILES.length, keys: 1515, fts: true, sections: {}, rebuilt_at: iso(2 * HOUR) },
+    durability: {
+      root: '/data/memory',
+      configured: true,
+      looks_like_volume: true,
+      writable: true,
+      note: 'Memory is on a configured directory outside the app tree — this is what an attached Railway Volume looks like.',
+    },
+  })],
+  ['GET', /^\/api\/memory\/search$/, (q) => {
+    const needle = (q.get('q') || '').toLowerCase()
+    const byKey = MEMORY_FILES.filter((f) => (f.keys || []).some((k) => k.toLowerCase() === needle))
+    const hits = (byKey.length ? byKey : MEMORY_FILES.filter(
+      (f) => f.body.toLowerCase().includes(needle) || f.title.toLowerCase().includes(needle)
+    )).slice(0, 12)
+    return {
+      query: q.get('q'),
+      matched_by: byKey.length ? 'key' : 'text',
+      count: hits.length,
+      hits: hits.map((f) => ({
+        path: f.path, title: f.title, section: f.section,
+        snippet: f.body.slice(0, 240).replace(/\n/g, ' '),
+        score: 2.4, matched_key: byKey.length ? needle : null,
+      })),
+    }
+  }],
+  ['GET', /^\/api\/memory\/file$/, (q) => {
+    const f = MEMORY_FILES.find((x) => x.path === q.get('path')) || MEMORY_FILES[0]
+    return { ...f }
+  }],
+  ['POST', /^\/api\/memory\/file$/, (q, m, body) => ({ ...MEMORY_FILES[0], ...body })],
+  ['DELETE', /^\/api\/memory\/file$/, () => ({})],
+  ['POST', /^\/api\/memory\/reindex$/, () => ({ reindexed: MEMORY_FILES.length })],
+  ['GET', /^\/api\/memory\/digest$/, () => ({
+    facts: {}, prompt: '# Market window: last 6h\n\n…', prompt_chars: 6862,
+    approx_input_tokens: 1715, would_call_model: true,
+  })],
+
+  // -- Signals (the trends alias points at the same data) ------------------
+  ['GET', /^\/api\/signals$/, (q) => ({ ...page(TRENDS, q), counts: { rising: 4, new: 2, declining: 2, stable: 5, dead: 1, meaningful: 6 } })],
+  ['GET', /^\/api\/signals\/(.+)$/, (q, [slug]) => TRENDS.find((t) => t.slug === slug) || TRENDS[0]],
+
+  ['GET', /^\/api\/ledger\/stats$/, () => ({
+    ledger: { sightings_total: 3120, sightings_24h: 15840, watching: 2140, qualified_total: 668, qualified_24h: 61, creators_total: 18420, creators_tracked: 214, moves_24h: 15840 },
+    signals: { rising: 4, meaningful: 6 },
+    memory: { files: MEMORY_FILES.length, keys: 1515, fts: true },
+    stream: { window_minutes: 60, sightings: 640, distinct_creators: 410, last_sighting_at: iso(90_000) },
+    firestore: FIRESTORE_BUDGET,
+  })],
+
+  ['GET', /^\/api\/system\/cost$/, () => ({
+    firestore: FIRESTORE_BUDGET,
+    memory: { files: MEMORY_FILES.length, keys: 1515, fts: true },
+    ledger: { sightings_total: 3120, sightings_24h: 15840, watching: 2140, qualified_total: 668, qualified_24h: 61, creators_total: 18420, creators_tracked: 214, moves_24h: 15840 },
+    stream: { window_minutes: 60, sightings: 640, distinct_creators: 410, last_sighting_at: iso(90_000) },
+    durability: {
+      root: '/data/memory', configured: true, looks_like_volume: true, writable: true,
+      note: 'Memory is on a configured directory outside the app tree — this is what an attached Railway Volume looks like.',
+    },
+    jobs: [
+      { name: 'watch', mode: 'interval', last_run_at: iso(4 * 60_000), last_duration_seconds: 8.2, last_result: { checked: 900, priced: 214, qualified_count: 2 } },
+      { name: 'cycle', mode: 'fixed_times', last_run_at: iso(2 * HOUR), last_duration_seconds: 31.4, last_result: { learning: { headline: 'Cat-themed names keep outperforming.' } } },
+      { name: 'housekeeping', mode: 'daily', last_run_at: iso(9 * HOUR), last_duration_seconds: 12.1, last_result: { pruned: { sightings_dropped: 14210 } } },
+    ],
+    model_calls_per_day: {
+      scheduled: '4 cycle calls (skipped on a quiet window), plus 1 weekly and 1 monthly rollup',
+      on_demand: 'chat turns, and token_idea only when asked',
+      note: 'Counting, ranking, filtering, statistics and every file write are deterministic Python over local SQLite and cost nothing.',
+    },
+  })],
+
+  // Run history for the "Run now" buttons. The frontend triggers a run and
+  // then polls it by id, so both the list and the single-run shape are
+  // needed — a missing detail route showed up only as a console 404 in the
+  // screenshot harness, never as a visible failure on the page.
+  ['GET', /^\/api\/system\/pipeline-runs$/, (q) => {
+    const stage = q.get('stage') || 'discovery'
+    const items = Array.from({ length: 4 }, (_, n) => ({
+      id: `${stage}-${n}`,
+      stage,
+      trigger: n === 0 ? 'manual' : 'scheduled',
+      status: n === 2 ? 'error' : 'done',
+      started_at: iso((n * 6 + 1) * HOUR),
+      finished_at: iso((n * 6 + 1) * HOUR - 40_000),
+      duration_seconds: 38 + n * 4,
+      error: n === 2 ? 'DexScreener returned 429 for 2 of 30 batches; the rest completed.' : null,
+      result: PIPELINE_RESULTS[stage] || {},
+    }))
+    return page(items, q)
+  }],
+  ['GET', /^\/api\/system\/pipeline-runs\/(.+)$/, (q, [id]) => {
+    const stage = id.split('-')[0]
+    return {
+      id, stage, trigger: 'manual', status: 'done',
+      started_at: iso(40_000), finished_at: iso(2_000), duration_seconds: 38,
+      error: null, result: PIPELINE_RESULTS[stage] || {},
+    }
+  }],
 
   ['GET', /^\/api\/system\/health$/, () => ({ items: PROVIDERS, total: PROVIDERS.length, limit: 50, offset: 0 })],
   ['GET', /^\/api\/system\/capabilities$/, () => ({ items: CAPABILITIES, total: CAPABILITIES.length, limit: 50, offset: 0 })],

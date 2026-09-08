@@ -148,30 +148,60 @@ all.
 
 ## How the system works
 
-Six stages, cheap work before expensive work:
+**Rewritten 2026-09-08.** Annie was a database with a chat interface on top;
+she is now a notebook that a market writes into. The full account is in
+[MEMORY.md](MEMORY.md) — this is the shape of it.
 
-1. **Discovery** — a Helius webhook pushes a `CREATE` event the instant a new
-   mint happens on a known launchpad program (currently Pump.fun; see
-   [What is not built](#what-is-not-built) for the honest scope of this).
-   Signature polling exists too, but only as a backfill — it structurally
-   cannot keep up with Pump.fun's real transaction volume (measured directly:
-   1000 signatures covered 6 seconds of chain time), which is why the webhook
-   is the primary mechanism.
-2. **Qualification** — did it cross $100k / $250k / $500k / $1M market cap?
-   Record *why* we believe so, from which provider, and whether anything
-   disagreed.
-3. **Enrichment** — only for tokens that qualified: metadata, creator wallet,
-   deterministic name/ticker/description features.
-4. **Analysis** — the same deterministic feature extraction, feeding the trend
-   engine.
-5. **Trend engine** — compare each characteristic's recent frequency against
-   its own historical baseline. Assign a direction *and* an evidence grade.
-6. **Research engine** — Annie's chat agent answers questions against this
-   data with a bounded, logged tool-calling loop. (The *autonomous* research
-   task runner — Annie picking her own questions unprompted — is not built;
-   see below.)
+Roughly 16,000 tokens launch on Solana every day. She sees all of them and
+keeps almost none, which is the point: the filtering *is* the product.
 
-Annie sits at the end and explains what the system found.
+**Continuously — the stream.** A Helius webhook pushes a `CREATE` event the
+instant a mint happens on a known launchpad program. Each one costs a single
+local SQLite insert and touches Firestore not at all. Every launch by every
+wallet also writes a creator-movement row, which is what makes "this wallet
+has launched 47 times this week, and one ran to $2M" answerable later without
+having kept 47 token documents. Signature polling still exists as a backfill,
+but structurally cannot be primary coverage — 1,000 signatures covers about
+six seconds of Pump.fun's chain time.
+
+**Every 10 minutes — the watch loop.** The highest-priority slice of the
+watchlist gets re-priced: tracked creators' tokens first, then anything
+already moving, then never-checked, then longest-since-checked. Lookups go out
+batched 30 mints per request, so 900 mints is 30 HTTP calls. A token that
+clears a tier stops being a row and becomes a markdown file carrying its
+contract address and creator wallet. Everything that has not moved in 48 hours
+is deleted.
+
+**Four times a day — the cycle.** Signals recompute from the ledger (free
+statistics, no stored features), a digest of ~40 notable rows is assembled
+(free), relevant memories are retrieved by exact key then full text (free),
+and then **one** bounded model call turns that into edits to the memory
+files — appends, rewrites, and deletions. A quiet window skips the call
+entirely.
+
+**Weekly and monthly.** One call each, reading the level below rather than raw
+data: the month reads the weeks, the week reads the days. That cascade is what
+keeps cost flat as history accumulates.
+
+**On demand.** Ask for a launch idea and she generates one grounded in what is
+winning now, what memory says has worked, and what is already crowded. Nothing
+runs it on a schedule, because an idea nobody asked for is spend with no
+reader.
+
+Where things live, and why:
+
+| | Holds | Cost |
+|---|---|---|
+| Markdown files | Annie's judgement — what she thinks and why | free |
+| SQLite (`annie.db`) | every sighting, creator movement, price check, signal, and the search index | free |
+| Firestore | settings, bot sessions, conversations, research tasks/notes, reports, launchpads, narratives, plus a mirror of the markdown | metered |
+
+Retrieval is keys-first: every memory declares the mints, wallets and tickers
+it is about, so looking up a contract address is one indexed probe rather than
+a scan. Full-text search is the fallback for fuzzy questions.
+
+Annie sits at the end and explains what she found — but unlike before, the
+explanation is largely something she already wrote down.
 
 ---
 
@@ -702,6 +732,40 @@ trusting a frontend change.
 Two pieces: a **Python API** and a **static frontend**, deployable to entirely
 different hosts on entirely different domains — nothing about this system
 needs them to share a domain.
+
+### ⚠ Attach a Railway Volume before anything else
+
+Annie's memory is a folder of markdown files. Railway replaces the container
+filesystem on every redeploy, so without a volume that folder is wiped every
+time you ship.
+
+1. Railway dashboard → your service → **Variables → Volumes → Add Volume**
+2. Mount path: `/data`
+3. Set `ANNIE_MEMORY_DIR=/data/memory`
+
+Memory *is* mirrored to Firestore and restored on boot when the local
+directory is empty, so a wipe is survivable — but that is a backup, not the
+real thing: the SQLite ledger (every creator movement, every sighting) is not
+mirrored, because it is far too large to be and is reconstructible from the
+stream within minutes. The System Health page says which state you are in, and
+the Memory page shows a banner when the volume is missing.
+
+### Clearing the retired Firestore collections
+
+The rewrite left `tokens`, `creators`, `trends`, `memories` and their
+subcollections behind. Nothing reads them, but they still occupy the Spark
+plan's 1 GiB storage cap:
+
+```bash
+python -m tools.firestore_cleanup            # dry run — counts only
+python -m tools.firestore_cleanup --delete   # actually delete
+```
+
+Deletes count against the daily quota too, so it batches, caps itself, and is
+resumable — run it across a few days rather than in one go. Then delete the
+matching composite indexes by hand in the Firebase console (Firestore →
+Indexes); removing them from `firestore.indexes.json` stops them being
+recreated but does not delete the existing ones.
 
 ### ⚠ Read this before deploying the frontend
 

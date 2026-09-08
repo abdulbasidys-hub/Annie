@@ -64,7 +64,9 @@ export default function LaunchpadDetail() {
                               <Link to={`/tokens/${t.mint}`}><strong>{t.symbol || t.name}</strong></Link>
                             </td>
                             <td className="num" data-label="Peak">{usd(t.peak_market_cap)}</td>
-                            <td data-label="Qualified" className="faint">{relative(t.qualified_at)}</td>
+                            <td data-label="Qualified" className="faint">
+                              {t.qualified_at ? relative(t.qualified_at) : '—'}
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -82,8 +84,8 @@ export default function LaunchpadDetail() {
                       <thead>
                         <tr>
                           <th>Wallet</th>
-                          <th className="num">Launches</th>
-                          <th className="num">$100k+</th>
+                          <th className="num">Here</th>
+                          <th className="num">Winners</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -92,8 +94,8 @@ export default function LaunchpadDetail() {
                             <td className="primary" data-label="Wallet">
                               <Link to={`/creators/${c.wallet}`} className="mono">{address(c.wallet, { head: 6, tail: 4 })}</Link>
                             </td>
-                            <td className="num" data-label="Launches">{count(c.total_launches)}</td>
-                            <td className="num" data-label="$100k+">{count(c.wins_100k)}</td>
+                            <td className="num" data-label="Here">{count(c.launches_here)}</td>
+                            <td className="num" data-label="Winners">{count(c.winners)}</td>
                           </tr>
                         ))}
                       </tbody>

@@ -13,30 +13,50 @@ const TIERS = [
   { value: '1000000', label: '$1M+' },
 ]
 
-const SORTS = [
-  { value: 'qualified_at', label: 'Recently qualified' },
-  { value: 'peak_market_cap', label: 'Highest peak' },
-  { value: 'launched_at', label: 'Recently launched' },
+const WINDOWS = [
+  { value: 24, label: 'Last 24h' },
+  { value: 168, label: 'Last 7 days' },
+  { value: 720, label: 'Last 30 days' },
+  { value: 2160, label: 'Everything held' },
 ]
 
-/** Token Explorer (§57). */
+/**
+ * Token Explorer.
+ *
+ * Reads the ledger, so this lists what Annie is *holding* — tokens that
+ * actually moved. The thousands of launches a day that never trade are seen,
+ * counted, and dropped within 48 hours, so their absence here is the design
+ * working, not data missing. Filtering happens client-side against a single
+ * windowed fetch: the whole held set is small by construction.
+ */
 export default function Tokens() {
   const [query, setQuery] = useState('')
   const [tier, setTier] = useState('')
-  const [sort, setSort] = useState('qualified_at')
+  const [hours, setHours] = useState(168)
+  const [qualifiedOnly, setQualifiedOnly] = useState(false)
   const debounced = useDebounced(query, 300)
 
   const state = useApi(
-    () => api.tokens({ q: debounced || undefined, min_tier: tier || undefined, sort, qualified_only: true, limit: 100 }),
-    [debounced, tier, sort]
+    () => api.tokens({ hours, qualified_only: qualifiedOnly || undefined, limit: 200 }),
+    [hours, qualifiedOnly]
   )
+
+  const items = (state.data?.items ?? []).filter((t) => {
+    if (tier && (t.peak_market_cap ?? 0) < Number(tier)) return false
+    if (!debounced) return true
+    const needle = debounced.toLowerCase()
+    return [t.symbol, t.name, t.mint, t.creator_wallet]
+      .filter(Boolean)
+      .some((field) => String(field).toLowerCase().includes(needle))
+  })
 
   return (
     <>
       <div className="page-head">
         <h2 className="page-head__title">Tokens</h2>
         <p className="page-head__sub">
-          Every token that met the research threshold, with the evidence used to qualify it.
+          What Annie is holding — the ones that moved. Everything else she saw is counted and
+          forgotten within 48 hours.
         </p>
       </div>
 
@@ -52,9 +72,22 @@ export default function Tokens() {
         <select className="select" value={tier} onChange={(e) => setTier(e.target.value)} aria-label="Tier">
           {TIERS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
         </select>
-        <select className="select" value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort">
-          {SORTS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+        <select
+          className="select"
+          value={hours}
+          onChange={(e) => setHours(Number(e.target.value))}
+          aria-label="Window"
+        >
+          {WINDOWS.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
         </select>
+        <div className="segmented">
+          <button className={!qualifiedOnly ? 'is-active' : ''} onClick={() => setQualifiedOnly(false)}>
+            All held
+          </button>
+          <button className={qualifiedOnly ? 'is-active' : ''} onClick={() => setQualifiedOnly(true)}>
+            Cleared a tier
+          </button>
+        </div>
       </div>
 
       <Async
@@ -66,50 +99,36 @@ export default function Tokens() {
               body={
                 debounced
                   ? `Nothing matched “${debounced}”.`
-                  : 'No tokens have qualified yet. Qualified tokens appear after the ingestion pipeline has run.'
+                  : 'Nothing has moved in this window yet. Launches are sighted continuously; a token appears here once it actually trades.'
               }
             />
           </Panel>
         }
       >
-        {(data) => (
-          <Panel title={`${count(data.total)} tokens`} flush>
+        {() => (
+          <Panel
+            title={`${count(items.length)} tokens`}
+            meta={`of ${count(state.data?.total ?? 0)} held in this window`}
+            flush
+          >
             <div className="table-wrap">
               <table className="table table--responsive">
                 <thead>
                   <tr>
                     <th>Token</th>
                     <th>Launchpad</th>
-                    <th className="num">At qualification</th>
+                    <th className="num">Now</th>
                     <th className="num">Peak</th>
                     <th>Themes</th>
-                    <th>Evidence</th>
-                    <th>Qualified</th>
+                    <th>Status</th>
+                    <th>First seen</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {data.items.map((t) => (
+                  {items.map((t) => (
                     <ClickableRow key={t.mint} to={`/tokens/${t.mint}`}>
                       <td className="primary" data-label="Token">
                         <div className="row gap-3">
-                          {t.image_url ? (
-                            <img
-                              src={t.image_url}
-                              alt=""
-                              loading="lazy"
-                              width={24}
-                              height={24}
-                              style={{ borderRadius: '50%', flexShrink: 0, objectFit: 'cover' }}
-                              onError={(e) => { e.currentTarget.style.visibility = 'hidden' }}
-                            />
-                          ) : (
-                            <span
-                              style={{
-                                width: 24, height: 24, borderRadius: '50%',
-                                background: 'var(--bg-inset)', flexShrink: 0,
-                              }}
-                            />
-                          )}
                           <span className="stack" style={{ gap: 0, minWidth: 0 }}>
                             <strong className="truncate">{t.symbol || 'Unnamed'}</strong>
                             <span className="row gap-1" style={{ minWidth: 0 }}>
@@ -122,8 +141,15 @@ export default function Tokens() {
                         </div>
                       </td>
                       <td data-label="Launchpad">{t.launchpad_slug || '—'}</td>
-                      <td className="num" data-label="At qualification">{usd(t.qualified_market_cap)}</td>
-                      <td className="num" data-label="Peak">{usd(t.peak_market_cap)}</td>
+                      <td className="num" data-label="Now">{usd(t.market_cap)}</td>
+                      <td className="num" data-label="Peak">
+                        {usd(t.peak_market_cap)}
+                        {t.round_tripped && (
+                          <span className="faint" style={{ fontSize: 'var(--text-2xs)' }}>
+                            {' '}round-tripped
+                          </span>
+                        )}
+                      </td>
                       <td data-label="Themes">
                         <span className="row gap-1 wrap">
                           {(t.themes || []).slice(0, 2).map((theme) => (
@@ -136,8 +162,16 @@ export default function Tokens() {
                           )}
                         </span>
                       </td>
-                      <td data-label="Evidence"><Badge status={t.verification_status} /></td>
-                      <td data-label="Qualified" className="faint">{relative(t.qualified_at)}</td>
+                      <td data-label="Status">
+                        {t.is_qualified ? (
+                          <Badge status="verified" variant="outline">
+                            {usd(t.peak_tier)}
+                          </Badge>
+                        ) : (
+                          <Badge status={t.status} variant="plain">{t.status}</Badge>
+                        )}
+                      </td>
+                      <td data-label="First seen" className="faint">{relative(t.first_seen)}</td>
                     </ClickableRow>
                   ))}
                 </tbody>

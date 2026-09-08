@@ -11,19 +11,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.schemas import (
     AnomalyOut,
-    DashboardOut,
     HypothesisOut,
     Page,
     ReportDetail,
     ReportSummary,
     ResearchNoteOut,
     ResearchTaskSummary,
-    TrendDetail,
-    TrendSummary,
 )
 from app.config import Settings, get_settings
-from app.db.enums import ResearchTaskStatus, TrendMaturity, TrendStatus
-from app.db.models.intelligence import Trend
+from app.db.enums import ResearchTaskStatus, TrendMaturity
 from app.db.repo import FirestoreRepo, get_repo
 from app.providers.registry import ProviderRegistry, get_registry
 
@@ -38,36 +34,77 @@ MATURITY_ORDER = {
 DEFAULT_TIERS = [Decimal("100000"), Decimal("250000"), Decimal("500000"), Decimal("1000000")]
 
 
-def _trend_summary(trend: Trend, series: list[float] | None = None) -> dict[str, Any]:
+def _signal_summary(row: dict[str, Any], series: list[float] | None = None) -> dict[str, Any]:
+    """One signal, in the shape the Trends pages and the dashboard render.
+
+    Nested ``recent``/``baseline`` objects are not decoration: ``<Sample>`` on
+    the frontend is the only sanctioned way to display a rate, and it requires
+    the denominator alongside the value. That is what stops "100% of winners
+    were cat-themed" being rendered without the "…out of 3" that makes it
+    meaningless. Flattening these would quietly re-open exactly the failure
+    the statistics module exists to prevent.
+
+    ``change`` is derived here rather than stored, since it is just the
+    difference of two frequencies the row already carries.
+    """
+    recent_freq = row.get("recent_freq")
+    baseline_freq = row.get("baseline_freq")
+    change = (
+        recent_freq - baseline_freq
+        if recent_freq is not None and baseline_freq is not None
+        else None
+    )
     return {
-        "id": trend.slug,
-        "slug": trend.slug,
-        "name": trend.name,
-        "category": trend.category,
-        "status": trend.status,
-        "maturity": trend.maturity,
-        "confidence": trend.confidence,
-        "cohort_threshold_usd": trend.cohort_threshold_usd,
+        "id": row["slug"],
+        "slug": row["slug"],
+        "name": row["name"],
+        "category": row["category"],
+        "status": row["status"],
+        # The old model had a separate `maturity` field; a signal's maturity
+        # is now exactly its sample adequacy, which `thin_sample` already
+        # says. Mapped rather than dropped so the existing <Maturity> badge
+        # keeps working.
+        "maturity": "observation" if row.get("thin_sample") else "pattern",
+        "confidence": row.get("confidence"),
+        "cohort_threshold_usd": row.get("tier"),
+        "subject_namespace": row.get("namespace"),
+        "subject_key": row.get("key"),
+        "subject_value": row.get("value"),
         "recent": {
-            "count": trend.recent_count,
-            "total": trend.recent_total,
-            "frequency": trend.recent_frequency,
+            "count": row.get("recent_count"),
+            "total": row.get("recent_total"),
+            "frequency": recent_freq,
         },
         "baseline": {
-            "count": trend.baseline_count,
-            "total": trend.baseline_total,
-            "frequency": trend.baseline_frequency,
+            "count": None,  # stored as a frequency only; the cohort size varies by window
+            "total": None,
+            "frequency": baseline_freq,
         },
-        "recent_window_days": trend.recent_window_days,
-        "baseline_window_days": trend.baseline_window_days,
-        "change": trend.change,
-        "relative_change": trend.relative_change,
-        "lift": trend.lift,
+        "recent_window_days": 7,
+        "baseline_window_days": 90,
+        "change": change,
+        "relative_change": (change / baseline_freq) if change is not None and baseline_freq else None,
+        "lift": row.get("lift"),
+        "p_value": row.get("p_value"),
         "recent_series": series or [],
-        "first_detected_at": trend.first_detected_at,
-        "last_observed_at": trend.last_observed_at,
-        "persistence_days": trend.persistence_days,
+        "first_detected_at": row.get("first_seen"),
+        "last_observed_at": row.get("last_seen"),
+        "persistence_days": row.get("persistence"),
+        "thin_sample": row.get("thin_sample"),
     }
+
+
+def _signal_with_series(row: dict[str, Any]) -> dict[str, Any]:
+    """As above, plus the daily frequency series the sparkline draws."""
+    from app.memory import signals
+
+    detail = signals.get(row["slug"]) or {}
+    series = [
+        point["freq"]
+        for point in reversed(detail.get("series") or [])
+        if point.get("freq") is not None
+    ]
+    return _signal_summary(row, series)
 
 
 # -----------------------------------------------------------------------------
@@ -75,41 +112,45 @@ def _trend_summary(trend: Trend, series: list[float] | None = None) -> dict[str,
 # -----------------------------------------------------------------------------
 
 
-@router.get("/dashboard", response_model=DashboardOut)
+@router.get("/dashboard")
 async def dashboard(
     window_days: int = Query(7, ge=1, le=365),
     repo: FirestoreRepo = Depends(get_repo),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
+    """The overview page.
+
+    Counts, tiers and signals come from the local ledger — free, so this
+    page is cheap to open and cheap to refresh. Research notes, tasks and
+    anomalies still come from Firestore, which is right for them: a handful
+    of operator-initiated documents that need to be visible across
+    processes.
+
+    The old version of this route issued a Firestore query per tier per
+    window, streamed the whole trends collection, then fetched a 14-point
+    observation series per displayed trend — dozens to hundreds of document
+    reads every time someone opened the dashboard.
+    """
+    from app.memory import index, ledger, signals
+
     now = datetime.now(timezone.utc)
     start = now - timedelta(days=window_days)
     prior_start = start - timedelta(days=window_days)
 
-    async def tier_counts(frm: datetime, to: datetime) -> dict[str, int]:
-        out: dict[str, int] = {}
-        for tier in DEFAULT_TIERS:
-            tokens = await repo.qualified_tokens_in_window(start=frm, end=to, min_peak=tier)
-            out[str(tier)] = len(tokens)
-        return out
+    def tier_counts(frm: datetime, to: datetime) -> dict[str, int]:
+        return {
+            str(tier): len(ledger.qualified_in_window(frm, to, min_tier=float(tier)))
+            for tier in DEFAULT_TIERS
+        }
 
-    all_tokens, total_tokens = await repo.list_tokens(limit=1)
-    _, qualified_total = await repo.list_tokens(qualified_only=True, limit=1)
+    stats = ledger.stats()
+    signal_counts = signals.counts()
 
-    all_trends = await repo.all_trends()
-    active_trends = [t for t in all_trends if t.status != TrendStatus.DEAD.value]
-
-    def top_by_change(status: str, n: int = 5) -> list[Trend]:
-        matching = [t for t in all_trends if t.status == status]
-        matching.sort(key=lambda t: abs(t.change or 0), reverse=True)
-        return matching[:n]
-
-    async def with_series(trends: list[Trend]) -> list[dict[str, Any]]:
-        out = []
-        for t in trends:
-            obs = await repo.trend_observations(t.slug, limit=14)
-            series = [o.frequency for o in reversed(obs) if o.frequency is not None]
-            out.append(_trend_summary(t, series))
-        return out
+    def signals_with_series(status: str, n: int = 5) -> list[dict[str, Any]]:
+        return [
+            _signal_with_series(row)
+            for row in signals.listing(status=status, limit=n, include_thin=False)
+        ]
 
     launchpads, _ = await repo.list_launchpads(limit=200)
     emerging = sorted(
@@ -128,24 +169,39 @@ async def dashboard(
     anomalies = await repo.list_anomalies(unacknowledged_only=True, limit=50)
     anomalies.sort(key=lambda a: a.severity or 0, reverse=True)
 
-    freshness_rows = await repo.data_quality_since(now - timedelta(days=3), now + timedelta(days=1))
-    freshness = max((r.measured_on for r in freshness_rows), default=None)
-
     provider_health = await repo.list_provider_health()
 
     return {
-        "tokens_collected": total_tokens,
-        "tokens_qualified": qualified_total,
-        "counts_by_tier": await tier_counts(start, now),
-        "counts_by_tier_previous": await tier_counts(prior_start, start),
+        "launches_seen_24h": stats["sightings_24h"],
+        "currently_watching": stats["watching"],
+        "tokens_collected": stats["sightings_total"],
+        "tokens_qualified": stats["qualified_total"],
+        "qualified_24h": stats["qualified_24h"],
+        "creators_seen": stats["creators_total"],
+        "creators_tracked": stats["creators_tracked"],
+        "creator_movements_24h": stats["moves_24h"],
+        "launchpads_24h": stats["launchpads"],
+        "counts_by_tier": tier_counts(start, now),
+        "counts_by_tier_previous": tier_counts(prior_start, start),
         "window_days": window_days,
-        "trends_active": len(active_trends),
-        "trends_new": sum(1 for t in all_trends if t.status == TrendStatus.NEW.value),
-        "trends_rising": sum(1 for t in all_trends if t.status == TrendStatus.RISING.value),
-        "trends_declining": sum(1 for t in all_trends if t.status == TrendStatus.DECLINING.value),
-        "rising_trends": await with_series(top_by_change(TrendStatus.RISING.value)),
-        "new_trends": await with_series(top_by_change(TrendStatus.NEW.value)),
-        "declining_trends": await with_series(top_by_change(TrendStatus.DECLINING.value)),
+        "memory_files": index.stats()["files"],
+        "trends_active": sum(v for k, v in signal_counts.items()
+                             if k not in ("dead", "meaningful")),
+        "trends_new": signal_counts.get("new", 0),
+        "trends_rising": signal_counts.get("rising", 0),
+        "trends_declining": signal_counts.get("declining", 0),
+        "trends_meaningful": signal_counts.get("meaningful", 0),
+        "rising_trends": signals_with_series("rising"),
+        "new_trends": signals_with_series("new"),
+        "declining_trends": signals_with_series("declining"),
+        "movers": [
+            {
+                "mint": m.mint, "symbol": m.symbol, "name": m.name,
+                "peak_market_cap": m.peak_market_cap, "market_cap": m.market_cap,
+                "creator_wallet": m.creator, "launchpad_slug": m.launchpad,
+            }
+            for m in ledger.movers(since_hours=24, limit=10)
+        ],
         "emerging_launchpads": [
             {
                 "id": lp.slug, "slug": lp.slug, "name": lp.name, "lifecycle": lp.lifecycle,
@@ -179,141 +235,79 @@ async def dashboard(
         ],
         "open_anomalies": [
             {
-                "id": a.id, "kind": a.kind, "title": a.title, "description": a.description,
-                "detected_at": a.detected_at, "severity": a.severity, "magnitude": a.magnitude,
-                "sample_size": a.sample_size, "acknowledged": a.acknowledged,
-                "research_task_id": a.research_task_id, "evidence": a.evidence,
+                "id": a.id, "kind": a.kind, "severity": a.severity, "summary": a.summary,
+                "detected_at": a.detected_at, "acknowledged": a.acknowledged,
             }
             for a in anomalies[:5]
         ],
-        "data_freshness_seconds": int((now - freshness).total_seconds()) if freshness else None,
-        "last_ingestion_at": freshness,
-        "last_trend_run_at": max(
-            (t.last_observed_at for t in all_trends if t.last_observed_at), default=None
-        ),
-        "provider_health": [
-            {
-                "provider": r.provider, "status": r.status, "configured": r.status != "disabled",
-                "last_success_at": r.last_success_at, "last_error_at": r.last_error_at,
-                "last_error_message": r.last_error_message, "requests_24h": r.requests_24h,
-                "errors_24h": r.errors_24h, "rate_limited_24h": r.rate_limited_24h,
-                "error_rate_24h": r.error_rate_24h, "p50_latency_ms": r.p50_latency_ms,
-                "p95_latency_ms": r.p95_latency_ms,
-                "estimated_cost_24h_usd": r.estimated_cost_24h_usd,
-                "data_freshness_seconds": r.data_freshness_seconds, "missing_env_vars": [],
-            }
-            for r in provider_health
-        ],
-        # Surfaced at the top of the dashboard: every figure below is suspect
-        # while a source is down, so this cannot be buried on another page.
+        "data_freshness": stats.get("last_sighting_at"),
+        "last_ingestion_at": stats.get("last_sighting_at"),
         "degraded_capabilities": [
             c for c in settings.capability_report() if c["status"] != "available"
         ],
+        "provider_health": [
+            {
+                "provider": h.provider, "status": h.status, "requests_24h": h.requests_24h,
+                "errors_24h": h.errors_24h, "p50_latency_ms": h.p50_latency_ms,
+                "p95_latency_ms": h.p95_latency_ms, "estimated_cost_24h_usd": h.estimated_cost_24h_usd,
+                "last_success_at": h.last_success_at, "last_error_at": h.last_error_at,
+                "last_error": h.last_error,
+            }
+            for h in provider_health
+        ],
+        "capabilities": settings.capability_report(),
     }
 
 
-# -----------------------------------------------------------------------------
-# Trends
-# -----------------------------------------------------------------------------
-
-
-@router.get("/trends", response_model=Page[TrendSummary])
+@router.get("/trends")
 async def list_trends(
-    status: str | None = None,
-    cohort_threshold: Decimal | None = None,
-    min_maturity: str | None = None,
+    status: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    repo: FirestoreRepo = Depends(get_repo),
+    include_low_confidence: bool = Query(False),
 ) -> dict[str, Any]:
-    trends, total = await repo.list_trends(status=status, limit=10000, offset=0)
+    """Signals, under the route the frontend already calls "trends".
 
-    if cohort_threshold is not None:
-        trends = [t for t in trends if t.cohort_threshold_usd == cohort_threshold]
-    if min_maturity:
-        floor = MATURITY_ORDER.get(TrendMaturity(min_maturity), 0)
-        trends = [t for t in trends if MATURITY_ORDER.get(TrendMaturity(t.maturity), 0) >= floor]
+    Same concept as before — a characteristic's frequency among tokens that
+    cleared a tier, compared against baseline — recomputed from the local
+    ledger instead of a Firestore collection. ``/api/signals`` is the same
+    data under its current name; this alias stays so an existing bookmark or
+    a saved query does not break.
+    """
+    from app.memory import signals
 
-    trends.sort(key=lambda t: abs(t.change or 0), reverse=True)
-    total = len(trends)
-    page = trends[offset : offset + limit]
-
-    items = []
-    for t in page:
-        obs = await repo.trend_observations(t.slug, limit=14)
-        series = [o.frequency for o in reversed(obs) if o.frequency is not None]
-        items.append(_trend_summary(t, series))
-
-    return {"items": items, "total": total, "limit": limit, "offset": offset}
-
-
-@router.get("/trends/{slug}", response_model=TrendDetail)
-async def get_trend(slug: str, repo: FirestoreRepo = Depends(get_repo)) -> dict[str, Any]:
-    trend = await repo.get_trend(slug)
-    if trend is None:
-        raise HTTPException(status_code=404, detail=f"No trend {slug}")
-
-    observations = await repo.trend_observations(slug, limit=90)
-    observations = list(reversed(observations))  # oldest first for the chart
-    history = await repo.trend_history(slug, limit=100)
-    history = list(reversed(history))  # oldest first
-
-    examples = []
-    for mint in trend.example_token_mints[:12]:
-        t = await repo.get_token(mint)
-        if t is not None:
-            examples.append(t)
-
-    evidence = trend.evidence or {}
-    series = [o.frequency for o in observations if o.frequency is not None]
+    items = signals.listing(
+        status=status, limit=limit + offset, include_thin=include_low_confidence
+    )
     return {
-        **_trend_summary(trend, series),
-        "description": trend.description,
-        "p_value": trend.p_value,
-        "effect_size": trend.effect_size,
-        "ci_low": trend.ci_low,
-        "ci_high": trend.ci_high,
-        "variance": trend.variance,
-        "revival_count": trend.revival_count,
-        "peak_frequency": trend.peak_frequency,
-        "peak_frequency_at": trend.peak_frequency_at,
-        # Surfaced as a first-class field. These are the reasons the trend is
-        # not stronger than stated, and the UI renders them inline (§26).
-        "caveats": evidence.get("caveats", []),
-        "evidence": evidence,
-        "observations": [
-            {
-                "observed_on": o.observed_on, "window_days": o.window_days, "count": o.count,
-                "total": o.total, "frequency": o.frequency,
-                "baseline_frequency": o.baseline_frequency, "p_value": o.p_value,
-            }
-            for o in observations
-        ],
-        "history": [
-            {
-                "changed_at": h.changed_at, "from_status": h.from_status,
-                "to_status": h.to_status, "to_maturity": h.to_maturity, "reason": h.reason,
-            }
-            for h in history
-        ],
-        "example_tokens": [
-            {
-                "id": t.mint, "mint": t.mint, "name": t.name, "symbol": t.symbol,
-                "image_url": t.image_url, "launchpad_slug": t.launchpad_slug,
-                "creator_wallet": t.creator_wallet, "launched_at": t.launched_at,
-                "qualified_at": t.qualified_at, "qualified_market_cap": t.qualified_market_cap,
-                "peak_market_cap": t.peak_market_cap, "peak_tier": t.peak_tier,
-                "is_qualified": t.is_qualified, "verification_status": t.verification_status,
-                "themes": [],
-            }
-            for t in examples
-        ],
+        "items": [_signal_summary(row) for row in items[offset : offset + limit]],
+        "total": len(items),
+        "limit": limit,
+        "offset": offset,
+        "counts": signals.counts(),
     }
 
 
-# -----------------------------------------------------------------------------
-# Research
-# -----------------------------------------------------------------------------
+@router.get("/trends/{slug}")
+async def get_trend(slug: str) -> dict[str, Any]:
+    """One signal in full, with its daily series and fitted slope."""
+    from app.memory import index, signals
+
+    found = signals.get(slug)
+    if found is None:
+        raise HTTPException(status_code=404, detail=f"No signal {slug}")
+    series = [
+        point["freq"] for point in reversed(found.get("series") or [])
+        if point.get("freq") is not None
+    ]
+    return {
+        **_signal_summary(found, series),
+        "series": found.get("series") or [],
+        "slope": found.get("slope"),
+        # Anything Annie has actually written about this characteristic —
+        # usually far more useful than the numbers, which are all above.
+        "related_memories": [h.to_dict() for h in index.search(found["name"], limit=4)],
+    }
 
 
 @router.get("/research/tasks", response_model=Page[ResearchTaskSummary])

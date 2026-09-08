@@ -344,172 +344,253 @@ class AnnieAgent:
 
 
 async def _tool_dashboard_summary(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
-    """``*_raw`` counts every trend document regardless of sample size;
-    ``trends_meeting_significance`` applies the same bars
-    (MIN_RECENT_SAMPLE/MIN_OCCURRENCES) list_trends filters by — kept
-    separate rather than silently using one or the other after a real
-    inconsistency (2026-08-25): a raw count of 18 "new" trends alongside a
-    significance-filtered list_trends call returning zero of them, with
-    nothing in either result explaining the gap. Report both numbers rather
-    than picking one, so the difference itself is visible instead of hidden."""
-    from app.analysis.stats import MIN_OCCURRENCES, MIN_RECENT_SAMPLE
+    """Where things stand overall — launches seen, what cleared a tier, what
+    Annie is tracking, and how big her memory is.
 
-    _, total = await agent.repo.list_tokens(limit=1)
-    _, qualified = await agent.repo.list_tokens(qualified_only=True, limit=1)
-    trends = await agent.repo.all_trends()
+    Reads the local ledger and search index, so it is free and can be called
+    freely. ``*_raw`` counts every signal regardless of sample size;
+    ``signals_meaningful`` applies the statistical bars. Both are reported
+    rather than picking one, after a real inconsistency where a raw count of
+    18 "new" trends sat next to a filtered list returning zero of them with
+    nothing in either result explaining the gap.
+    """
+    from app.memory import index, ledger, signals
 
-    def significant(t: Any) -> bool:
-        return (t.recent_total or 0) >= MIN_RECENT_SAMPLE and (t.recent_count or 0) >= MIN_OCCURRENCES
-
+    stats = ledger.stats()
+    counts = signals.counts()
     return {
-        "tokens_collected": total,
-        "tokens_qualified": qualified,
-        "trends_active_raw": sum(1 for t in trends if t.status != "dead"),
-        "trends_rising_raw": sum(1 for t in trends if t.status == "rising"),
-        "trends_new_raw": sum(1 for t in trends if t.status == "new"),
-        "trends_declining_raw": sum(1 for t in trends if t.status == "declining"),
-        "trends_meeting_significance": sum(1 for t in trends if t.status != "dead" and significant(t)),
+        "launches_seen_24h": stats["sightings_24h"],
+        "currently_watching": stats["watching"],
+        "reached_a_tier_24h": stats["qualified_24h"],
+        "reached_a_tier_total": stats["qualified_total"],
+        "creators_seen": stats["creators_total"],
+        "creators_tracked": stats["creators_tracked"],
+        "creator_movements_24h": stats["moves_24h"],
+        "launchpads_24h": stats["launchpads"],
+        "signals_raw": {k: v for k, v in counts.items() if k != "meaningful"},
+        "signals_meaningful": counts.get("meaningful", 0),
+        "memory_files": index.stats()["files"],
         "note": (
-            "*_raw counts every trend record regardless of sample size — most will be well "
-            "below the bar for a real finding until enough tokens qualify. "
-            "trends_meeting_significance is how many currently clear it; use list_trends "
-            "(not this raw count) to actually cite specific trends."
+            "Launches seen is everything sighted; almost none of it is kept. "
+            "signals_raw counts every characteristic regardless of sample size "
+            "— use list_signals (not the raw count) to cite anything specific."
         ),
     }
 
 
 async def _tool_search_tokens(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """Tokens that actually moved, from the ledger.
+
+    Note what this does *not* search: the thousands of launches a day that
+    never traded. Those are sighted, pruned within 48 hours, and were never
+    subjects. If someone asks about a specific mint that is not here, that
+    is what ``live_token_lookup`` is for.
+    """
+    from app.memory import ledger
+
     limit = min(int(args.get("limit") or 10), 25)
-    tokens, total = await agent.repo.list_tokens(
-        qualified_only=bool(args.get("qualified_only", True)),
-        launchpad_slug=args.get("launchpad_slug"),
-        limit=limit,
-    )
-    min_tier = args.get("min_tier_usd")
-    if min_tier:
-        floor = Decimal(str(min_tier))
-        tokens = [t for t in tokens if t.peak_market_cap is not None and t.peak_market_cap >= floor]
+    hours = min(int(args.get("hours") or 24), 720)
+    floor = float(args.get("min_market_cap_usd") or ledger.WATCH_FLOOR_USD)
+
+    found = ledger.movers(since_hours=hours, min_market_cap=floor, limit=limit)
+    if args.get("qualified_only"):
+        found = [t for t in found if t.qualified_at]
+    if args.get("launchpad_slug"):
+        found = [t for t in found if t.launchpad == args["launchpad_slug"]]
+
     return {
-        "total_matching": total,
+        "window_hours": hours,
         "tokens": [
             {
                 "mint": t.mint, "name": t.name, "symbol": t.symbol,
-                "qualified_at": _iso(t.qualified_at),
-                "qualified_market_cap": _money(t.qualified_market_cap),
-                "peak_market_cap": _money(t.peak_market_cap),
-                "launchpad_slug": t.launchpad_slug, "creator_wallet": t.creator_wallet,
+                "launchpad": t.launchpad, "creator_wallet": t.creator,
+                "market_cap": t.market_cap, "peak_market_cap": t.peak_market_cap,
+                "tier_reached": t.tier, "qualified_at": t.qualified_at,
+                "round_tripped": bool(
+                    t.peak_market_cap and t.market_cap
+                    and t.market_cap < t.peak_market_cap * 0.5
+                ),
             }
-            for t in tokens
+            for t in found
         ],
     }
 
 
 async def _tool_get_token(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """Everything Annie holds about one mint: ledger row plus any memory.
+
+    The memory half is the interesting one — if this token was worth writing
+    about, the file carries her actual reasoning, not just numbers.
+    """
+    from app.memory import index, ledger, service
+
     mint = str(args.get("mint") or "").strip()
-    token = await agent.repo.get_token(mint) if mint else None
-    if token is None:
-        return {"found": False}
-    features = await agent.repo.token_features(mint)
-    milestones = await agent.repo.token_milestones(mint)
+    if not mint:
+        return {"error": "mint is required"}
+
+    sighting = ledger.get_sighting(mint)
+    memory = service.read(service.token_path(mint))
+    related = index.by_key(mint, limit=4)
+
+    if sighting is None and memory is None and not related:
+        return {
+            "found": False,
+            "note": (
+                "Nothing on this mint. Either it never did anything worth "
+                "keeping, or it is too new. Use live_token_lookup for its "
+                "current market data straight from the chain."
+            ),
+        }
+
+    result: dict[str, Any] = {"found": True, "mint": mint}
+    if sighting is not None:
+        result["ledger"] = {
+            "name": sighting.name, "symbol": sighting.symbol,
+            "creator_wallet": sighting.creator, "launchpad": sighting.launchpad,
+            "first_seen": sighting.first_seen, "market_cap": sighting.market_cap,
+            "peak_market_cap": sighting.peak_market_cap, "tier_reached": sighting.tier,
+            "qualified_at": sighting.qualified_at, "status": sighting.status,
+        }
+    if memory is not None:
+        result["memory"] = {"path": memory.path, "content": memory.body}
+    if related:
+        result["mentioned_in"] = [
+            {"path": h.path, "excerpt": h.snippet} for h in related if h.path != (memory.path if memory else "")
+        ]
+    return result
+
+
+async def _tool_list_signals(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """Characteristics over-represented among tokens that cleared a tier.
+
+    Defaults to those with enough sample to mean something. Sorting purely
+    by percentage change is a trap this fell into once: a characteristic
+    appearing exactly once in a tiny cohort produces a huge swing against a
+    zero baseline and would rank first, ahead of anything with real
+    standing — which is how a single token's incidental use of the word
+    "still" once got cited as a narrative.
+    """
+    from app.analysis.stats import MIN_OCCURRENCES, MIN_RECENT_SAMPLE
+    from app.memory import signals
+
+    limit = min(int(args.get("limit") or 10), 25)
+    include_thin = bool(args.get("include_low_confidence", False))
+    items = signals.listing(
+        status=args.get("status"), limit=limit, include_thin=include_thin
+    )
     return {
-        "found": True,
-        "mint": token.mint, "name": token.name, "symbol": token.symbol,
-        "description": token.description, "launchpad_slug": token.launchpad_slug,
-        "creator_wallet": token.creator_wallet, "launched_at": _iso(token.launched_at),
-        "is_qualified": token.is_qualified, "qualified_at": _iso(token.qualified_at),
-        "qualified_market_cap": _money(token.qualified_market_cap),
-        "peak_market_cap": _money(token.peak_market_cap),
-        "verification_status": token.verification_status,
-        "qualification_evidence": token.qualification_evidence,
-        "themes": [f.value for f in features if f.namespace == "token" and f.key == "theme"],
-        "milestones": [
-            {"kind": m.kind, "threshold_usd": _money(m.threshold_usd), "reached_at": _iso(m.reached_at)}
-            for m in milestones
+        "note": (
+            None if include_thin else
+            f"Filtered to signals with enough sample size to mean something "
+            f"(cohort >= {MIN_RECENT_SAMPLE} tokens, characteristic seen >= "
+            f"{MIN_OCCURRENCES} times). Pass include_low_confidence=true for "
+            f"thinner samples — label those speculation or hypothesis, never fact."
+        ),
+        "signals": [
+            {
+                "slug": s_["slug"], "name": s_["name"], "category": s_["category"],
+                "status": s_["status"], "confidence": s_["confidence"],
+                "cohort_threshold_usd": s_["tier"],
+                "recent_count": s_["recent_count"], "recent_total": s_["recent_total"],
+                "recent_frequency": s_["recent_freq"], "baseline_frequency": s_["baseline_freq"],
+                "lift": s_["lift"], "persistence_days": s_["persistence"],
+                "thin_sample": s_["thin_sample"],
+            }
+            for s_ in items
         ],
     }
 
 
-async def _tool_list_trends(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
-    """Sorting purely by |change| is a trap this tool fell into until
-    2026-08-25: a characteristic that appears exactly once in a still-tiny
-    cohort (a brand-new qualification pipeline, say) produces a huge percentage
-    swing versus a zero baseline and would rank *first* — ahead of anything
-    with real statistical standing — which is exactly how Annie ended up
-    citing things like a single token's incidental use of the word "still" as
-    if it were a narrative. app.analysis.stats already defines the sample-size
-    bars a trend needs to clear before it means anything (MIN_RECENT_SAMPLE,
-    MIN_OCCURRENCES) and stamps every trend's maturity accordingly — this
-    just makes the tool actually respect that instead of surfacing raw
-    percentage swings from cohorts too small to swing meaningfully.
-    """
-    from app.analysis.stats import MIN_OCCURRENCES, MIN_RECENT_SAMPLE
+async def _tool_get_signal(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    from app.memory import signals
 
-    limit = min(int(args.get("limit") or 10), 25)
-    status = args.get("status")
-    include_low_confidence = bool(args.get("include_low_confidence", False))
-    trends, _ = await agent.repo.list_trends(status=status, limit=10000)
-
-    if not include_low_confidence:
-        trends = [
-            t for t in trends
-            if (t.recent_total or 0) >= MIN_RECENT_SAMPLE and (t.recent_count or 0) >= MIN_OCCURRENCES
-        ]
-    trends.sort(key=lambda t: abs(t.change or 0), reverse=True)
-    return {
-        "note": (
-            None if include_low_confidence else
-            "Filtered to trends with enough sample size to mean something "
-            f"(cohort >= {MIN_RECENT_SAMPLE} tokens, characteristic seen >= {MIN_OCCURRENCES} times). "
-            "Pass include_low_confidence=true to see raw observations from thinner samples — "
-            "label those as speculation/hypothesis, not fact, if you cite them."
-        ),
-        "trends": [
-            {
-                "slug": t.slug, "name": t.name, "category": t.category, "status": t.status,
-                "maturity": t.maturity, "confidence": t.confidence,
-                "cohort_threshold_usd": _money(t.cohort_threshold_usd),
-                "recent_count": t.recent_count, "recent_total": t.recent_total,
-                "recent_frequency": t.recent_frequency, "baseline_frequency": t.baseline_frequency,
-                "change": t.change, "persistence_days": t.persistence_days,
-            }
-            for t in trends[:limit]
-        ]
-    }
-
-
-async def _tool_get_trend(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
     slug = str(args.get("slug") or "").strip()
-    trend = await agent.repo.get_trend(slug) if slug else None
-    if trend is None:
+    found = signals.get(slug) if slug else None
+    if found is None:
         return {"found": False}
-    evidence = trend.evidence or {}
-    return {
-        "found": True,
-        "slug": trend.slug, "name": trend.name, "description": trend.description,
-        "status": trend.status, "maturity": trend.maturity, "confidence": trend.confidence,
-        "cohort_threshold_usd": _money(trend.cohort_threshold_usd),
-        "recent_count": trend.recent_count, "recent_total": trend.recent_total,
-        "recent_frequency": trend.recent_frequency, "baseline_frequency": trend.baseline_frequency,
-        "change": trend.change, "p_value": trend.p_value, "effect_size": trend.effect_size,
-        "persistence_days": trend.persistence_days, "caveats": evidence.get("caveats", []),
-        "first_detected_at": _iso(trend.first_detected_at),
-    }
+    return {"found": True, **found}
 
 
 async def _tool_list_creators(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """Creator wallets, by lifetime record or by who is busy right now.
+
+    Every launch by every wallet is recorded, so this is complete rather
+    than a sample — that is the whole reason creator movements live in the
+    local ledger instead of as per-wallet remote documents.
+    """
+    from app.memory import ledger
+
     limit = min(int(args.get("limit") or 10), 25)
-    creators, _ = await agent.repo.list_creators(limit=limit)
-    if args.get("repeat_winners_only"):
-        creators = [c for c in creators if c.is_repeat_winner]
+    window = args.get("window_hours")
+    creators = ledger.top_creators(
+        limit=limit,
+        tracked_only=bool(args.get("tracked_only")),
+        window_hours=int(window) if window else None,
+    )
+    if args.get("winners_only"):
+        creators = [c for c in creators if (c.get("winners") or 0) > 0]
     return {
+        "ordered_by": "launches in window" if window else "winners, then best result",
         "creators": [
             {
-                "wallet": c.wallet, "total_launches": c.total_launches,
-                "wins_100k": c.wins_100k, "wins_1m": c.wins_1m,
-                "success_rate": c.success_rate, "is_repeat_winner": c.is_repeat_winner,
+                "wallet": c["wallet"],
+                "total_launches": c["launches"],
+                "launches_in_window": c.get("recent_launches"),
+                "winners": c["winners"],
+                "best_market_cap": c["best_market_cap"],
+                "best_mint": c["best_mint"],
+                "hit_rate": (
+                    round(100 * c["winners"] / c["launches"], 2) if c["launches"] else None
+                ),
+                "tracked": bool(c["tracked"]),
+                "dossier": c.get("dossier_path"),
             }
             for c in creators
-        ]
+        ],
+    }
+
+
+async def _tool_get_creator(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """One wallet's full record: totals, its tokens, and its dossier.
+
+    The dossier is prose Annie wrote about this wallet. Prefer quoting that
+    over restating the numbers — the numbers are already in the table above
+    it, and the reason the wallet is interesting is usually in the prose.
+    """
+    from app.memory import ledger, service
+
+    wallet = str(args.get("wallet") or "").strip()
+    if not wallet:
+        return {"error": "wallet is required"}
+
+    creator = ledger.get_creator(wallet)
+    if creator is None:
+        return {"found": False, "note": "This wallet has not been seen launching anything."}
+
+    tokens = ledger.creator_tokens(wallet, limit=20)
+    dossier = service.read(service.creator_path(wallet))
+    recent = ledger.creator_moves(wallet, limit=25)
+    return {
+        "found": True,
+        "wallet": wallet,
+        "total_launches": creator["launches"],
+        "winners": creator["winners"],
+        "best_market_cap": creator["best_market_cap"],
+        "best_mint": creator["best_mint"],
+        "tracked": bool(creator["tracked"]),
+        "first_seen": creator["first_seen"],
+        "last_seen": creator["last_seen"],
+        "tokens": [
+            {
+                "mint": t.mint, "symbol": t.symbol, "peak_market_cap": t.peak_market_cap,
+                "qualified_at": t.qualified_at,
+            }
+            for t in tokens
+        ],
+        "recent_movements": [
+            {"at": m["at"], "kind": m["kind"], "mint": m["mint"]} for m in recent
+        ],
+        "dossier": dossier.body if dossier else None,
     }
 
 
@@ -586,26 +667,111 @@ async def _tool_live_token_lookup(agent: AnnieAgent, args: dict[str, Any]) -> di
     }
 
 
-async def _tool_search_memories(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
-    """Annie's durable work memory — not conversation history, not research
-    findings (use list_research_notes for those). "Store extensively,
-    retrieve selectively": this is called on demand, never pre-loaded into
-    every turn, same discipline as every other tool here."""
-    limit = min(int(args.get("limit") or 5), 15)
-    type_ = args.get("type")
-    memories = await agent.repo.active_memories_by_importance(type_=type_, limit=limit)
-    for m in memories:
-        await agent.repo.touch_memory_used(m.id)
+async def _tool_search_memory(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """Annie's own notebook — what she has learned, in her own words.
+
+    This is the tool to reach for first on almost any question about the
+    market, because it is where her actual thinking lives; the ledger tools
+    above only hold numbers.
+
+    Retrieval is keys-first: passing a bare contract address or creator
+    wallet resolves through the exact-handle index in a single probe rather
+    than a text scan. Excerpts come back, not whole files — call
+    ``read_memory`` when an excerpt is clearly the right file and you need
+    the rest of it.
+    """
+    from app.memory import index
+
+    query = str(args.get("query") or "").strip()
+    if not query:
+        return {"error": "query is required"}
+    limit = min(int(args.get("limit") or 5), 12)
+    hits = index.search(query, limit=limit, section=args.get("section"))
     return {
-        "memories": [
-            {
-                "id": m.id, "type": m.type, "title": m.title, "content": m.content,
-                "confidence": m.confidence, "importance": m.importance, "tags": m.tags,
-                "created_at": _iso(m.created_at),
-            }
-            for m in memories
-        ]
+        "query": query,
+        "matched_by": "exact handle" if hits and hits[0].matched_key else "text relevance",
+        "results": [
+            {"path": h.path, "title": h.title, "section": h.section, "excerpt": h.snippet}
+            for h in hits
+        ],
+        "note": (
+            None if hits else
+            "Nothing in memory on this. Say so plainly rather than reasoning "
+            "from general knowledge as though it were something you observed."
+        ),
     }
+
+
+async def _tool_read_memory(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """Open one memory file whole, by path (get the path from search_memory)."""
+    from app.memory import service
+    from app.memory.paths import MemoryPathError
+
+    try:
+        memory = service.read(str(args.get("path") or ""))
+    except MemoryPathError as exc:
+        return {"error": str(exc)}
+    if memory is None:
+        return {"found": False}
+    return {
+        "found": True, "path": memory.path, "title": memory.title,
+        "updated": memory.updated, "tags": memory.tags, "content": memory.body,
+    }
+
+
+async def _tool_write_memory(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """Add something to the notebook mid-conversation.
+
+    Deliberately append-only and restricted to ``notes/``. The scheduled
+    cycle is where memory is properly curated, against a full window of
+    evidence; a chat turn sees one person's question and should not be
+    rewriting standing beliefs off the back of it. Anything genuinely
+    durable written here gets picked up and promoted by a later cycle, which
+    is the right order.
+    """
+    from app.memory import service
+    from app.memory.paths import MemoryPathError, slug
+
+    text = str(args.get("text") or "").strip()
+    if not text:
+        return {"saved": False, "error": "text is required"}
+    topic = str(args.get("topic") or "").strip() or "from-chat"
+
+    try:
+        memory = await service.append(
+            f"notes/{slug(topic)}.md",
+            text,
+            heading=_now_heading(),
+            title=topic[:80],
+            tags=["from-chat"],
+            keys=[str(k) for k in (args.get("keys") or [])][:8],
+        )
+    except MemoryPathError as exc:
+        return {"saved": False, "error": str(exc)}
+    return {"saved": True, "path": memory.path}
+
+
+async def _tool_token_idea(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """Generate launch ideas grounded in current market state and memory.
+
+    Call this when someone asks what to launch, what is working, or for an
+    angle. It costs a model call of its own, so do not call it to answer a
+    question that ``search_memory`` already covers.
+    """
+    from app.memory import ideas
+
+    return await ideas.generate(
+        agent.registry,
+        agent.settings,
+        brief=str(args.get("brief") or "").strip(),
+        count=min(int(args.get("count") or 3), 4),
+    )
+
+
+def _now_heading() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC (from chat)")
 
 
 async def _tool_remember_person(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
@@ -701,15 +867,19 @@ async def _tool_web_research(agent: AnnieAgent, args: dict[str, Any]) -> dict[st
 
 _TOOL_HANDLERS = {
     "dashboard_summary": _tool_dashboard_summary,
+    "search_memory": _tool_search_memory,
+    "read_memory": _tool_read_memory,
+    "write_memory": _tool_write_memory,
     "search_tokens": _tool_search_tokens,
     "get_token": _tool_get_token,
     "live_token_lookup": _tool_live_token_lookup,
-    "list_trends": _tool_list_trends,
-    "get_trend": _tool_get_trend,
+    "list_signals": _tool_list_signals,
+    "get_signal": _tool_get_signal,
     "list_creators": _tool_list_creators,
+    "get_creator": _tool_get_creator,
     "get_launchpad": _tool_get_launchpad,
     "list_research_notes": _tool_list_research_notes,
-    "search_memories": _tool_search_memories,
+    "token_idea": _tool_token_idea,
     "create_research_task": _tool_create_research_task,
     "remember_person": _tool_remember_person,
     "manage_discord_channel": _tool_manage_discord_channel,
@@ -718,67 +888,167 @@ _TOOL_HANDLERS = {
 
 
 def _tool_specs(settings: Settings, platform_context: PlatformContext | None = None) -> list[dict[str, Any]]:
+    """The tools offered to the model, in the order it should reach for them.
+
+    Memory first, deliberately. Annie's notebook is where her reasoning
+    lives; the ledger tools below it hold numbers she has already reasoned
+    about. Answering from the numbers when the notebook has a considered view
+    is how she ends up reciting statistics instead of saying what she thinks.
+    """
     specs = [
         _spec(
-            "dashboard_summary", "Overall counts: tokens collected/qualified, active trend counts.",
+            "search_memory",
+            "SEARCH ANNIE'S OWN NOTEBOOK — what she has learned about this market, in her "
+            "own words. Reach for this first on almost any question about the market, "
+            "creators, narratives or what works. Passing a bare contract address or "
+            "creator wallet resolves it directly to the file about it. Returns excerpts.",
+            {
+                "type": "object", "required": ["query"], "additionalProperties": False,
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "A question, a theme, or an exact mint/wallet/ticker.",
+                    },
+                    "section": {
+                        "type": "string",
+                        "enum": ["core", "daily", "weekly", "monthly", "creators",
+                                 "tokens", "narratives", "playbook", "notes"],
+                        "description": "Optional. core = standing beliefs; playbook = what has "
+                                       "actually worked; creators/tokens = per-entity files.",
+                    },
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 12},
+                },
+            },
+        ),
+        _spec(
+            "read_memory",
+            "Open one memory file in full, by path. Use after search_memory when an "
+            "excerpt is clearly the right file and you need the rest of it.",
+            {"type": "object", "required": ["path"], "additionalProperties": False,
+             "properties": {"path": {"type": "string", "description": "e.g. core/market-model.md"}}},
+        ),
+        _spec(
+            "write_memory",
+            "Add a note to the notebook when this conversation surfaced something worth "
+            "keeping — an observation, a correction, something the operator told you. "
+            "Appends to notes/ only; the scheduled cycle is what promotes anything durable "
+            "into standing belief. Do not use this to record ordinary chat.",
+            {
+                "type": "object", "required": ["text", "topic"], "additionalProperties": False,
+                "properties": {
+                    "text": {"type": "string", "description": "The note, in your own words."},
+                    "topic": {"type": "string", "description": "Short subject, becomes the filename."},
+                    "keys": {
+                        "type": "array", "items": {"type": "string"},
+                        "description": "Mints/wallets/tickers this is about, so it is findable later.",
+                    },
+                },
+            },
+        ),
+        _spec(
+            "dashboard_summary",
+            "Where things stand overall: launches seen, what cleared a tier, creators "
+            "tracked, memory size. Free to call.",
             {"type": "object", "properties": {}, "additionalProperties": False},
         ),
         _spec(
-            "search_tokens", "Search/list tokens with optional filters.",
+            "search_tokens",
+            "Tokens that actually moved, from the ledger. Note this does NOT cover the "
+            "thousands of launches a day that never traded — those are seen, then "
+            "forgotten within 48 hours. For a specific mint that is not here, use "
+            "live_token_lookup.",
             {
                 "type": "object", "additionalProperties": False,
                 "properties": {
-                    "qualified_only": {"type": "boolean", "description": "Default true."},
-                    "min_tier_usd": {"type": "string", "description": "e.g. '1000000' for $1M+."},
+                    "hours": {"type": "integer", "minimum": 1, "maximum": 720,
+                              "description": "Window to look back over. Default 24."},
+                    "qualified_only": {"type": "boolean", "description": "Only ones that cleared a tier."},
+                    "min_market_cap_usd": {"type": "number"},
                     "launchpad_slug": {"type": "string"},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 25},
                 },
             },
         ),
         _spec(
-            "get_token", "Full detail for one token by mint address, FROM THE RESEARCH DATABASE ONLY "
-            "(qualified tokens that migrated and cleared a $100k+ tier). Returns not-found for anything "
-            "still pending the daily qualification run — use live_token_lookup for that instead.",
+            "get_token",
+            "Everything held about one mint: its ledger row, its memory file if it earned "
+            "one, and anywhere else it is mentioned. The memory file is the interesting "
+            "part — it has the reasoning, not just the numbers.",
             {"type": "object", "required": ["mint"], "additionalProperties": False,
              "properties": {"mint": {"type": "string"}}},
         ),
         _spec(
-            "live_token_lookup", "Live, right-now market data (price, market cap, liquidity) for ANY "
-            "mint/contract address, whether or not it's in the research database yet. Use this whenever "
-            "someone drops a CA and asks what it's worth, or asks about a token get_token doesn't find.",
+            "live_token_lookup",
+            "Live, right-now market data (price, market cap, liquidity) for ANY mint, "
+            "whether or not Annie has ever seen it. Use whenever someone drops a CA and "
+            "asks what it is worth now, or asks about a token get_token does not have.",
             {"type": "object", "required": ["mint"], "additionalProperties": False,
              "properties": {"mint": {"type": "string"}}},
         ),
         _spec(
-            "list_trends", "List trends, optionally filtered by status. Defaults to trends with "
-            "enough sample size to mean something — leave include_low_confidence off unless "
-            "someone specifically wants to see raw, thin-sample observations too.",
+            "list_creators",
+            "Creator wallets — by lifetime record, or by who is launching most right now "
+            "(pass window_hours). Every launch by every wallet is recorded, so these "
+            "counts are complete, not a sample.",
             {
                 "type": "object", "additionalProperties": False,
                 "properties": {
-                    "status": {"type": "string", "enum": ["new", "rising", "stable", "declining", "dead"]},
+                    "window_hours": {"type": "integer", "minimum": 1, "maximum": 720,
+                                     "description": "Omit for lifetime totals."},
+                    "tracked_only": {"type": "boolean",
+                                     "description": "Only wallets Annie has decided to follow."},
+                    "winners_only": {"type": "boolean",
+                                     "description": "Only wallets with a token that cleared a tier."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 25},
+                },
+            },
+        ),
+        _spec(
+            "get_creator",
+            "One wallet in full: totals, its tokens, recent movements, and its dossier. "
+            "Quote the dossier over restating the numbers — the reason a wallet is "
+            "interesting is usually in the prose.",
+            {"type": "object", "required": ["wallet"], "additionalProperties": False,
+             "properties": {"wallet": {"type": "string"}}},
+        ),
+        _spec(
+            "list_signals",
+            "Characteristics statistically over-represented among tokens that cleared a "
+            "tier — themes, name shapes, ticker shapes, launchpads. Defaults to those "
+            "with enough sample to mean something.",
+            {
+                "type": "object", "additionalProperties": False,
+                "properties": {
+                    "status": {"type": "string",
+                               "enum": ["new", "rising", "stable", "declining", "dead"]},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 25},
                     "include_low_confidence": {
                         "type": "boolean",
-                        "description": "Default false. True includes trends from cohorts too small "
-                        "for statistical significance — label anything cited from these as "
-                        "speculation/hypothesis, never fact.",
+                        "description": "Default false. True includes cohorts too small for "
+                        "significance — label anything cited from those as speculation or "
+                        "hypothesis, never fact.",
                     },
                 },
             },
         ),
         _spec(
-            "get_trend", "Full detail for one trend by slug (get the slug from list_trends first).",
+            "get_signal",
+            "Full detail and daily series for one signal by slug (get it from list_signals).",
             {"type": "object", "required": ["slug"], "additionalProperties": False,
              "properties": {"slug": {"type": "string"}}},
         ),
         _spec(
-            "list_creators", "List creator wallets, optionally filtered to repeat winners.",
+            "token_idea",
+            "Generate launch ideas grounded in what is winning right now and what memory "
+            "says has worked. Use when asked what to launch, what is working, or for an "
+            "angle. Costs a model call of its own — do not use it for a question "
+            "search_memory already answers.",
             {
                 "type": "object", "additionalProperties": False,
                 "properties": {
-                    "repeat_winners_only": {"type": "boolean"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 25},
+                    "brief": {"type": "string",
+                              "description": "Optional steer, e.g. 'something in the AI space'."},
+                    "count": {"type": "integer", "minimum": 1, "maximum": 4},
                 },
             },
         ),
@@ -788,31 +1058,23 @@ def _tool_specs(settings: Settings, platform_context: PlatformContext | None = N
              "properties": {"slug": {"type": "string"}}},
         ),
         _spec(
-            "list_research_notes", "Prior findings from Research Memory (§29) — check before calling something new.",
+            "list_research_notes",
+            "Prior formal research findings — distinct from the notebook above, which is "
+            "Annie's ongoing thinking. Check before commissioning something new.",
             {"type": "object", "additionalProperties": False,
              "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 20}}},
         ),
         _spec(
-            "search_memories", "Annie's own accumulated work memory — durable lessons, recurring "
-            "observations, and daily activity logs (distinct from research findings above). Check "
-            "this for context on patterns you've noticed before or how the ecosystem has behaved.",
-            {"type": "object", "additionalProperties": False,
-             "properties": {
-                 "type": {"type": "string", "enum": ["long_term", "daily_log"], "description": "Omit for both."},
-                 "limit": {"type": "integer", "minimum": 1, "maximum": 15},
-             }},
-        ),
-        _spec(
-            "create_research_task", "Start a real, multi-round background investigation — the same "
-            "engine autonomous research uses — instead of answering from what the tools above already "
-            "show. Use this when someone explicitly asks you to look into, dig into, investigate or "
-            "research something that needs actual new work, not a question you can already answer. "
-            "It runs in the background; tell the user you've started it and roughly what you're "
-            "checking, rather than waiting on it before replying.",
+            "create_research_task",
+            "Start a real, multi-round background investigation — the same engine "
+            "autonomous research uses — instead of answering from what the tools above "
+            "already show. Use when someone explicitly asks you to look into, dig into or "
+            "investigate something that needs new work. It runs in the background; tell "
+            "the user you have started it rather than waiting on it.",
             {"type": "object", "required": ["question"], "additionalProperties": False,
              "properties": {
                  "question": {"type": "string", "description": "The concrete question to investigate."},
-                 "reason": {"type": "string", "description": "Why this is worth investigating, in your own words."},
+                 "reason": {"type": "string", "description": "Why it is worth investigating, in your own words."},
              }},
         ),
     ]

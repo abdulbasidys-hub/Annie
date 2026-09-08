@@ -29,6 +29,7 @@ const ROUTES = [
   ['creators', '/creators'],
   ['creator-detail', '/creators/Cr0tRw9Km4Pz7Vn2Lb8Qs5Xd3Fj6Hg1Ay0'],
   ['narratives', '/narratives'],
+  ['memory', '/memory'],
   ['research', '/research'],
   ['reports', '/reports'],
   ['sources', '/sources'],

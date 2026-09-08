@@ -14,9 +14,9 @@ from app.db.repo import FirestoreRepo, get_repo
 from app.pipeline.tracking import (
     fire_and_forget,
     run_discovery_stage,
-    run_enrichment_stage,
     run_narratives_stage,
-    run_trends_stage,
+    run_signals_stage,
+    run_watch_stage,
 )
 from app.providers.registry import ProviderRegistry, get_registry
 
@@ -138,25 +138,55 @@ async def run_discovery_now(
     return {"run_id": run.id}
 
 
-@router.post("/run/enrichment")
-async def run_enrichment_now(
-    batch_size: int = Query(50, ge=1, le=200),
+@router.post("/run/watch")
+async def run_watch_now(
+    batch_size: int = Query(300, ge=1, le=1000),
     repo: FirestoreRepo = Depends(get_repo),
     registry: ProviderRegistry = Depends(get_registry),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
-    """Manually trigger Stage 2/3 (§4, §20): qualify and enrich discovered tokens. See run_discovery_now's docstring for the async/polling contract."""
-    run = await repo.create_pipeline_run("enrichment", trigger="manual")
-    asyncio.create_task(fire_and_forget(repo, run.id, run_enrichment_stage(registry, repo, batch_size=batch_size)))
+    """Re-price the watchlist now.
+
+    Replaces the old "run enrichment" button. Lookups are batched 30 mints
+    per request and results are written locally, so this is cheap enough to
+    click freely. See run_discovery_now's docstring for the async/polling
+    contract.
+    """
+    run = await repo.create_pipeline_run("watch", trigger="manual")
+    asyncio.create_task(
+        fire_and_forget(repo, run.id, run_watch_stage(registry, settings, batch_size=batch_size))
+    )
     return {"run_id": run.id}
 
 
-@router.post("/run/trends")
-async def run_trends_now(
+@router.post("/run/signals")
+async def run_signals_now(repo: FirestoreRepo = Depends(get_repo)) -> dict[str, Any]:
+    """Recompute signals from the ledger.
+
+    Free — local reads and pure statistics, no Firestore and no model. See
+    run_discovery_now's docstring for the async/polling contract.
+    """
+    run = await repo.create_pipeline_run("signals", trigger="manual")
+    asyncio.create_task(fire_and_forget(repo, run.id, run_signals_stage(repo)))
+    return {"run_id": run.id}
+
+
+@router.post("/run/cycle")
+async def run_cycle_now(
     repo: FirestoreRepo = Depends(get_repo),
+    registry: ProviderRegistry = Depends(get_registry),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
-    """Manually trigger the trend engine (§24-§28) over the qualified dataset. See run_discovery_now's docstring for the async/polling contract."""
-    run = await repo.create_pipeline_run("trends", trigger="manual")
-    asyncio.create_task(fire_and_forget(repo, run.id, run_trends_stage(repo)))
+    """Run a full thinking cycle immediately: signals, digest, learn, tidy, snapshot.
+
+    This is the only manual action here that spends money — one bounded
+    model call, unless the window was quiet, in which case it skips the call
+    entirely. Everything else on this page is free.
+    """
+    from app.scheduling.jobs import _cycle
+
+    run = await repo.create_pipeline_run("cycle", trigger="manual")
+    asyncio.create_task(fire_and_forget(repo, run.id, _cycle(registry, repo, settings)))
     return {"run_id": run.id}
 
 
@@ -168,6 +198,42 @@ async def run_narratives_now(
     run = await repo.create_pipeline_run("narratives", trigger="manual")
     asyncio.create_task(fire_and_forget(repo, run.id, run_narratives_stage(repo)))
     return {"run_id": run.id}
+
+
+@router.get("/cost")
+async def cost_report() -> dict[str, Any]:
+    """Where this deployment's spend actually is, and how much headroom is left.
+
+    Exists because "too much data" is only visible if someone measures it.
+    Firestore counters are this process's own writes and reads against the
+    configured budget (well under the Spark plan's 20,000/50,000 daily caps);
+    the memory figures are the size of what Annie keeps; the durability
+    block says whether that memory survives a redeploy.
+    """
+    from app.db import budget
+    from app.memory import index, ledger
+    from app.memory.paths import durability_report
+    from app.pipeline import stream
+    from app.scheduling.jobs import JOBS
+    from app.scheduling.scheduler import job_status
+
+    return {
+        "firestore": budget.report(),
+        "memory": index.stats(),
+        "ledger": ledger.stats(),
+        "stream": stream.recent_activity(60),
+        "durability": durability_report(),
+        "jobs": [
+            {"name": j.name, "mode": j.mode, **job_status(j.settings_key)} for j in JOBS
+        ],
+        "model_calls_per_day": {
+            "scheduled": "4 cycle calls (skipped on a quiet window), "
+                         "plus 1 weekly and 1 monthly rollup",
+            "on_demand": "chat turns, and token_idea only when asked",
+            "note": "Counting, ranking, filtering, statistics and every file "
+                    "write are deterministic Python over local SQLite and cost nothing.",
+        },
+    }
 
 
 @router.get("/pipeline-runs/{run_id}", response_model=PipelineRunOut)

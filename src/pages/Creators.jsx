@@ -15,12 +15,23 @@ import { count, relative, usd } from '../lib/format.js'
  */
 export default function Creators() {
   const [query, setQuery] = useState('')
-  const [repeatOnly, setRepeatOnly] = useState(false)
+  const [mode, setMode] = useState('all')
+  const [window, setWindow] = useState(0)
   const debounced = useDebounced(query, 300)
 
   const state = useApi(
-    () => api.creators({ q: debounced || undefined, repeat_winners: repeatOnly || undefined, limit: 100 }),
-    [debounced, repeatOnly]
+    () =>
+      api.creators({
+        limit: 200,
+        winners_only: mode === 'winners' || undefined,
+        tracked_only: mode === 'tracked' || undefined,
+        window_hours: window || undefined,
+      }),
+    [mode, window]
+  )
+
+  const items = (state.data?.items ?? []).filter(
+    (c) => !debounced || c.wallet.toLowerCase().includes(debounced.toLowerCase())
   )
 
   return (
@@ -28,8 +39,9 @@ export default function Creators() {
       <div className="page-head">
         <h2 className="page-head__title">Creators</h2>
         <p className="page-head__sub">
-          Wallets that deployed at least one token, with wins broken out by tier — a $100k
-          record is not evidence of a $1M record.
+          Every wallet seen deploying, with every launch counted. Tracked wallets are the ones
+          Annie decided are worth following — high-volume launchers, and anyone who produced a
+          winner.
         </p>
       </div>
 
@@ -43,47 +55,74 @@ export default function Creators() {
           aria-label="Search creators"
         />
         <div className="segmented">
-          <button className={!repeatOnly ? 'is-active' : ''} onClick={() => setRepeatOnly(false)}>All</button>
-          <button className={repeatOnly ? 'is-active' : ''} onClick={() => setRepeatOnly(true)}>Repeat winners</button>
+          <button className={mode === 'all' ? 'is-active' : ''} onClick={() => setMode('all')}>All</button>
+          <button className={mode === 'winners' ? 'is-active' : ''} onClick={() => setMode('winners')}>
+            Had a winner
+          </button>
+          <button className={mode === 'tracked' ? 'is-active' : ''} onClick={() => setMode('tracked')}>
+            Tracked
+          </button>
         </div>
+        <select
+          className="select"
+          value={window}
+          onChange={(e) => setWindow(Number(e.target.value))}
+          aria-label="Window"
+        >
+          <option value={0}>Lifetime totals</option>
+          <option value={24}>Busiest today</option>
+          <option value={168}>Busiest this week</option>
+        </select>
       </div>
 
       <Async
         state={state}
         empty={<Panel><Empty title="No creators match" /></Panel>}
       >
-        {(data) => (
-          <Panel title={`${count(data.total)} creators`} flush>
+        {() => (
+          <Panel
+            title={`${count(items.length)} creators`}
+            meta={window ? 'ordered by launches in window' : 'ordered by winners, then best result'}
+            flush
+          >
             <div className="table-wrap">
               <table className="table table--responsive">
                 <thead>
                   <tr>
                     <th>Wallet</th>
                     <th className="num">Launches</th>
-                    <th className="num">Success rate</th>
-                    <th className="num">$100k</th>
-                    <th className="num">$1M</th>
+                    <th className="num">{window ? 'In window' : 'Hit rate'}</th>
+                    <th className="num">Winners</th>
                     <th className="num">Best</th>
-                    <th>Last launch</th>
+                    <th>Last seen</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {data.items.map((c) => (
+                  {items.map((c) => (
                     <ClickableRow key={c.wallet} to={`/creators/${c.wallet}`}>
                       <td className="primary" data-label="Wallet">
                         <div className="row gap-2">
                           <CopyableAddress value={c.wallet} head={6} tail={4} />
-                          {c.is_repeat_winner && <Badge status="rising" variant="outline">Repeat</Badge>}
+                          {c.is_tracked && <Badge status="rising" variant="outline">Tracked</Badge>}
                         </div>
                       </td>
                       <td className="num" data-label="Launches">{count(c.total_launches)}</td>
-                      <td className="num" data-label="Success rate">
-                        <Sample sample={{ count: c.wins_100k, total: c.total_launches, frequency: c.success_rate }} />
+                      <td className="num" data-label={window ? 'In window' : 'Hit rate'}>
+                        {window ? (
+                          count(c.launches_in_window)
+                        ) : (
+                          <Sample
+                            sample={{
+                              count: c.winners,
+                              total: c.total_launches,
+                              frequency: c.success_rate,
+                            }}
+                          />
+                        )}
                       </td>
-                      <td className="num" data-label="$100k">{count(c.wins_100k)}</td>
-                      <td className="num" data-label="$1M">{count(c.wins_1m)}</td>
+                      <td className="num" data-label="Winners">{count(c.winners)}</td>
                       <td className="num" data-label="Best">{usd(c.best_market_cap)}</td>
-                      <td data-label="Last launch" className="faint">{relative(c.last_launch_at)}</td>
+                      <td data-label="Last seen" className="faint">{relative(c.last_seen)}</td>
                     </ClickableRow>
                   ))}
                 </tbody>

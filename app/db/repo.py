@@ -32,26 +32,22 @@ without changing this interface.
 
 from __future__ import annotations
 
-import asyncio
 import statistics
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from google.cloud.firestore import AsyncClient, DocumentSnapshot, FieldFilter, Query
+from google.cloud.firestore import AsyncClient, FieldFilter, Query
 
-from app.db.base import doc_id_safe, from_doc, money_from_doc, money_to_doc, slugify, to_doc, utcnow
-from app.db.enums import MilestoneKind, PipelineStage
+from app.db.base import doc_id_safe, from_doc, money_from_doc, money_to_doc, to_doc, utcnow
 from app.db.models.discord import DiscordChannel
 from app.db.models.people import PlatformUser
 from app.db.models.pipeline import PipelineRun
-from app.db.models.entities import Creator, Dex, Launchpad, Narrative
-from app.db.models.intelligence import Anomaly, Trend, TrendHistory, TrendObservation
+from app.db.models.entities import Launchpad, Narrative
+from app.db.models.intelligence import Anomaly
 from app.db.models.ops import AuditLog, DataQuality, ProviderHealth, Setting, ToolCall
 from app.db.models.research import (
-    ConsolidationRun,
     Conversation,
-    Memory,
     Message,
     PersonalityConfig,
     Report,
@@ -59,7 +55,6 @@ from app.db.models.research import (
     ResearchNote,
     ResearchTask,
 )
-from app.db.models.tokens import Token, TokenFeature, TokenMilestone
 
 #: Latency samples kept per provider for p50/p95. A ring buffer, not a log —
 #: bounded so the document never grows unbounded under high call volume.
@@ -72,332 +67,20 @@ class FirestoreRepo:
         self.db = db
 
     # =========================================================================
-    # Tokens
+    # Tokens, creators, trends and memories are NOT here any more
     # =========================================================================
-
-    def _token_ref(self, mint: str):
-        return self.db.collection("tokens").document(doc_id_safe(mint))
-
-    async def get_token(self, mint: str) -> Token | None:
-        snap = await self._token_ref(mint).get()
-        if not snap.exists:
-            return None
-        return from_doc(Token, snap.id, snap.to_dict() or {}, mint=snap.id)
-
-    async def token_exists(self, mint: str) -> bool:
-        snap = await self._token_ref(mint).get()
-        return snap.exists
-
-    async def create_discovered_token(self, token: Token) -> bool:
-        """Insert a Stage-1 discovery record if this mint is not already known.
-
-        Returns ``False`` without writing when the token exists — discovery
-        must never clobber enrichment or qualification state that arrived
-        since the last scan.
-        """
-        ref = self._token_ref(token.mint)
-        snap = await ref.get()
-        if snap.exists:
-            return False
-        token.created_at = token.created_at or utcnow()
-        token.updated_at = utcnow()
-        await ref.set(to_doc(token))
-        return True
-
-    async def apply_qualification(self, mint: str, verdict: Any) -> None:
-        """Persist a :class:`~app.pipeline.qualification.QualificationVerdict`."""
-        ref = self._token_ref(mint)
-        snap = await ref.get()
-        existing = snap.to_dict() or {}
-
-        updates: dict[str, Any] = {
-            "verification_status": verdict.verification_status,
-            "qualification_evidence": verdict.as_evidence(),
-            "pipeline_stage": existing.get("pipeline_stage") or PipelineStage.QUALIFICATION,
-            "updated_at": utcnow(),
-        }
-        if verdict.market_cap is not None:
-            updates["latest_market_cap"] = money_to_doc(verdict.market_cap)
-            updates["market_data_at"] = verdict.evaluated_at
-
-        if verdict.qualified:
-            if not existing.get("is_qualified"):
-                updates.update(
-                    {
-                        "is_qualified": True,
-                        "qualified_at": verdict.evaluated_at,
-                        "qualified_market_cap": money_to_doc(verdict.market_cap),
-                        "qualified_threshold": money_to_doc(verdict.tier_reached),
-                        "qualification_rule": verdict.rule_version,
-                        "pipeline_stage": PipelineStage.QUALIFICATION,
-                    }
-                )
-            peak = money_from_doc(existing.get("peak_market_cap"))
-            if peak is None or (verdict.market_cap is not None and verdict.market_cap > peak):
-                updates["peak_market_cap"] = money_to_doc(verdict.market_cap)
-                updates["peak_at"] = verdict.evaluated_at
-                updates["peak_tier"] = money_to_doc(verdict.tier_reached)
-
-        await ref.set(updates, merge=True)
-
-        if verdict.qualified and verdict.tier_reached is not None:
-            milestone = TokenMilestone(
-                token_mint=mint,
-                kind=MilestoneKind.MARKET_CAP,
-                threshold_usd=verdict.tier_reached,
-                reached_at=verdict.evaluated_at,
-                market_cap=verdict.market_cap,
-                verification_status=verdict.verification_status,
-                created_at=utcnow(),
-            )
-            await ref.collection("milestones").document(milestone.doc_id).set(
-                to_doc(milestone), merge=True
-            )
-
-    async def apply_enrichment(
-        self,
-        mint: str,
-        *,
-        metadata: Any | None,
-        creator_wallet: str | None,
-        features: list[Any],
-    ) -> None:
-        """Persist Stage-3 enrichment: metadata, creator link, deterministic features."""
-        ref = self._token_ref(mint)
-        updates: dict[str, Any] = {
-            "pipeline_stage": PipelineStage.ANALYSIS,
-            "enriched_at": utcnow(),
-            "analyzed_at": utcnow(),
-            "updated_at": utcnow(),
-        }
-        if metadata is not None:
-            updates.update(
-                {
-                    "name": metadata.name,
-                    "symbol": metadata.symbol,
-                    "description": metadata.description,
-                    "image_url": metadata.image_url,
-                    "decimals": metadata.decimals,
-                    "total_supply": money_to_doc(metadata.total_supply),
-                    "website": metadata.website,
-                    "twitter": metadata.twitter,
-                    "telegram": metadata.telegram,
-                    "other_links": metadata.other_links,
-                }
-            )
-        if creator_wallet:
-            updates["creator_wallet"] = creator_wallet
-        await ref.set(updates, merge=True)
-
-        if features:
-            batch = self.db.batch()
-            features_col = ref.collection("features")
-            for feat in features:
-                tf = TokenFeature(
-                    token_mint=mint,
-                    namespace=feat.namespace,
-                    key=feat.key,
-                    value=feat.value,
-                    numeric_value=feat.numeric_value,
-                    source=feat.source,
-                    subject=f"{feat.namespace}.{feat.key}",
-                    created_at=utcnow(),
-                )
-                batch.set(features_col.document(tf.doc_id), to_doc(tf), merge=True)
-            await batch.commit()
-
-        if creator_wallet:
-            await self.record_creator_launch(
-                wallet=creator_wallet, mint=mint, launchpad_slug=None, launched_at=None
-            )
-
-    async def list_tokens_for_qualification(
-        self, limit: int = 50, *, start_after: Any | None = None
-    ) -> tuple[list[Token], Any | None]:
-        """Newest-discovered tokens first.
-
-        A brand-new token is far more likely to still be mid-pump than one
-        that has sat unqualified for days — the previous unordered query left
-        scan order to Firestore's discretion, so a backlog drain could burn
-        its entire budget on old, already-dead tokens while the day's actual
-        pumps went unchecked (confirmed empirically 2026-08-25: 16,602 of
-        16,774 discovered tokens had *never* been evaluated at all). Returns
-        the last document alongside the page so a multi-batch drain
-        (:func:`app.pipeline.enrichment.run_enrichment_all`) can page forward
-        with ``start_after`` instead of re-fetching the same newest N every
-        call.
-        """
-        query = (
-            self.db.collection("tokens")
-            .where(filter=FieldFilter("pipeline_stage", "==", PipelineStage.DISCOVERY))
-            .order_by("created_at", direction=Query.DESCENDING)
-            .limit(limit)
-        )
-        if start_after is not None:
-            query = query.start_after(start_after)
-        docs = [s async for s in query.stream()]
-        tokens = [from_doc(Token, s.id, s.to_dict() or {}, mint=s.id) for s in docs]
-        return tokens, (docs[-1] if docs else None)
-
-    async def list_tokens(
-        self,
-        *,
-        qualified_only: bool = False,
-        launchpad_slug: str | None = None,
-        creator_wallet: str | None = None,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> tuple[list[Token], int]:
-        """List one page of tokens, plus the total matching count.
-
-        Pushes ``limit``/``offset`` into the Firestore query itself and uses
-        a server-side ``count()`` aggregation for the total, rather than
-        streaming every matching document just to slice it in Python and
-        call ``len()`` — the previous approach downloaded the *entire*
-        collection on every call regardless of ``limit``, including every
-        unfiltered call (``qualified_only=False``, the default — used by the
-        Dashboard endpoint on every page load and Annie's own
-        ``dashboard_summary`` tool). Confirmed as a real, worsening
-        performance bug 2026-08-25: with ~17,300 tokens and climbing by
-        roughly 16,000/day, every such call was transferring the full
-        collection (qualification evidence, metadata, everything) over the
-        wire just to report a single number.
-        """
-        base = self.db.collection("tokens")
-        if qualified_only:
-            base = base.where(filter=FieldFilter("is_qualified", "==", True))
-        if launchpad_slug:
-            base = base.where(filter=FieldFilter("launchpad_slug", "==", launchpad_slug))
-        if creator_wallet:
-            base = base.where(filter=FieldFilter("creator_wallet", "==", creator_wallet))
-        base = base.order_by("created_at", direction=Query.DESCENDING)
-
-        count_result = await base.count().get()
-        total = int(count_result[0][0].value) if count_result and count_result[0] else 0
-
-        page_query = base.limit(limit)
-        if offset:
-            page_query = page_query.offset(offset)
-        docs = [s async for s in page_query.stream()]
-        tokens = [from_doc(Token, s.id, s.to_dict() or {}, mint=s.id) for s in docs]
-        return tokens, total
-
-    async def qualified_tokens_in_window(
-        self, *, start: datetime, end: datetime, min_peak: Decimal | None = None
-    ) -> list[Token]:
-        """Cohort membership for the trend engine (§27).
-
-        A single range query on ``qualified_at``; the tier floor is applied in
-        Python rather than as a second Firestore inequality filter, which
-        keeps this query needing only the automatic single-field index instead
-        of a hand-declared composite one.
-        """
-        query = (
-            self.db.collection("tokens")
-            .where(filter=FieldFilter("is_qualified", "==", True))
-            .where(filter=FieldFilter("qualified_at", ">=", start))
-            .where(filter=FieldFilter("qualified_at", "<", end))
-        )
-        tokens = [
-            from_doc(Token, s.id, s.to_dict() or {}, mint=s.id) async for s in query.stream()
-        ]
-        if min_peak is not None:
-            tokens = [t for t in tokens if t.peak_market_cap is not None and t.peak_market_cap >= min_peak]
-        return tokens
-
-    async def token_features(self, mint: str) -> list[TokenFeature]:
-        col = self._token_ref(mint).collection("features")
-        return [
-            from_doc(TokenFeature, s.id, s.to_dict() or {}, token_mint=mint)
-            async for s in col.stream()
-        ]
-
-    async def token_features_for_subjects(self, mint: str, subjects: list[str]) -> list[TokenFeature]:
-        """Only the feature docs matching one of ``subjects`` (each a
-        ``"namespace.key"`` string) — used by the trend engine, which only
-        ever needs the handful of TRENDABLE fields, not a token's entire
-        features subcollection (13-47 docs, most of it structural fields
-        like word_count/has_emoji trends never look at, plus one document
-        per individual word before that was removed 2026-08-28). Firestore's
-        `in` filter caps at 30 values; TRENDABLE has far fewer than that."""
-        if not subjects:
-            return []
-        col = self._token_ref(mint).collection("features")
-        query = col.where(filter=FieldFilter("subject", "in", subjects))
-        return [
-            from_doc(TokenFeature, s.id, s.to_dict() or {}, token_mint=mint)
-            async for s in query.stream()
-        ]
-
-    async def token_milestones(self, mint: str) -> list[TokenMilestone]:
-        col = self._token_ref(mint).collection("milestones")
-        return [
-            from_doc(TokenMilestone, s.id, s.to_dict() or {}, token_mint=mint)
-            async for s in col.stream()
-        ]
-
-    # =========================================================================
-    # Creators
-    # =========================================================================
-
-    def _creator_ref(self, wallet: str):
-        return self.db.collection("creators").document(doc_id_safe(wallet))
-
-    async def get_creator(self, wallet: str) -> Creator | None:
-        snap = await self._creator_ref(wallet).get()
-        if not snap.exists:
-            return None
-        return from_doc(Creator, snap.id, snap.to_dict() or {}, wallet=snap.id)
-
-    async def record_creator_launch(
-        self,
-        *,
-        wallet: str,
-        mint: str,
-        launchpad_slug: str | None,
-        launched_at: datetime | None,
-    ) -> None:
-        """Get-or-create a creator and log one launch against them (§17).
-
-        A read-modify-write rather than an atomic increment because
-        ``is_repeat_winner``/``success_rate`` depend on the qualification
-        state of *other* tokens by this wallet, which this call does not have
-        — recomputing those is the trend/stat job's responsibility, not
-        discovery's.
-        """
-        ref = self._creator_ref(wallet)
-        snap = await ref.get()
-        now = utcnow()
-        if not snap.exists:
-            creator = Creator(
-                wallet=wallet,
-                first_launch_at=launched_at or now,
-                last_launch_at=launched_at or now,
-                total_launches=1,
-                created_at=now,
-                updated_at=now,
-            )
-            await ref.set(to_doc(creator))
-        else:
-            existing = snap.to_dict() or {}
-            await ref.set(
-                {
-                    "total_launches": int(existing.get("total_launches") or 0) + 1,
-                    "last_launch_at": launched_at or now,
-                    "updated_at": now,
-                },
-                merge=True,
-            )
-
-    async def list_creators(self, *, limit: int = 50, offset: int = 0) -> tuple[list[Creator], int]:
-        query = self.db.collection("creators").order_by(
-            "wins_1m", direction=Query.DESCENDING
-        )
-        all_docs = [s async for s in query.stream()]
-        page = all_docs[offset : offset + limit]
-        return [
-            from_doc(Creator, s.id, s.to_dict() or {}, wallet=s.id) for s in page
-        ], len(all_docs)
+    # Removed 2026-09-08. Every one of them was a per-item Firestore
+    # collection, and together they were the entire cost problem:
+    #
+    #   tokens (+ features, milestones)  ->  app/memory/ledger.py `sightings`
+    #   creators                         ->  the ledger's `creators` + `moves`
+    #   trends (+ observations, history) ->  app/memory/signals.py `signals`
+    #   memories, consolidation_runs     ->  markdown files under ANNIE_MEMORY_DIR
+    #
+    # The methods are deleted rather than deprecated on purpose. A working
+    # code path back to a retired collection is how one gets quietly
+    # reintroduced by a later change; an ImportError is a much better
+    # conversation than a surprise on the next bill.
 
     # =========================================================================
     # Launchpads
@@ -512,77 +195,13 @@ class FirestoreRepo:
         ], len(all_docs)
 
     # =========================================================================
-    # Trends
+    # Anomalies (§30)
     # =========================================================================
-
-    def _trend_ref(self, slug: str):
-        return self.db.collection("trends").document(doc_id_safe(slug))
-
-    async def get_trend(self, slug: str) -> Trend | None:
-        snap = await self._trend_ref(slug).get()
-        if not snap.exists:
-            return None
-        return from_doc(Trend, snap.id, snap.to_dict() or {}, slug=snap.id)
-
-    async def upsert_trend(self, trend: Trend) -> None:
-        trend.updated_at = utcnow()
-        await self._trend_ref(trend.slug).set(to_doc(trend), merge=True)
-
-    async def list_trends(
-        self, *, status: str | None = None, limit: int = 50, offset: int = 0
-    ) -> tuple[list[Trend], int]:
-        query = self.db.collection("trends")
-        if status:
-            query = query.where(filter=FieldFilter("status", "==", status))
-        query = query.order_by("last_observed_at", direction=Query.DESCENDING)
-        all_docs = [s async for s in query.stream()]
-        page = all_docs[offset : offset + limit]
-        return [
-            from_doc(Trend, s.id, s.to_dict() or {}, slug=s.id) for s in page
-        ], len(all_docs)
-
-    async def trends_for_tier(self, tier: Decimal) -> list[Trend]:
-        """All trends measured over one cohort threshold, any status.
-
-        Used by the decay pass, which needs every non-dead trend for a tier
-        regardless of whether it occurred this window — that is precisely
-        what tells the engine a characteristic *stopped* occurring.
-        """
-        query = self.db.collection("trends").where(
-            filter=FieldFilter("cohort_threshold_usd", "==", money_to_doc(tier))
-        )
-        return [
-            from_doc(Trend, s.id, s.to_dict() or {}, slug=s.id) async for s in query.stream()
-        ]
-
-    async def record_trend_observation(self, obs: TrendObservation) -> None:
-        ref = self._trend_ref(obs.trend_slug).collection("observations").document(obs.doc_id)
-        await ref.set(to_doc(obs), merge=True)
-
-    async def trend_observations(self, slug: str, limit: int = 30) -> list[TrendObservation]:
-        query = (
-            self._trend_ref(slug)
-            .collection("observations")
-            .order_by("observed_on", direction=Query.DESCENDING)
-            .limit(limit)
-        )
-        return [
-            from_doc(TrendObservation, s.id, s.to_dict() or {}, trend_slug=slug)
-            async for s in query.stream()
-        ]
-
-    async def all_trends(self) -> list[Trend]:
-        """Every trend, unpaginated — for dashboard-scale aggregates.
-
-        At this project's scale (a research dataset's trend count, not a
-        firehose) fetching everything and aggregating in Python is simpler
-        and cheaper than maintaining separate counter documents that could
-        drift from the underlying trend rows.
-        """
-        return [
-            from_doc(Trend, s.id, s.to_dict() or {}, slug=s.id)
-            async for s in self.db.collection("trends").stream()
-        ]
+    # Kept in Firestore deliberately, unlike trends: an anomaly is a small,
+    # rare, operator-facing document that someone acknowledges by hand, so it
+    # needs to be visible across processes and to survive a volume wipe. The
+    # detector that writes them is the cycle, which produces a handful a week
+    # rather than thousands a day.
 
     async def list_anomalies(
         self, *, unacknowledged_only: bool = False, limit: int = 50
@@ -590,27 +209,22 @@ class FirestoreRepo:
         query = self.db.collection("anomalies")
         if unacknowledged_only:
             query = query.where(filter=FieldFilter("acknowledged", "==", False))
-        query = query.order_by("detected_at", direction=Query.DESCENDING).limit(limit)
+        query = query.order_by("detected_at", direction="DESCENDING").limit(limit)
         return [
-            from_doc(Anomaly, s.id, s.to_dict() or {}, id=s.id) async for s in query.stream()
+            from_doc(Anomaly, snap.id, snap.to_dict() or {})
+            async for snap in query.stream()
         ]
 
-    async def record_trend_history(self, entry: TrendHistory) -> None:
-        await self._trend_ref(entry.trend_slug).collection("history").document().set(
-            to_doc(entry)
-        )
+    async def record_anomaly(self, anomaly: Anomaly) -> Anomaly:
+        ref = self.db.collection("anomalies").document()
+        anomaly.id = ref.id
+        await ref.set(to_doc(anomaly))
+        return anomaly
 
-    async def trend_history(self, slug: str, limit: int = 50) -> list[TrendHistory]:
-        query = (
-            self._trend_ref(slug)
-            .collection("history")
-            .order_by("changed_at", direction=Query.DESCENDING)
-            .limit(limit)
+    async def acknowledge_anomaly(self, anomaly_id: str) -> None:
+        await self.db.collection("anomalies").document(anomaly_id).set(
+            {"acknowledged": True, "acknowledged_at": utcnow()}, merge=True
         )
-        return [
-            from_doc(TrendHistory, s.id, s.to_dict() or {}, trend_slug=slug)
-            async for s in query.stream()
-        ]
 
     # =========================================================================
     # Data quality (§20, §50)
@@ -720,92 +334,6 @@ class FirestoreRepo:
         ]
 
     # -- memory (Annie's work memory — distinct from research notes and chat) --
-
-    async def create_memory(self, memory: Memory) -> Memory:
-        ref = self.db.collection("memories").document()
-        memory.id = ref.id
-        memory.created_at = utcnow()
-        memory.updated_at = utcnow()
-        await ref.set(to_doc(memory))
-        return memory
-
-    async def get_memory(self, memory_id: str) -> Memory | None:
-        snap = await self.db.collection("memories").document(memory_id).get()
-        if not snap.exists:
-            return None
-        return from_doc(Memory, snap.id, snap.to_dict() or {}, id=snap.id)
-
-    async def update_memory(self, memory_id: str, **updates: Any) -> None:
-        updates["updated_at"] = utcnow()
-        await self.db.collection("memories").document(memory_id).set(updates, merge=True)
-
-    async def delete_memory(self, memory_id: str) -> None:
-        """Genuine deletion — see app/api/routes/memory.py's DELETE route
-        docstring for why this differs from research notes, which are
-        never deleted, only marked superseded."""
-        await self.db.collection("memories").document(memory_id).delete()
-
-    async def touch_memory_used(self, memory_id: str) -> None:
-        """Record that a memory was actually surfaced to Annie — feeds
-        consolidation's sense of which long-term memories are still earning
-        their place versus quietly going stale."""
-        await self.db.collection("memories").document(memory_id).set(
-            {"last_used_at": utcnow()}, merge=True
-        )
-
-    async def list_memories(
-        self,
-        *,
-        type_: str | None = None,
-        status: str | None = None,
-        tag: str | None = None,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> tuple[list[Memory], int]:
-        query = self.db.collection("memories")
-        if type_:
-            query = query.where(filter=FieldFilter("type", "==", type_))
-        if status:
-            query = query.where(filter=FieldFilter("status", "==", status))
-        if tag:
-            query = query.where(filter=FieldFilter("tags", "array_contains", tag))
-        query = query.order_by("created_at", direction=Query.DESCENDING)
-        all_docs = [s async for s in query.stream()]
-        page = all_docs[offset : offset + limit]
-        return [
-            from_doc(Memory, s.id, s.to_dict() or {}, id=s.id) for s in page
-        ], len(all_docs)
-
-    async def create_consolidation_run(self, run: ConsolidationRun) -> ConsolidationRun:
-        ref = self.db.collection("consolidation_runs").document()
-        run.id = ref.id
-        run.created_at = utcnow()
-        await ref.set(to_doc(run))
-        return run
-
-    async def list_consolidation_runs(self, *, limit: int = 20) -> list[ConsolidationRun]:
-        query = (
-            self.db.collection("consolidation_runs")
-            .order_by("created_at", direction=Query.DESCENDING)
-            .limit(limit)
-        )
-        return [
-            from_doc(ConsolidationRun, s.id, s.to_dict() or {}, id=s.id) async for s in query.stream()
-        ]
-
-    async def active_memories_by_importance(self, *, type_: str | None = None, limit: int = 20) -> list[Memory]:
-        """Retrieval-oriented read: active memories ranked by importance,
-        used by Annie's memory-search tool and consolidation — not the
-        chronological listing `list_memories` gives the frontend."""
-        query = self.db.collection("memories").where(
-            filter=FieldFilter("status", "==", "active")
-        )
-        if type_:
-            query = query.where(filter=FieldFilter("type", "==", type_))
-        docs = [s async for s in query.stream()]
-        memories = [from_doc(Memory, s.id, s.to_dict() or {}, id=s.id) for s in docs]
-        memories.sort(key=lambda m: m.importance if m.importance is not None else 0.0, reverse=True)
-        return memories[:limit]
 
     async def upsert_report(self, report: Report) -> Report:
         report.id = report.doc_id

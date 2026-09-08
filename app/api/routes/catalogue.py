@@ -1,228 +1,210 @@
-"""Catalogue routes: tokens, creators, launchpads, narratives."""
+"""Catalogue routes: tokens, creators, launchpads, narratives.
+
+Tokens and creators read the local ledger (app/memory/ledger.py) rather than
+Firestore as of the 2026-09-08 rewrite; launchpads and narratives still come
+from Firestore, which is correct for them — there are a handful of each, they
+change rarely, and they are genuinely shared state.
+
+These endpoints return plain dicts rather than the old response models. The
+shapes changed with the storage: a "token" here is a sighting with a peak and
+a check count, not a document with a qualification-evidence blob and a
+features subcollection.
+"""
 
 from __future__ import annotations
 
-from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.api.schemas import (
-    CreatorDetail,
-    CreatorSummary,
-    LaunchpadDetail,
-    LaunchpadSummary,
-    NarrativeSummary,
-    Page,
-    TokenDetail,
-    TokenSummary,
-)
-from app.db.models.tokens import Token
+from app.api.schemas import LaunchpadDetail, LaunchpadSummary, NarrativeSummary, Page
 from app.db.repo import FirestoreRepo, get_repo
 
 router = APIRouter()
 
 
-def _themes(features: list[Any]) -> list[str]:
-    return [f.value for f in features if f.namespace == "token" and f.key == "theme" and f.value]
+def _themes(name: str | None, symbol: str | None) -> list[str]:
+    """Derived on read, never stored.
 
-
-def _token_summary(token: Token, themes: list[str]) -> dict[str, Any]:
-    return {
-        "id": token.mint,
-        "mint": token.mint,
-        "name": token.name,
-        "symbol": token.symbol,
-        "image_url": token.image_url,
-        "launchpad_slug": token.launchpad_slug,
-        "creator_wallet": token.creator_wallet,
-        "launched_at": token.launched_at,
-        "qualified_at": token.qualified_at,
-        "qualified_market_cap": token.qualified_market_cap,
-        "peak_market_cap": token.peak_market_cap,
-        "peak_tier": token.peak_tier,
-        "is_qualified": token.is_qualified,
-        "verification_status": token.verification_status,
-        "themes": themes,
-    }
-
-
-@router.get("/tokens", response_model=Page[TokenSummary])
-async def list_tokens(
-    q: str | None = None,
-    min_tier: Decimal | None = None,
-    launchpad: str | None = None,
-    qualified_only: bool = False,
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-    repo: FirestoreRepo = Depends(get_repo),
-) -> dict[str, Any]:
-    """List tokens.
-
-    ``q`` (free-text search across name/symbol/mint) is not implemented in
-    this Firestore deployment — full-text search needs a dedicated index
-    (Algolia, Typesense, or Firestore's own extension) that this project does
-    not provision. Filter by ``launchpad``, ``qualified_only`` or
-    ``min_tier`` instead; a search box wired to nothing would be worse than
-    no search box, so the frontend should treat this as a known gap rather
-    than a bug.
+    Themes used to be rows in a per-token ``features`` subcollection — 13 to
+    47 documents each, written on enrichment and re-read on every trend run.
+    They come from three short strings via pure functions, so recomputing
+    them here costs microseconds and storing them cost the bill.
     """
-    tokens, total = await repo.list_tokens(
-        qualified_only=qualified_only, launchpad_slug=launchpad, limit=limit, offset=offset
+    from app.analysis.features import extract_all
+
+    return sorted(
+        {
+            f.value
+            for f in extract_all(name, symbol, None)
+            if f.namespace == "token" and f.key == "theme" and f.value
+        }
     )
-    if min_tier is not None:
-        tokens = [t for t in tokens if t.peak_market_cap is not None and t.peak_market_cap >= min_tier]
-    if q:
-        needle = q.lower()
-        tokens = [
-            t for t in tokens
-            if needle in (t.name or "").lower()
-            or needle in (t.symbol or "").lower()
-            or needle in t.mint.lower()
-        ]
-
-    items = []
-    for t in tokens:
-        features = await repo.token_features(t.mint)
-        items.append(_token_summary(t, _themes(features)))
-    return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
-@router.get("/tokens/{mint}", response_model=TokenDetail)
-async def get_token(mint: str, repo: FirestoreRepo = Depends(get_repo)) -> dict[str, Any]:
-    token = await repo.get_token(mint)
-    if token is None:
-        raise HTTPException(status_code=404, detail=f"No token with mint {mint}")
-
-    features = await repo.token_features(mint)
-    milestones = await repo.token_milestones(mint)
-
+def _sighting_summary(sighting: Any) -> dict[str, Any]:
     return {
-        **_token_summary(token, _themes(features)),
-        "description": token.description,
-        "decimals": token.decimals,
-        "total_supply": token.total_supply,
-        "ecosystem": token.ecosystem,
-        "migrated_at": token.migrated_at,
-        "migration_platform": token.migration_platform,
-        "destination_dex_slug": token.destination_dex_slug,
-        "minutes_launch_to_migration": token.minutes_launch_to_migration,
-        "latest_market_cap": token.latest_market_cap,
-        "latest_liquidity_usd": token.latest_liquidity_usd,
-        "latest_volume_24h_usd": token.latest_volume_24h_usd,
-        "latest_holder_count": token.latest_holder_count,
-        "market_data_at": token.market_data_at,
-        "website": token.website,
-        "twitter": token.twitter,
-        "telegram": token.telegram,
-        "pipeline_stage": token.pipeline_stage,
-        "data_sources": token.data_sources or [],
-        "qualification_evidence": token.qualification_evidence or {},
-        "milestones": [
-            {
-                "kind": m.kind,
-                "threshold_usd": m.threshold_usd,
-                "reached_at": m.reached_at,
-                "market_cap": m.market_cap,
-                "liquidity_usd": m.liquidity_usd,
-                "volume_usd": m.volume_usd,
-                "holder_count": m.holder_count,
-                "token_age_minutes": m.token_age_minutes,
-                "evidence": {
-                    "source": m.source,
-                    "source_type": m.source_type,
-                    "observed_at": m.source_observed_at,
-                    "verification_status": m.verification_status,
-                },
-            }
-            for m in milestones
-        ],
-        "features": [
-            {
-                "namespace": f.namespace,
-                "key": f.key,
-                "value": f.value,
-                "numeric_value": f.numeric_value,
-                "source": f.source,
-                "confidence": f.confidence,
-            }
-            for f in features
-        ],
-        "image_features": None,
-        "related_trends": [],
+        "id": sighting.mint,
+        "mint": sighting.mint,
+        "name": sighting.name,
+        "symbol": sighting.symbol,
+        "launchpad_slug": sighting.launchpad,
+        "creator_wallet": sighting.creator,
+        "first_seen": sighting.first_seen,
+        "qualified_at": sighting.qualified_at,
+        "market_cap": sighting.market_cap,
+        "peak_market_cap": sighting.peak_market_cap,
+        "peak_tier": sighting.tier,
+        "is_qualified": bool(sighting.qualified_at),
+        "status": sighting.status,
+        "checks": sighting.checks,
+        "round_tripped": bool(
+            sighting.peak_market_cap
+            and sighting.market_cap
+            and sighting.market_cap < sighting.peak_market_cap * 0.5
+        ),
+        "themes": _themes(sighting.name, sighting.symbol),
     }
 
 
-@router.get("/creators", response_model=Page[CreatorSummary])
-async def list_creators(
-    q: str | None = None,
-    repeat_winners: bool = False,
+def _top_creators_for(sightings: list[dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
+    """Rank the creators behind a set of sightings, by launches then winners."""
+    from app.memory import ledger
+
+    counts: dict[str, int] = {}
+    for row in sightings:
+        wallet = row.get("creator_wallet")
+        if wallet:
+            counts[wallet] = counts.get(wallet, 0) + 1
+
+    ranked = []
+    for wallet, seen_here in sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:limit]:
+        creator = ledger.get_creator(wallet)
+        if creator is None:
+            continue
+        ranked.append({**_creator_summary(creator), "launches_here": seen_here})
+    return ranked
+
+
+def _creator_summary(creator: dict[str, Any]) -> dict[str, Any]:
+    launches = creator.get("launches") or 0
+    winners = creator.get("winners") or 0
+    return {
+        "id": creator["wallet"],
+        "wallet": creator["wallet"],
+        "total_launches": launches,
+        "launches_in_window": creator.get("recent_launches"),
+        "winners": winners,
+        "success_rate": round(winners / launches, 4) if launches else None,
+        "best_market_cap": creator.get("best_market_cap"),
+        "best_mint": creator.get("best_mint"),
+        "is_tracked": bool(creator.get("tracked")),
+        "first_seen": creator.get("first_seen"),
+        "last_seen": creator.get("last_seen"),
+        "dossier_path": creator.get("dossier_path"),
+    }
+
+
+@router.get("/tokens")
+async def list_tokens(
+    hours: int = Query(168, ge=1, le=2160, description="How far back to look."),
+    qualified_only: bool = Query(False),
+    launchpad_slug: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    repo: FirestoreRepo = Depends(get_repo),
 ) -> dict[str, Any]:
-    creators, total = await repo.list_creators(limit=limit, offset=offset)
-    if repeat_winners:
-        creators = [c for c in creators if c.is_repeat_winner]
-    if q:
-        needle = q.lower()
-        creators = [c for c in creators if needle in c.wallet.lower()]
+    """Tokens Annie is holding — the ones that moved, not everything sighted.
 
-    items = [
-        {
-            "id": c.wallet,
-            "wallet": c.wallet,
-            "total_launches": c.total_launches,
-            "wins_100k": c.wins_100k,
-            "wins_250k": c.wins_250k,
-            "wins_500k": c.wins_500k,
-            "wins_1m": c.wins_1m,
-            "success_rate": c.success_rate,
-            "best_market_cap": c.best_market_cap,
-            "is_repeat_winner": c.is_repeat_winner,
-            "first_launch_at": c.first_launch_at,
-            "last_launch_at": c.last_launch_at,
-            "primary_launchpad_slug": c.primary_launchpad_slug,
-        }
-        for c in creators
-    ]
-    return {"items": items, "total": total, "limit": limit, "offset": offset}
+    Reads the local ledger. What is *not* here is the point: the thousands
+    of launches a day that never traded are sighted, counted, and dropped
+    within 48 hours, so this list is small and every row in it did
+    something. See app/memory/ledger.py.
+    """
+    from app.memory import ledger
+
+    found = ledger.movers(since_hours=hours, min_market_cap=0.0, limit=limit + offset)
+    if qualified_only:
+        found = [t for t in found if t.qualified_at]
+    if launchpad_slug:
+        found = [t for t in found if t.launchpad == launchpad_slug]
+
+    page = found[offset : offset + limit]
+    return {
+        "items": [_sighting_summary(t) for t in page],
+        "total": len(found),
+        "limit": limit,
+        "offset": offset,
+        "window_hours": hours,
+    }
 
 
-@router.get("/creators/{wallet}", response_model=CreatorDetail)
-async def get_creator(wallet: str, repo: FirestoreRepo = Depends(get_repo)) -> dict[str, Any]:
-    creator = await repo.get_creator(wallet)
+@router.get("/tokens/{mint}")
+async def get_token(mint: str) -> dict[str, Any]:
+    """One token: its ledger row, its memory file, and where else it appears."""
+    from app.memory import index, ledger, service
+
+    sighting = ledger.get_sighting(mint)
+    memory = service.read(service.token_path(mint))
+    related = index.by_key(mint, limit=5)
+
+    if sighting is None and memory is None and not related:
+        raise HTTPException(status_code=404, detail=f"Nothing known about {mint}")
+
+    creator = ledger.get_creator(sighting.creator) if sighting and sighting.creator else None
+    return {
+        **(_sighting_summary(sighting) if sighting else {"mint": mint}),
+        "memory": {"path": memory.path, "body": memory.body} if memory else None,
+        "mentioned_in": [h.to_dict() for h in related],
+        "creator": creator,
+    }
+
+
+@router.get("/creators")
+async def list_creators(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    tracked_only: bool = Query(False),
+    winners_only: bool = Query(False),
+    window_hours: int | None = Query(None, ge=1, le=2160,
+                                     description="Omit for lifetime totals."),
+) -> dict[str, Any]:
+    """The creator leaderboard.
+
+    Every launch by every wallet is recorded — this is complete, not a
+    sample. That completeness is affordable precisely because these rows are
+    local; as Firestore documents it was the second-largest cost on the bill.
+    """
+    from app.memory import ledger
+
+    found = ledger.top_creators(
+        limit=limit + offset, tracked_only=tracked_only, window_hours=window_hours
+    )
+    if winners_only:
+        found = [c for c in found if (c.get("winners") or 0) > 0]
+
+    return {
+        "items": [_creator_summary(c) for c in found[offset : offset + limit]],
+        "total": len(found),
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.get("/creators/{wallet}")
+async def get_creator(wallet: str) -> dict[str, Any]:
+    """One wallet: totals, its tokens, its full movement history, its dossier."""
+    from app.memory import ledger, service
+
+    creator = ledger.get_creator(wallet)
     if creator is None:
         raise HTTPException(status_code=404, detail=f"No creator {wallet}")
 
-    tokens, _ = await repo.list_tokens(creator_wallet=wallet, limit=50)
-    recent = []
-    for t in tokens:
-        features = await repo.token_features(t.mint)
-        recent.append(_token_summary(t, _themes(features)))
-
+    dossier = service.read(service.creator_path(wallet))
     return {
-        "id": creator.wallet,
-        "wallet": creator.wallet,
-        "total_launches": creator.total_launches,
-        "wins_100k": creator.wins_100k,
-        "wins_250k": creator.wins_250k,
-        "wins_500k": creator.wins_500k,
-        "wins_1m": creator.wins_1m,
-        "success_rate": creator.success_rate,
-        "best_market_cap": creator.best_market_cap,
-        "is_repeat_winner": creator.is_repeat_winner,
-        "first_launch_at": creator.first_launch_at,
-        "last_launch_at": creator.last_launch_at,
-        "primary_launchpad_slug": creator.primary_launchpad_slug,
-        "median_hours_between_launches": creator.median_hours_between_launches,
-        "launchpad_history": creator.launchpad_history,
-        "recent_tokens": recent,
-        "sample": {
-            "count": creator.wins_100k,
-            "total": creator.total_launches,
-            "frequency": creator.success_rate,
-        },
+        **_creator_summary(creator),
+        "tokens": [_sighting_summary(t) for t in ledger.creator_tokens(wallet, limit=50)],
+        "movements": ledger.creator_moves(wallet, limit=100),
+        "dossier": {"path": dossier.path, "body": dossier.body} if dossier else None,
     }
 
 
@@ -260,11 +242,17 @@ async def get_launchpad(slug: str, repo: FirestoreRepo = Depends(get_repo)) -> d
     if lp is None:
         raise HTTPException(status_code=404, detail=f"No launchpad {slug}")
 
-    tokens, _ = await repo.list_tokens(launchpad_slug=slug, qualified_only=True, limit=25)
-    recent = []
-    for t in tokens:
-        features = await repo.token_features(t.mint)
-        recent.append(_token_summary(t, _themes(features)))
+    # Recent tokens come from the ledger, filtered locally. The old version
+    # ran a Firestore query and then one feature-subcollection read per
+    # token returned — 25 tokens meant 26+ document reads just to render
+    # this panel.
+    from app.memory import ledger
+
+    recent = [
+        _sighting_summary(t)
+        for t in ledger.movers(since_hours=720, min_market_cap=0.0, limit=200)
+        if t.launchpad == slug
+    ][:25]
 
     return {
         "id": lp.slug,
@@ -286,7 +274,10 @@ async def get_launchpad(slug: str, repo: FirestoreRepo = Depends(get_repo)) -> d
         "median_minutes_to_first_milestone": lp.median_minutes_to_first_milestone,
         "counts_by_tier": lp.counts_by_tier,
         "migration_destinations": [],
-        "top_creators": [],
+        # Who is actually launching here, tallied from the ledger rows above
+        # rather than kept as a denormalised field that would need a write
+        # every time anyone launched anything.
+        "top_creators": _top_creators_for(recent),
         "recent_tokens": recent,
         "share_history": [],
         "notes": lp.notes,

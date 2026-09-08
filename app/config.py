@@ -229,6 +229,46 @@ class Settings(BaseSettings):
     auth_password: str = ""
     log_level: str = "info"
 
+    # -- Memory & cost control (2026-09-08 rewrite) ---------------------------
+    # Where Annie's markdown memory and her SQLite ledger/search index live.
+    # On Railway this must point at an attached Volume's mount path (e.g.
+    # /data/memory) — the container filesystem is wiped on every redeploy,
+    # and without a volume the only thing keeping memory alive would be the
+    # Firestore snapshot restore in app/memory/snapshot.py. Locally it
+    # defaults to ./memory so the files sit in the repo where you can read
+    # them. Not a Capability: a missing volume degrades durability, not
+    # function, and the snapshot layer reports it on System Health instead.
+    annie_memory_dir: str = ""
+
+    #: Hard ceiling on Firestore writes this process will issue per UTC day.
+    #: The Spark (free) plan allows 20,000 writes/day across the whole
+    #: project; this sits well under it so a runaway loop degrades into
+    #: "memory-only, logged" instead of a billing incident or a hard quota
+    #: failure mid-cycle. Enforced in app/db/budget.py.
+    firestore_write_budget_per_day: int = 4000
+
+    #: Same, for reads (Spark allows 50,000/day).
+    firestore_read_budget_per_day: int = 12000
+
+    #: How many of the freshest unqualified mints the watch loop re-prices
+    #: each pass. These go out as batched DexScreener lookups (30 mints per
+    #: HTTP request), so 900 is 30 requests, not 900 — see
+    #: app/pipeline/watch.py.
+    watch_batch_size: int = 900
+
+    #: Start the HTTP API only — no bots, no scheduler, no background tasks.
+    #: Set by the test suite, and useful in production for running a second
+    #: read-only instance behind the same data without two schedulers racing
+    #: each other (Discord in particular tolerates two simultaneous Gateway
+    #: connections per token and will deliver the same event to both).
+    annie_api_only: bool = False
+
+    #: A launch is only kept in the ledger's active watchlist for this long
+    #: before being pruned unless it did something. A memecoin that has not
+    #: moved in 48h is not going to; a human watching the market drops it
+    #: from attention, and so does Annie.
+    watch_ttl_hours: int = 48
+
     # -- Model selection ------------------------------------------------------
     # Pinned to gpt-5.6-luna everywhere, deliberately — reasoning, vision and
     # "cheap" all point at the same model rather than being split across

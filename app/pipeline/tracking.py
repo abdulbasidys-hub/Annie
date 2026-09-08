@@ -46,10 +46,16 @@ async def fire_and_forget(repo: FirestoreRepo, run_id: str, awaitable: Awaitable
 
 
 async def run_discovery_stage(registry: ProviderRegistry, repo: FirestoreRepo, *, hours: int = 24) -> dict[str, Any]:
+    """Backfill sweep. Supplements the webhook; it cannot replace it.
+
+    Pump.fun's real transaction volume means 1,000 signatures covers about
+    six seconds, so polling can never provide primary coverage — see
+    app/pipeline/discovery.py. Kept for gap-filling after an outage.
+    """
     from app.pipeline.discovery import run_discovery
 
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
-    run = await run_discovery(registry, repo, since=since)
+    run = await run_discovery(registry, since=since)
     return {
         "launches_seen": run.launches_seen,
         "tokens_created": run.tokens_created,
@@ -58,38 +64,26 @@ async def run_discovery_stage(registry: ProviderRegistry, repo: FirestoreRepo, *
     }
 
 
-async def run_enrichment_stage(registry: ProviderRegistry, repo: FirestoreRepo, *, batch_size: int = 50) -> dict[str, Any]:
-    from app.pipeline.enrichment import run_enrichment
+async def run_watch_stage(registry: ProviderRegistry, settings, *, batch_size: int | None = None) -> dict[str, Any]:
+    """Re-price the watchlist. Batched, local writes, no Firestore."""
+    from app.pipeline.watch import run_watch
 
-    run, _cursor = await run_enrichment(registry, repo, batch_size=batch_size)
-    return {"evaluated": run.evaluated, "qualified": run.qualified, "enriched": run.enriched, "errors": run.errors}
-
-
-async def run_enrichment_all_stage(registry: ProviderRegistry, repo: FirestoreRepo) -> dict[str, Any]:
-    """Full-backlog drain, not a bounded batch — used by the 6-hour full
-    pipeline cycle (app/scheduling/jobs.py), which wants a thorough sweep
-    each time rather than the newest-50 quick check the manual button and
-    the 10-minute frequent_qualification job use."""
-    from app.pipeline.enrichment import run_enrichment_all
-
-    run = await run_enrichment_all(registry, repo)
-    return {"evaluated": run.evaluated, "qualified": run.qualified, "enriched": run.enriched, "errors": run.errors}
+    run = await run_watch(registry, settings, batch_size=batch_size)
+    return run.to_dict()
 
 
-async def run_trends_stage(repo: FirestoreRepo) -> dict[str, Any]:
-    from app.trends.engine import TrendEngine
+async def run_signals_stage(repo: FirestoreRepo) -> dict[str, Any]:
+    """Recompute signals from the ledger.
 
-    engine = TrendEngine(repo)
-    run = await engine.run()
-    return {
-        "cohorts_evaluated": run.cohorts_evaluated,
-        "features_evaluated": run.features_evaluated,
-        "trends_created": run.trends_created,
-        "trends_updated": run.trends_updated,
-        "status_changes": run.status_changes,
-        "revivals": run.revivals,
-        "skipped_windows": run.skipped_windows,
-    }
+    Replaces the old ``run_trends_stage``, which read every qualified
+    token's feature subcollection from Firestore on every pass — the single
+    largest driver of the billing incident this rewrite addresses. Features
+    are now derived from three short strings by pure functions, so this
+    reads only local rows and costs nothing.
+    """
+    from app.memory import signals
+
+    return signals.recompute().to_dict()
 
 
 async def run_narratives_stage(repo: FirestoreRepo) -> dict[str, Any]:

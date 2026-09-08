@@ -25,7 +25,9 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.routes import annie, auth, catalogue, intelligence, memory, personality, system, webhooks
+from app.api.routes import (
+    annie, auth, catalogue, ideas, intelligence, memory, personality, system, webhooks,
+)
 from app.auth import require_auth
 from app.config import CapabilityUnavailable, Settings, get_settings, startup_banner
 from app.db.firestore import dispose_client, get_client
@@ -161,10 +163,36 @@ async def lifespan(app: FastAPI):
         log.info("all_capabilities_available")
 
     register_telemetry_sink(_telemetry_to_db)
+
+    # Memory comes up before anything that could write to it. On a healthy
+    # deployment (an attached Railway Volume) this is a few local file reads
+    # and an index reconcile; on a wiped container it restores the markdown
+    # from the Firestore mirror first, which is the only time that
+    # collection is ever read. Failing here must not stop the process — an
+    # API that starts with empty memory is far more useful than one that
+    # refuses to start — so it is logged loudly and the app continues.
+    try:
+        from app.memory.bootstrap import ensure_memory_ready
+
+        report = await ensure_memory_ready()
+        log.info(
+            "memory_initialised",
+            root=report["root"],
+            files=report["index"].get("files"),
+            restored=report["restored"].get("restored"),
+        )
+    except Exception:
+        log.error("memory_init_failed", exc_info=True)
+
     log.info("annie_api_started", port=settings.api_port)
 
-    await _start_bots(settings)
-    await _start_scheduler(settings)
+    if settings.annie_api_only:
+        # ANNIE_API_ONLY: serve the HTTP API and nothing else. Memory is
+        # already up (above), which is all the read surface needs.
+        log.info("background_tasks_disabled", reason="ANNIE_API_ONLY is set")
+    else:
+        await _start_bots(settings)
+        await _start_scheduler(settings)
 
     yield
 
@@ -190,6 +218,10 @@ async def lifespan(app: FastAPI):
             pass
     await close_registry()
     await dispose_client()
+
+    from app.memory import db as memory_db
+
+    memory_db.close()
 
 
 settings = get_settings()
@@ -260,6 +292,7 @@ app.include_router(catalogue.router, prefix="/api", tags=["catalogue"], dependen
 app.include_router(intelligence.router, prefix="/api", tags=["intelligence"], dependencies=_protected)
 app.include_router(annie.router, prefix="/api/annie", tags=["annie"], dependencies=_protected)
 app.include_router(memory.router, prefix="/api", tags=["memory"], dependencies=_protected)
+app.include_router(ideas.router, prefix="/api", tags=["ideas"], dependencies=_protected)
 app.include_router(personality.router, prefix="/api", tags=["personality"], dependencies=_protected)
 
 

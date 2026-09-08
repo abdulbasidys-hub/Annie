@@ -132,7 +132,7 @@ function Pipeline({ onRan }) {
   return (
     <Panel
       title="Pipeline"
-      meta="also runs automatically on its own schedule (Settings → Bots & scheduler) — use these for an on-demand check between runs"
+      meta="also runs on its own schedule (Settings → Bots & scheduler) — these are for an on-demand check in between"
     >
       <div className="stack gap-4">
         <PipelineAction
@@ -148,26 +148,27 @@ function Pipeline({ onRan }) {
           }
         />
         <PipelineAction
-          label="2. Enrichment"
-          hint="Qualify and enrich the newest 50 discovered tokens (metadata, creator wallet, features)."
-          stage="enrichment"
-          onTrigger={() => api.runEnrichment(50)}
+          label="2. Watch"
+          hint="Re-price the highest-priority slice of the watchlist. Lookups are batched 30 mints per request and results are written locally, so this is cheap — click it freely."
+          stage="watch"
+          onTrigger={() => api.runWatch(300)}
           onRan={onRan}
           formatResult={(r) =>
-            `${r.evaluated ?? 0} evaluated, ${r.qualified ?? 0} qualified, ${r.enriched ?? 0} enriched.` +
+            `${r.checked ?? 0} checked, ${r.priced ?? 0} priced, ${r.unpriced ?? 0} with no pair yet, ` +
+            `${r.qualified_count ?? 0} newly cleared a tier.` +
             (r.errors?.length ? ` ${r.errors.length} error(s) — see server logs.` : '')
           }
         />
         <PipelineAction
-          label="3. Trend analysis"
-          hint="Compare qualified-token cohorts against their historical baselines."
-          stage="trends"
-          onTrigger={() => api.runTrends()}
+          label="3. Signals"
+          hint="Recompute which characteristics are over-represented among tokens that cleared a tier. Pure statistics over local rows — free."
+          stage="signals"
+          onTrigger={() => api.runSignals()}
           onRan={onRan}
           formatResult={(r) =>
-            `${r.trends_created ?? 0} new trend(s), ${r.trends_updated ?? 0} updated, ` +
-            `${r.status_changes ?? 0} status change(s).` +
-            (r.skipped_windows?.length ? ` Skipped: ${r.skipped_windows.join(', ')}.` : '')
+            `${r.cohorts ?? 0} cohort(s), ${r.evaluated ?? 0} characteristic(s) evaluated, ` +
+            `${r.created ?? 0} new, ${r.updated ?? 0} updated.` +
+            (r.promoted?.length ? ` Rising: ${r.promoted.slice(0, 3).join(', ')}.` : '')
           }
         />
         <PipelineAction
@@ -194,6 +195,98 @@ function Pipeline({ onRan }) {
  * would enable it. "Provider unavailable" tells an operator nothing; "set
  * BIRDEYE_API_KEY" tells them everything.
  */
+/**
+ * Where the money is going.
+ *
+ * This panel exists because "too much data" is only fixable if it is visible.
+ * It shows this process's Firestore writes against a budget deliberately set
+ * well under the Spark plan's 20,000/day cap, what the local ledger is
+ * holding, and — the one that bites silently — whether memory is on a
+ * persistent volume or will vanish on the next redeploy.
+ */
+function Cost() {
+  const state = useApi(() => api.cost(), [])
+
+  return (
+    <Async state={state} rows={3}>
+      {(c) => {
+        const fs = c.firestore
+        const overBudget = fs.writes >= fs.write_budget
+        return (
+          <Panel
+            title="Cost & durability"
+            meta={`${fs.write_headroom_pct}% of today's Firestore write budget still free`}
+          >
+            <div className="grid grid--stats">
+              <Stat
+                label="Firestore writes today"
+                value={`${count(fs.writes)} / ${count(fs.write_budget)}`}
+                foot={
+                  <span className="muted">
+                    plan cap is {count(fs.spark_plan_daily_caps.writes)}/day
+                    {fs.writes_skipped > 0 && ` · ${count(fs.writes_skipped)} skipped`}
+                  </span>
+                }
+              />
+              <Stat
+                label="Firestore reads today"
+                value={`${count(fs.reads)} / ${count(fs.read_budget)}`}
+                foot={<span className="muted">plan cap is {count(fs.spark_plan_daily_caps.reads)}/day</span>}
+              />
+              <Stat
+                label="Held locally"
+                value={count(c.ledger.sightings_total)}
+                foot={
+                  <span className="muted">
+                    of {count(c.ledger.sightings_24h)} seen in 24h · free, pruned at 48h
+                  </span>
+                }
+              />
+              <Stat
+                label="Memory files"
+                value={count(c.memory.files)}
+                foot={<span className="muted">{count(c.memory.keys)} lookup keys</span>}
+              />
+            </div>
+
+            {overBudget && (
+              <p className="faint" style={{ marginTop: 'var(--space-3)' }}>
+                The write budget is exhausted for today. Writes are being skipped and logged,
+                not retried — memory on disk is unaffected, only its Firestore mirror is behind.
+              </p>
+            )}
+
+            <div className="stack gap-2" style={{ marginTop: 'var(--space-4)' }}>
+              <div className="row gap-2 wrap">
+                <Badge status={c.durability.looks_like_volume ? 'verified' : 'declining'} variant="outline">
+                  {c.durability.looks_like_volume ? 'Memory is durable' : 'Memory is not durable'}
+                </Badge>
+                <span className="mono faint" style={{ fontSize: 'var(--text-2xs)' }}>
+                  {c.durability.root}
+                </span>
+              </div>
+              <span className="faint" style={{ fontSize: 'var(--text-2xs)' }}>
+                {c.durability.note}
+              </span>
+            </div>
+
+            <div className="stack gap-2" style={{ marginTop: 'var(--space-4)' }}>
+              <span className="faint" style={{ fontSize: 'var(--text-2xs)' }}>
+                Launch stream: {count(c.stream.sightings)} sighted in the last hour from{' '}
+                {count(c.stream.distinct_creators)} wallets
+                {c.stream.last_sighting_at && ` · last ${relative(c.stream.last_sighting_at)}`}
+              </span>
+              <span className="faint" style={{ fontSize: 'var(--text-2xs)' }}>
+                Model calls: {c.model_calls_per_day.scheduled}. {c.model_calls_per_day.note}
+              </span>
+            </div>
+          </Panel>
+        )
+      }}
+    </Async>
+  )
+}
+
 export default function SystemHealth() {
   const health = useApi(() => api.health(), [])
   const capabilities = useApi(() => api.capabilities(), [])
@@ -204,11 +297,13 @@ export default function SystemHealth() {
       <div className="page-head">
         <h2 className="page-head__title">System health</h2>
         <p className="page-head__sub">
-          Provider status, request volume, and pipeline coverage. Coverage is a research
-          input, not just an ops metric — a window with poor enrichment is excluded from
-          trend comparisons rather than averaged over.
+          What things cost, whether memory will survive a redeploy, provider status, and
+          pipeline coverage. Coverage is a research input, not just an ops metric — a window
+          with poor coverage is excluded from comparisons rather than averaged over.
         </p>
       </div>
+
+      <Cost />
 
       <Pipeline onRan={quality.reload} />
 

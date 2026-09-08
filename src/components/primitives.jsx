@@ -13,7 +13,7 @@
  * through it, so a missing market cap can never appear as $0.
  */
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   UNKNOWN,
@@ -446,4 +446,126 @@ export function Freshness({ seconds, at }) {
       {stale && ' — stale'}
     </span>
   )
+}
+
+/* ------------------------------------------------------------- Markdown -- */
+
+/**
+ * Minimal markdown rendering — headings, bullets, bold, inline code, and
+ * paragraphs. Deliberately not a markdown library: memory files are written
+ * by Annie and by the deterministic rollups, both of which produce this small
+ * subset, and a dependency here would be more surface than the feature needs.
+ *
+ * Text is placed via React children throughout, never innerHTML, so a file's
+ * content cannot inject markup into this page.
+ */
+export function Markdown({ text }) {
+  const blocks = useMemo(() => toBlocks(text ?? ''), [text])
+
+  return (
+    <div className="prose">
+      {blocks.map((block, i) => {
+        if (block.kind === 'gap') return <div key={i} style={{ height: 10 }} />
+        if (block.kind === 'h3') return <h3 key={i}>{inlineMarkdown(block.text)}</h3>
+        if (block.kind === 'h4') return <h4 key={i}>{inlineMarkdown(block.text)}</h4>
+        if (block.kind === 'li') {
+          return (
+            <div key={i} className="prose__li" style={{ paddingLeft: 12 + block.depth * 16 }}>
+              <span className="prose__bullet">·</span>
+              <span>{inlineMarkdown(block.text)}</span>
+            </div>
+          )
+        }
+        return <p key={i}>{inlineMarkdown(block.text)}</p>
+      })}
+    </div>
+  )
+}
+
+/**
+ * Group raw markdown lines into renderable blocks.
+ *
+ * Consecutive prose lines join into one paragraph, which is what markdown
+ * means and what the files actually need: Annie hard-wraps her prose at
+ * around 75 columns, so rendering one paragraph per line broke every
+ * sentence at an arbitrary point and made a considered paragraph look like a
+ * list of fragments. Blank lines, headings and bullets still end a paragraph.
+ *
+ * A continuation line indented under a bullet is folded into that bullet for
+ * the same reason.
+ */
+function toBlocks(text) {
+  const blocks = []
+  let paragraph = null
+
+  const flush = () => {
+    if (paragraph) {
+      blocks.push({ kind: 'p', text: paragraph })
+      paragraph = null
+    }
+  }
+
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim()
+    const indent = line.length - line.trimStart().length
+
+    if (!trimmed) {
+      flush()
+      blocks.push({ kind: 'gap' })
+      continue
+    }
+    if (trimmed.startsWith('### ')) {
+      flush()
+      blocks.push({ kind: 'h4', text: trimmed.slice(4) })
+      continue
+    }
+    if (trimmed.startsWith('## ') || trimmed.startsWith('# ')) {
+      flush()
+      blocks.push({ kind: 'h3', text: trimmed.replace(/^#+\s+/, '') })
+      continue
+    }
+    if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+      flush()
+      blocks.push({ kind: 'li', depth: Math.floor(indent / 2), text: trimmed.slice(2) })
+      continue
+    }
+
+    const previous = blocks[blocks.length - 1]
+    if (!paragraph && indent >= 2 && previous?.kind === 'li') {
+      previous.text += ' ' + trimmed
+      continue
+    }
+    paragraph = paragraph ? `${paragraph} ${trimmed}` : trimmed
+  }
+
+  flush()
+  // Trailing and leading gaps are noise, not spacing.
+  while (blocks.length && blocks[blocks.length - 1].kind === 'gap') blocks.pop()
+  while (blocks.length && blocks[0].kind === 'gap') blocks.shift()
+  return blocks
+}
+
+/** Inline `code` and **bold** within one line. */
+function inlineMarkdown(text) {
+  // Bold before italic in the alternation, so `**x**` is never consumed as
+  // an italic `*` followed by stray text — Annie leans on emphasis to mark
+  // the word a sentence turns on ("it is what I think *now*"), and rendering
+  // those asterisks literally makes her prose read like a diff.
+  const parts = String(text).split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*\s][^*]*\*)/g)
+  return parts.map((part, i) => {
+    if (part.startsWith('`') && part.endsWith('`') && part.length > 2) {
+      return (
+        <code key={i} className="mono">
+          {part.slice(1, -1)}
+        </code>
+      )
+    }
+    if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
+      return <strong key={i}>{part.slice(2, -2)}</strong>
+    }
+    if (part.startsWith('*') && part.endsWith('*') && part.length > 2) {
+      return <em key={i}>{part.slice(1, -1)}</em>
+    }
+    return <span key={i}>{part}</span>
+  })
 }

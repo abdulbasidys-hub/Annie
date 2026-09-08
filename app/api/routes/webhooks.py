@@ -45,19 +45,24 @@ firing (check `requests_24h` for "helius" on System Health), the fix is
 almost certainly here: log a raw payload once and adjust the extraction to
 match what Helius is actually sending.
 
-**A Firestore failure on one event must not fail the whole delivery.** Once
-the ``CREATE`` filter above started actually working, real production volume
-hit Firestore for the first time — and surfaced a ``RESOURCE_EXHAUSTED /
-429 Quota exceeded`` from ``create_discovered_token``'s read, which was an
-unhandled exception that 500'd the entire request (dropping every other
-event in that delivery, not just the one that failed). Each event's write is
-now wrapped individually, logged as ``helius_webhook_write_failed`` rather
-than crashing. Repeated occurrences of that log line mean Firestore's plan
-quota was hit (Firebase Console -> Firestore Database -> Usage tab shows
-today's reads/writes against the plan's cap) — not a bug in this handler.
-The Spark (free) plan's fixed daily caps do not fit a webhook that fires on
-every real Pump.fun creation; Blaze (pay-as-you-go) removes the cap, and the
-actual per-operation cost at this volume is cents, not dollars.
+**Ingest is free as of the 2026-09-08 memory rewrite.** This handler used to
+do one Firestore read plus one Firestore write per event. At real volume —
+~16,000 creations a day — that was ~32,000 operations daily on this path
+alone, against a Spark plan allowing 20,000 writes and 50,000 reads in
+total for the whole project. It did not fit, and the overflow arrived as
+``RESOURCE_EXHAUSTED / 429 Quota exceeded`` raised from inside
+``create_discovered_token``, which 500'd the entire delivery and dropped
+every other event in that batch, not just the one that failed.
+
+Events now go to :mod:`app.pipeline.stream`, which writes one row to local
+SQLite and touches no network at all. Firestore is not involved in this
+path in any way. Each event is still wrapped individually — a malformed
+payload must not cost the rest of the batch — but the failure mode it is
+guarding against is now a parse error rather than a quota wall.
+
+Nothing about the creator record was sacrificed to get there: every launch
+by every wallet still produces a movement row, because those rows are local
+and free. See ``app/memory/ledger.py``.
 """
 
 from __future__ import annotations
@@ -70,8 +75,7 @@ import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from app.config import Settings, get_settings
-from app.db.repo import FirestoreRepo, get_repo
-from app.pipeline.discovery import record_launch
+from app.pipeline import stream
 from app.providers.helius import KNOWN_LAUNCHPAD_PROGRAMS
 from app.providers.types import Provenance, TokenLaunch
 
@@ -93,7 +97,6 @@ def _verify_secret(settings: Settings, authorization: str | None) -> None:
 @router.post("/helius")
 async def helius_webhook(
     request: Request,
-    repo: FirestoreRepo = Depends(get_repo),
     settings: Settings = Depends(get_settings),
     authorization: str | None = Header(None),
 ) -> dict[str, Any]:
@@ -106,9 +109,8 @@ async def helius_webhook(
 
     events = payload if isinstance(payload, list) else [payload]
 
-    created = 0
+    launches = []
     unparsed = 0
-    failed = 0
     for event in events:
         if not isinstance(event, dict):
             continue
@@ -121,24 +123,25 @@ async def helius_webhook(
                 keys=sorted(event.keys()),
             )
             continue
-        try:
-            if await record_launch(repo, launch):
-                created += 1
-        except Exception:
-            # A Firestore-side failure (quota, transient outage) on one event
-            # must not crash the whole batch or bubble up as an unhandled 500 —
-            # that would both drop every other event in this delivery and give
-            # Helius an ambiguous failure signal to retry against. Logged, not
-            # silent: check for repeated `helius_webhook_write_failed` entries,
-            # which almost always means Firestore quota was exceeded (Firebase
-            # Console -> Firestore -> Usage) rather than a code bug here.
-            failed += 1
-            log.error("helius_webhook_write_failed", signature=launch.signature, exc_info=True)
+        launches.append(launch)
+
+    result = stream.ingest_many(launches)
 
     log.info(
-        "helius_webhook_received", events=len(events), created=created, unparsed=unparsed, failed=failed
+        "helius_webhook_received",
+        events=len(events),
+        created=result.new,
+        repeats=result.repeats,
+        unparsed=unparsed,
+        failed=result.failed,
     )
-    return {"received": len(events), "created": created, "unparsed": unparsed, "failed": failed}
+    return {
+        "received": len(events),
+        "created": result.new,
+        "repeats": result.repeats,
+        "unparsed": unparsed,
+        "failed": result.failed,
+    }
 
 
 #: Mints that must never be picked as "the launched token", however early

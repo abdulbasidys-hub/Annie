@@ -13,9 +13,13 @@ Two entry points write to the same place through :func:`record_launch`:
   amendment).
 
 Both are deliberately cheap: no market data, no metadata, no creator
-resolution here — that is enrichment's job, and running it against every
-launch (most of which never qualify) would be exactly the unnecessary spend
-§48 exists to avoid.
+resolution here. A launch is a *sighting*, not a subject — pricing it is
+:mod:`app.pipeline.watch`'s job, and only for the small slice that earns it.
+
+Since the 2026-09-08 rewrite a sighting costs one local SQLite insert and
+touches Firestore not at all. That is what makes it affordable to record
+every launch without filtering at the door: the filtering happens later, on
+attention rather than on ingest, which is the right place for it.
 """
 
 from __future__ import annotations
@@ -25,9 +29,7 @@ from datetime import datetime, timezone
 
 import structlog
 
-from app.db.enums import PipelineStage
-from app.db.models.tokens import Token
-from app.db.repo import FirestoreRepo
+from app.pipeline import stream
 from app.providers.registry import ProviderRegistry
 from app.providers.types import TokenLaunch
 
@@ -52,39 +54,18 @@ class DiscoveryRun:
     errors: list[str] = field(default_factory=list)
 
 
-async def record_launch(repo: FirestoreRepo, launch: TokenLaunch, *, now: datetime | None = None) -> bool:
+async def record_launch(launch: TokenLaunch, *, now: datetime | None = None) -> bool:
     """Write one discovered launch. Returns ``True`` if it was new.
 
-    Shared by the poller and the webhook receiver so "what a discovered
-    token looks like on first sighting" is defined in exactly one place.
+    Thin wrapper over :func:`app.pipeline.stream.ingest` so that "what a
+    discovered token looks like on first sighting" stays defined in exactly
+    one place, whichever entry point found it.
     """
-    now = now or datetime.now(timezone.utc)
-    token = Token(
-        mint=launch.mint,
-        name=launch.name,
-        symbol=launch.symbol,
-        creator_wallet=launch.creator_wallet,
-        launchpad_slug=launch.launchpad_slug,
-        launched_at=launch.launched_at,
-        launch_signature=launch.signature,
-        pipeline_stage=PipelineStage.DISCOVERY,
-        source=launch.provenance.provider,
-        source_type=launch.provenance.source_type,
-        source_observed_at=launch.provenance.observed_at,
-        verification_status="unverified",
-        data_sources=[launch.provenance.provider],
-    )
-    created = await repo.create_discovered_token(token)
-    if created and launch.launchpad_slug:
-        await repo.touch_launchpad_seen(
-            launch.launchpad_slug, name=None, program_id=None, when=launch.launched_at or now,
-        )
-    return created
+    return stream.ingest(launch)
 
 
 async def run_discovery(
     registry: ProviderRegistry,
-    repo: FirestoreRepo,
     *,
     since: datetime,
     until: datetime | None = None,
@@ -112,11 +93,10 @@ async def run_discovery(
 
     run.launches_seen = len(launches)
 
-    for launch in launches:
-        if await record_launch(repo, launch, now=run.started_at):
-            run.tokens_created += 1
-        else:
-            run.tokens_already_known += 1
+    result = stream.ingest_many(launches)
+    run.tokens_created = result.new
+    run.tokens_already_known = result.repeats
+    run.errors.extend(result.errors)
 
     run.finished_at = datetime.now(timezone.utc)
     log.info(
