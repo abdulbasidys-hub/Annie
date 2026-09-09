@@ -1039,6 +1039,35 @@ const routes = [
     total: 2,
   })],
 
+  // Deliberately a broken registration — the healthy case renders nothing,
+  // so the fixture shows the state worth looking at.
+  ['GET', /^\/api\/system\/webhook$/, () => ({
+    ok: false,
+    state: 'misconfigured',
+    problems: [
+      'Registered URL is https://annie-old.up.railway.app/api/webhooks/helius, but this deployment is at https://annie.up.railway.app/api/webhooks/helius. Deliveries are going somewhere else.',
+      "transactionTypes is missing ['CREATE_POOL']. CREATE is Pump.fun and CREATE_POOL is Raydium LaunchLab — without both, half the market is invisible.",
+    ],
+    expected_url: 'https://annie.up.railway.app/api/webhooks/helius',
+    detected_base_url: 'https://annie.up.railway.app',
+    webhook_id: 'wh_1',
+    webhooks: [
+      {
+        id: 'wh_1',
+        url: 'https://annie-old.up.railway.app/api/webhooks/helius',
+        transaction_types: ['CREATE'],
+        account_addresses: ['6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P'],
+        type: 'enhanced',
+        auth_header_set: true,
+        auth_header_matches: true,
+      },
+    ],
+  })],
+  ['POST', /^\/api\/system\/webhook\/repair$/, () => ({
+    action: 'repaired', webhook_id: 'wh_1',
+    url: 'https://annie.up.railway.app/api/webhooks/helius',
+  })],
+
   ['GET', /^\/api\/system\/pipeline-status$/, () => ({
     state: 'healthy',
     headline: 'Data is arriving and being kept.',

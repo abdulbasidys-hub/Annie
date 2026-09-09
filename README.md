@@ -601,7 +601,26 @@ session token, and a leaked local one shouldn't grant access to production.
    ```
    The key appearing twice is correct — setting only one reports `DEGRADED`,
    not `AVAILABLE`.
-3. **Register the discovery webhook** — a one-time REST call against Helius's
+3. **Register the discovery webhook.** Easiest path: deploy first, then open
+   **System Health → "Is the webhook actually registered?" → Register /
+   repair**. It asks Helius what is registered against your key, compares it
+   to what this deployment expects, names any difference, and can create or
+   correct it in place.
+
+   From a terminal instead:
+
+   ```bash
+   python -m tools.check_webhook --url https://<your-railway-domain>
+   python -m tools.check_webhook --url https://<your-railway-domain> --repair
+   ```
+
+   Worth knowing before you debug this by hand: **Helius auto-disables a
+   webhook after a sustained run of failures**, and a disabled webhook is
+   invisible from the receiving end — it looks exactly like a market where
+   nothing launched. This deployment has already had that happen once, while
+   Railway was down. Re-saving the registration clears it.
+
+   The manual REST call, if you prefer it — a one-time call against Helius's
    API, not something the app does for you. Pick a `HELIUS_WEBHOOK_SECRET`
    (any long random string) and set it in `.env` first, then:
    ```bash

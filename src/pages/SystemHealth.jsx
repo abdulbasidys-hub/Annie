@@ -301,6 +301,148 @@ function PipelineStatus() {
   )
 }
 
+/**
+ * The webhook registration, checked against Helius rather than inferred.
+ *
+ * Shown only when the stream has a problem, because when data is arriving the
+ * registration is self-evidently fine. Every way this breaks is invisible
+ * from the receiving end — auto-disabled after a run of failures, pointing at
+ * a previous domain, or an authHeader that no longer matches so every
+ * delivery 401s — and all three look identical to a quiet market.
+ */
+function WebhookCheck({ pipelineState }) {
+  const [report, setReport] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+  const [repaired, setRepaired] = useState(null)
+
+  if (pipelineState === 'healthy' || pipelineState === 'warming_up') return null
+
+  const check = async () => {
+    setBusy(true)
+    setError(null)
+    setRepaired(null)
+    try {
+      setReport(await api.webhookStatus())
+    } catch (err) {
+      setError(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const repair = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      setRepaired(await api.repairWebhook())
+      setReport(await api.webhookStatus())
+    } catch (err) {
+      setError(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Panel
+      title="Is the webhook actually registered?"
+      meta="asks Helius directly"
+      actions={
+        <>
+          <button className="btn btn--ghost" onClick={check} disabled={busy}>
+            {busy ? 'Checking…' : 'Check'}
+          </button>
+          {report && !report.ok && (
+            <button className="btn btn--primary" onClick={repair} disabled={busy}>
+              Register / repair
+            </button>
+          )}
+        </>
+      }
+    >
+      {error && <ErrorState error={error} />}
+
+      {!report && !error && (
+        <p style={{ margin: 0 }}>
+          Nothing has arrived, and the reason is almost always here rather than in
+          this app. Press Check and it will ask Helius what is registered against
+          your key, compare it to what this deployment expects, and name the
+          difference.
+        </p>
+      )}
+
+      {repaired && (
+        <p className="modal__warn" style={{ marginBottom: 12 }}>
+          <strong>{repaired.action === 'created' ? 'Created' : 'Repaired'}.</strong>{' '}
+          Webhook <code className="mono">{repaired.webhook_id}</code> now points at{' '}
+          <code className="mono">{repaired.url}</code>. Deliveries should start within
+          a minute or two — watch "Launches last hour" above.
+        </p>
+      )}
+
+      {report && (
+        <div className="stack gap-4">
+          <div className="row gap-2 wrap">
+            <Badge status={report.ok ? 'verified' : 'alert'} variant="outline">
+              {report.state.replace(/_/g, ' ')}
+            </Badge>
+            <span className="faint mono" style={{ fontSize: 'var(--text-2xs)' }}>
+              expects {report.expected_url}
+            </span>
+          </div>
+
+          {report.problems?.length > 0 && (
+            <div className="stack" style={{ gap: 6 }}>
+              {report.problems.map((problem, i) => (
+                <div key={i} className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
+                  <span className="faint">·</span>
+                  <span style={{ fontSize: 'var(--text-sm)' }}>{problem}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {report.webhooks?.length > 0 && (
+            <div className="table-wrap">
+              <table className="table table--responsive">
+                <thead>
+                  <tr>
+                    <th>Registered URL</th>
+                    <th>Types</th>
+                    <th>Programs</th>
+                    <th>Secret</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.webhooks.map((w) => (
+                    <tr key={w.id}>
+                      <td className="primary" data-label="URL">
+                        <code className="mono">{w.url}</code>
+                      </td>
+                      <td data-label="Types">{w.transaction_types.join(', ') || '—'}</td>
+                      <td className="num" data-label="Programs">
+                        {count(w.account_addresses?.length)}
+                      </td>
+                      <td data-label="Secret">
+                        {w.auth_header_matches
+                          ? 'matches'
+                          : w.auth_header_set
+                            ? 'set, does not match'
+                            : 'not set'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </Panel>
+  )
+}
+
 function Cost() {
   const state = useApi(() => api.cost(), [])
 
@@ -384,6 +526,12 @@ function Cost() {
   )
 }
 
+/** Only renders the webhook check when the stream is actually in trouble. */
+function WebhookGate() {
+  const state = useApi(() => api.pipelineStatus(), [])
+  return <WebhookCheck pipelineState={state.data?.state} />
+}
+
 export default function SystemHealth() {
   const health = useApi(() => api.health(), [])
   const capabilities = useApi(() => api.capabilities(), [])
@@ -401,6 +549,8 @@ export default function SystemHealth() {
       </div>
 
       <PipelineStatus />
+
+      <WebhookGate />
 
       <Cost />
 

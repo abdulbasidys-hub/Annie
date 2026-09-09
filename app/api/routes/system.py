@@ -6,7 +6,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.schemas import CapabilityOut, DataQualityOut, Page, PipelineRunOut, ProviderHealthOut, SettingOut
 from app.config import Settings, get_settings
@@ -198,6 +198,84 @@ async def run_narratives_now(
     run = await repo.create_pipeline_run("narratives", trigger="manual")
     asyncio.create_task(fire_and_forget(repo, run.id, run_narratives_stage(repo)))
     return {"run_id": run.id}
+
+
+def _public_base_url(request: Request) -> str:
+    """This deployment's own externally-reachable base URL.
+
+    Needed because the webhook registration has to point *back* here, and
+    getting it wrong is one of the failure modes being diagnosed.
+
+    ``request.url`` is not enough behind Railway's proxy: it reports the
+    internal scheme and host the container sees, which is not what Helius
+    would have to call. So the platform's own variable is preferred, then the
+    forwarded headers, and the request URL is the last resort.
+    """
+    import os
+
+    railway = (os.environ.get("RAILWAY_PUBLIC_DOMAIN") or "").strip()
+    if railway:
+        return f"https://{railway}"
+
+    forwarded_host = request.headers.get("x-forwarded-host")
+    if forwarded_host:
+        proto = request.headers.get("x-forwarded-proto", "https")
+        return f"{proto}://{forwarded_host.split(',')[0].strip()}"
+
+    return str(request.base_url).rstrip("/")
+
+
+@router.get("/webhook")
+async def webhook_status(
+    request: Request,
+    base_url: str | None = Query(
+        None, description="Override the detected public URL, if it is wrong."
+    ),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Is the launch webhook actually registered and pointing here?
+
+    The webhook is the single point of failure for the whole system, and
+    every way it breaks is invisible from the receiving end: auto-disabled
+    after a failure run, pointing at a previous domain, or registered with an
+    authHeader that no longer matches, which makes every delivery a 401 and
+    looks exactly like silence. This asks Helius rather than inferring.
+    """
+    from app.providers import helius_webhook
+
+    detected = base_url or _public_base_url(request)
+    report = await helius_webhook.inspect(
+        settings.helius_api_key,
+        base_url=detected,
+        secret=settings.helius_webhook_secret,
+    )
+    return {**report, "detected_base_url": detected}
+
+
+@router.post("/webhook/repair")
+async def webhook_repair(
+    request: Request,
+    base_url: str | None = Query(None),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Create the webhook, or correct the existing one in place.
+
+    Edits rather than recreating where it can: Helius issues a new webhookID
+    on create, and an operator who noted the old one should not silently end
+    up with a different one.
+    """
+    from app.providers import helius_webhook
+
+    detected = base_url or _public_base_url(request)
+    try:
+        result = await helius_webhook.repair(
+            settings.helius_api_key,
+            base_url=detected,
+            secret=settings.helius_webhook_secret,
+        )
+    except helius_webhook.WebhookError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return result
 
 
 @router.get("/pipeline-status")
