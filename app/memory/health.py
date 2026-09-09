@@ -14,8 +14,14 @@ The four states this separates:
 ``memory_not_durable``
     Data arrives, but ``ANNIE_MEMORY_DIR`` is not on a mounted volume, so
     every redeploy wipes the ledger and the notebook. Symptom: counts that
-    reset to zero after each deploy and a notebook that never grows past its
-    four seeded files.
+    reset to zero after each deploy and a notebook that never grows past the
+    core files it is seeded with (:data:`app.memory.paths.CORE_FILES`).
+
+    The markdown half is recoverable — it is mirrored to Firestore and
+    restored on boot. SQLite is not mirrored, so the ledger *and* the
+    scheduler's run state are lost every time, which is its own visible
+    symptom: with no record of which slots fired today, the fixed-times
+    catch-up used to replay them, one brief per tick.
 
 ``warming_up``
     The stream is arriving and the ledger is filling, but nothing has
