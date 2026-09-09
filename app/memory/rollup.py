@@ -448,7 +448,7 @@ async def _synthesise(
             messages=[
                 {
                     "role": "system",
-                    "content": await voice.prefix(ROLLUP_PROMPT.format(period=period)),
+                    "content": voice.prefix(ROLLUP_PROMPT.format(period=period)),
                 },
                 {"role": "user", "content": body},
             ],

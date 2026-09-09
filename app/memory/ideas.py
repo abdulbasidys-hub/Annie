@@ -185,7 +185,7 @@ async def generate(
         response = await client.chat.completions.create(
             model=settings.openai_reasoning_model,
             messages=[
-                {"role": "system", "content": await voice.prefix(SYSTEM_PROMPT)},
+                {"role": "system", "content": voice.prefix(SYSTEM_PROMPT)},
                 {
                     "role": "user",
                     "content": f"{context}\n\nGive me {max(1, min(count, 4))} idea(s).",

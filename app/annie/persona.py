@@ -15,7 +15,6 @@ database" behaves differently.
 from __future__ import annotations
 
 from textwrap import dedent
-from typing import Any
 
 #: The one-line description used in the UI header.
 TAGLINE = "Research assistant. Reads the data, argues with you about it."
@@ -313,8 +312,6 @@ def system_prompt(
     *,
     autonomous: bool = False,
     capabilities_note: str = "",
-    personality_overrides: dict[str, str] | None = None,
-    personality_source_text: str = "",
 ) -> str:
     """Assemble Annie's system prompt.
 
@@ -323,12 +320,11 @@ def system_prompt(
     unconfigured is far better than letting her call it and improvise around
     the failure.
 
-    ``personality_overrides`` (from ``PersonalityConfig``, the Personality
-    page's editable fields) adds an operator-configured voice section — it
-    never replaces SOURCE_OF_TRUTH, CLAIM_DISCIPLINE, EVIDENCE_STANDARD or
-    MONEY below, which are unconditional regardless of what's configured.
-    An operator can change how she sounds; they cannot configure away the
-    rules that keep her honest.
+    Her voice is :data:`PERSONALITY`, in this file, shared with every other
+    prompt through :func:`voice_section`. It was configurable through a
+    Firestore-backed Personality page until 2026-09-09; editing the constant
+    is better in every way that mattered — it is reviewable, it is the whole
+    text rather than five extracted phrases, and it costs no reads.
     """
     sections = [
         CORE_IDENTITY,
@@ -342,18 +338,6 @@ def system_prompt(
         MONEY,
         FORMATTING,
     ]
-
-    if personality_overrides or personality_source_text.strip():
-        # Same renderer the scheduled prompts use, so chat cannot drift into
-        # sounding like a different person from the daily brief.
-        configured = voice_section(
-            personality_overrides, source_text=personality_source_text
-        )
-        # PERSONALITY is already in `sections`; keep only what was configured
-        # on top of it.
-        extra = configured.split("\n\n---\n\n", 1)
-        if len(extra) == 2:
-            sections.append(extra[1])
 
     if autonomous:
         sections.append(
@@ -380,71 +364,26 @@ def system_prompt(
     return "\n\n---\n\n".join(sections)
 
 
-def voice_section(
-    overrides: dict[str, Any] | None = None, *, source_text: str = ""
-) -> str:
-    """How Annie sounds — the built-in voice plus whatever is configured.
+def voice_section() -> str:
+    """How Annie sounds.
 
-    Split out of :func:`system_prompt` so the prompts that are not the chat
-    agent can share it. The cycle headline, the launch ideas and the weekly
-    and monthly summaries each had their own "You are Annie" prompt that
-    described a job and never described a voice, so the messages an operator
-    reads without asking sounded nothing like the one they have to go looking
-    for.
+    Shared by every prompt that is not the chat agent. The cycle headline,
+    the launch ideas and the weekly and monthly summaries each had their own
+    "You are Annie" prompt that described a job and never described a voice,
+    so the messages an operator reads without asking sounded nothing like the
+    one they have to go looking for.
 
     Only the voice travels. The epistemic rules stay in :func:`system_prompt`,
     because those prompts already carry their own — a notebook-editing prompt
     does not need to be told how to format a market cap in prose.
+
+    This used to be assembled from a Firestore document an operator edited on
+    a Personality page: five short fields an LLM had extracted from a
+    paragraph they wrote. Retired 2026-09-09. The extraction was lossy in the
+    one dimension that mattered — "dry, a bit sardonic, never chirpy" came
+    back as tone="dry" — and every scheduled write paid a Firestore read to
+    fetch a worse version of something that could simply be written here, in
+    full, and reviewed in a diff like the rest of her.
     """
-    parts = [PERSONALITY]
-    if overrides:
-        configured = _personality_override_section(overrides)
-        if configured:
-            parts.append(configured)
-    if source_text.strip():
-        # Verbatim, and after the derived fields so it has the last word. The
-        # five fields are an LLM's extraction from this paragraph, and the
-        # extraction loses precisely what matters here: "dry, a bit sardonic,
-        # never chirpy" becomes tone="dry" and the rest is gone.
-        parts.append(
-            "# How the operator described you\n\n"
-            "In their own words. Where this and the fields above disagree, "
-            "this is what they meant:\n\n"
-            f"{source_text.strip()}"
-        )
-    return "\n\n---\n\n".join(parts)
+    return PERSONALITY
 
-
-_OVERRIDE_LABELS = {
-    "tone": "Tone",
-    "communication_style": "Communication style",
-    "skepticism_level": "Skepticism",
-    "pushback_degree": "How much to push back",
-    "explanation_style": "How to explain things",
-}
-
-
-def _personality_override_section(overrides: dict[str, str]) -> str:
-    """Renders whichever PersonalityConfig fields the operator actually
-    filled in — an empty field is omitted rather than injecting an empty
-    instruction. This adjusts voice on top of the PERSONALITY section
-    above, not instead of it; an operator who leaves everything blank gets
-    exactly the original built-in voice."""
-    lines = []
-    for key, label in _OVERRIDE_LABELS.items():
-        value = (overrides.get(key) or "").strip()
-        if value:
-            lines.append(f"- {label}: {value}")
-    if not lines:
-        return ""
-    return "# Operator-configured voice (adjusts tone, not the rules above)\n\n" + "\n".join(lines)
-
-
-#: Shown in the chat panel before the user's first message.
-EMPTY_STATE_PROMPTS = [
-    "What changed today?",
-    "What's working right now?",
-    "Give me a launch idea.",
-    "Which creators are worth watching?",
-    "What are you unsure about?",
-]

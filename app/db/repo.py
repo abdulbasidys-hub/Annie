@@ -49,7 +49,6 @@ from app.db.models.ops import AuditLog, DataQuality, ProviderHealth, Setting, To
 from app.db.models.research import (
     Conversation,
     Message,
-    PersonalityConfig,
     Report,
     ResearchHypothesis,
     ResearchNote,
@@ -620,21 +619,7 @@ class FirestoreRepo:
         doc_id = doc_id_safe(f"{provider}_{external_id}")
         await self.db.collection("bot_sessions").document(doc_id).delete()
 
-    # -- personality (operator-editable voice knobs, one singleton doc) ------
 
-    async def get_personality_config(self) -> PersonalityConfig | None:
-        snap = await self.db.collection("personality").document("config").get()
-        if not snap.exists:
-            return None
-        return from_doc(PersonalityConfig, snap.id, snap.to_dict() or {})
-
-    async def upsert_personality_config(
-        self, config: PersonalityConfig, *, actor: str = "operator"
-    ) -> PersonalityConfig:
-        config.updated_at = utcnow()
-        config.updated_by = actor
-        await self.db.collection("personality").document("config").set(to_doc(config), merge=True)
-        return config
 
     # -- Discord workspace channels ------------------------------------------
 

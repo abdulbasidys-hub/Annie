@@ -24,7 +24,6 @@ import AnniePage from './pages/Annie.jsx'
 import DataSources from './pages/DataSources.jsx'
 import SystemHealth from './pages/SystemHealth.jsx'
 import Settings from './pages/Settings.jsx'
-import Personality from './pages/Personality.jsx'
 
 /**
  * Navigation.
@@ -81,7 +80,6 @@ const NAV = [
       { to: '/health', label: 'System Health', icon: '⊙' },
       { to: '/sources', label: 'Data Sources', icon: '⊞' },
       { to: '/settings', label: 'Settings', icon: '⚙' },
-      { to: '/personality', label: 'Personality', icon: '⚑' },
     ],
   },
 ]
@@ -103,7 +101,6 @@ const TITLES = {
   '/health': 'System Health',
   '/sources': 'Data Sources',
   '/settings': 'Settings',
-  '/personality': 'Personality',
 }
 
 function useTheme() {
@@ -297,7 +294,6 @@ function App({ onLogout }) {
             <Route path="/sources" element={<DataSources />} />
             <Route path="/health" element={<SystemHealth />} />
             <Route path="/settings" element={<Settings />} />
-            <Route path="/personality" element={<Personality />} />
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

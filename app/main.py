@@ -26,7 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.routes import (
-    annie, auth, catalogue, ideas, intelligence, memory, personality, system, today,
+    annie, auth, catalogue, ideas, intelligence, memory, system, today,
     webhooks,
 )
 from app.auth import require_auth
@@ -327,7 +327,6 @@ app.include_router(annie.router, prefix="/api/annie", tags=["annie"], dependenci
 app.include_router(memory.router, prefix="/api", tags=["memory"], dependencies=_protected)
 app.include_router(ideas.router, prefix="/api", tags=["ideas"], dependencies=_protected)
 app.include_router(today.router, prefix="/api", tags=["today"], dependencies=_protected)
-app.include_router(personality.router, prefix="/api", tags=["personality"], dependencies=_protected)
 
 
 @app.get("/health", include_in_schema=False)

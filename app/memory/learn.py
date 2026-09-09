@@ -202,7 +202,7 @@ async def learn_from_window(
         response = await client.chat.completions.create(
             model=settings.openai_reasoning_model,
             messages=[
-                {"role": "system", "content": await voice.prefix(SYSTEM_PROMPT)},
+                {"role": "system", "content": voice.prefix(SYSTEM_PROMPT)},
                 {"role": "user", "content": digest.render()},
             ],
             response_format={

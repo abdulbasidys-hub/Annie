@@ -638,17 +638,6 @@ class ConsolidationRunOut(ApiModel):
     created_at: datetime
 
 
-class PersonalityConfigOut(ApiModel):
-    name: str
-    description: str
-    tone: str
-    communication_style: str
-    skepticism_level: str
-    pushback_degree: str
-    explanation_style: str
-    source_text: str = ""
-    updated_at: datetime | None = None
-    updated_by: str | None = None
 
 
 class ErrorOut(ApiModel):

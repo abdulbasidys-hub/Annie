@@ -170,34 +170,6 @@ class Memory:
     last_used_at: datetime | None = None
 
 
-@dataclass(slots=True)
-class PersonalityConfig:
-    """Operator-editable personality knobs — ``personality/config``, one
-    singleton document. Deliberately narrow: this influences *voice*
-    (tone, how skeptical she sounds, how much she pushes back, how she
-    explains things), never the hard epistemic rules in
-    ``app/annie/persona.py`` (source-of-truth, claim discipline, evidence
-    standard, money) — those stay hard-coded and unconditional regardless
-    of what's configured here. See ``persona.system_prompt``'s
-    ``personality_overrides`` parameter for exactly where this plugs in.
-    """
-
-    name: str = "Annie"
-    description: str = ""
-    tone: str = ""
-    communication_style: str = ""
-    skepticism_level: str = ""
-    pushback_degree: str = ""
-    explanation_style: str = ""
-    #: The free-form paragraph an operator actually wrote — the individual
-    #: fields above are an LLM's extraction *from* this text (§ 2026-08-25:
-    #: "I cannot fill that one by one"), kept so a later edit shows what was
-    #: last submitted rather than making someone reverse-engineer their own
-    #: intent from five short derived phrases.
-    source_text: str = ""
-    updated_at: datetime | None = None
-    updated_by: str | None = None
-
 
 @dataclass(slots=True)
 class ConsolidationRun:
