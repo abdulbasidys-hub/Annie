@@ -798,9 +798,23 @@ Annie's memory is a folder of markdown files. Railway replaces the container
 filesystem on every redeploy, so without a volume that folder is wiped every
 time you ship.
 
-1. Railway dashboard → your service → **Variables → Volumes → Add Volume**
-2. Mount path: `/data`
-3. Set `ANNIE_MEMORY_DIR=/data/memory`
+1. Open the project canvas in Railway and press **Cmd/Ctrl+K** (or right-click
+   the canvas) → **Volume**. It is not under the service's Variables tab.
+2. Pick the API service when it asks what to attach to.
+3. Set the mount path to `/data` in that service's settings.
+4. Add the variable `ANNIE_MEMORY_DIR=/data/memory` — the subdirectory matters,
+   because the mount root can pick up entries Annie did not put there.
+
+Attaching redeploys the service, and a service with a volume has a few seconds
+of downtime on every deploy afterwards even with a healthcheck — the volume can
+only be handed to one container at a time. Two consequences worth knowing:
+
+* **One volume per service, and no replicas.** Railway will not scale a service
+  with a volume past one instance. That is the behaviour you want here anyway:
+  two instances would mean two schedulers, and two of every brief.
+* **The volume is mounted at container start, not at build.** Nothing written
+  during the build survives, which is fine — Annie seeds her notebook on first
+  boot, not at build time.
 
 Memory *is* mirrored to Firestore and restored on boot when the local
 directory is empty, so a wipe is survivable — but that is a backup, not the

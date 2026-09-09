@@ -191,9 +191,10 @@ def _classify(
     their afternoon.
     """
     volume_action = (
-        "Attach a Railway Volume (Variables → Volumes → mount at /data) and set "
-        "ANNIE_MEMORY_DIR=/data/memory. Without one, every redeploy wipes the "
-        "ledger and the notebook."
+        "Attach a Railway Volume: press Cmd/Ctrl+K on the project canvas (or "
+        "right-click it), choose Volume, pick this service, and set the mount "
+        "path to /data. Then set ANNIE_MEMORY_DIR=/data/memory. Without one, "
+        "every redeploy wipes the ledger and the notebook."
     )
     webhook_actions = [
         "Check the Helius webhook still points at this deployment's "
