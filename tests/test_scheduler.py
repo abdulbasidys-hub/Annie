@@ -283,6 +283,129 @@ def _interval_job(run, *, minutes, enabled=True):
     )
 
 
+
+class TestCatchUpIsBounded:
+    """Why briefs arrived one a minute.
+
+    An empty ``last_fired`` means "no slot has run today", and the loop
+    treated every already-passed slot as a miss to heal. Deployed at 14:30,
+    it fired 00:00 on the first tick, 06:00 on the second and 12:00 on the
+    third — three briefs, a minute apart, each reporting on a moment that had
+    already gone.
+
+    Empty run state is not exceptional. It is a first deploy, a volume wipe,
+    or every single redeploy when the memory directory is not actually on a
+    volume. So the healing has to be bounded by how late a slot can be and
+    still be worth running.
+    """
+
+    @staticmethod
+    def _hours_ago(n: int) -> int:
+        return (datetime.now(timezone.utc).hour - n) % 24
+
+    async def test_a_days_worth_of_passed_slots_does_not_stampede(self, repo):
+        calls = []
+
+        async def job(registry, repo, settings, *, slot=None):
+            calls.append(slot)
+
+        now = datetime.now(timezone.utc)
+        if now.hour < 8:
+            pytest.skip("not enough of the day has passed for a stampede to exist")
+
+        hours = [self._hours_ago(n) for n in (8, 6, 4)]
+        scheduled = _fixed_times_job(job, hours=hours)
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[scheduled])
+
+        for _ in range(4):  # four ticks, i.e. four minutes
+            await scheduler._maybe_run(scheduled)
+
+        assert calls == [], f"stale slots fired anyway: {calls}"
+
+    async def test_a_genuinely_missed_slot_still_heals(self, repo):
+        """The behaviour being bounded, not removed. A process down across
+        its trigger and back a few minutes later must still run."""
+        calls = []
+
+        async def job(registry, repo, settings, *, slot=None):
+            calls.append(slot)
+
+        now = datetime.now(timezone.utc)
+        if now.minute < 5:
+            pytest.skip("no earlier minute exists within this hour")
+
+        scheduled = _fixed_times_job(job, hours=[now.hour], minute=now.minute - 5)
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[scheduled])
+
+        await scheduler._maybe_run(scheduled)
+
+        assert calls == [now.hour]
+
+    async def test_a_retired_slot_is_not_reconsidered_every_tick(self, repo):
+        """Without recording the retirement there is nothing to re-read, so
+        every tick re-derives the same stale list — a warning a minute for
+        the rest of the day."""
+        async def job(registry, repo, settings, *, slot=None):
+            pass
+
+        now = datetime.now(timezone.utc)
+        if now.hour < 5:
+            pytest.skip("not enough of the day has passed")
+
+        stale_hour = self._hours_ago(4)
+        scheduled = _fixed_times_job(job, hours=[stale_hour])
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[scheduled])
+
+        await scheduler._maybe_run(scheduled)
+
+        state = job_status("scheduler_test_fixed_job")
+        assert state["last_fired"][str(stale_hour)] == now.date().isoformat()
+        assert "last_run_at" not in state, "a retired slot was recorded as having run"
+
+    async def test_the_next_real_slot_still_fires_after_a_retirement(self, repo):
+        """Retiring the morning must not also retire the evening."""
+        calls = []
+
+        async def job(registry, repo, settings, *, slot=None):
+            calls.append(slot)
+
+        now = datetime.now(timezone.utc)
+        if now.hour < 5:
+            pytest.skip("not enough of the day has passed")
+
+        scheduled = _fixed_times_job(job, hours=[self._hours_ago(4), now.hour])
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[scheduled])
+
+        await scheduler._maybe_run(scheduled)
+
+        assert calls == [now.hour]
+
+    async def test_the_window_is_operator_configurable(self, repo):
+        """Two hours is a default, not a law — a deployment that is down for
+        longer stretches may want the old behaviour back."""
+        calls = []
+
+        async def job(registry, repo, settings, *, slot=None):
+            calls.append(slot)
+
+        now = datetime.now(timezone.utc)
+        if now.hour < 5:
+            pytest.skip("not enough of the day has passed")
+
+        stale_hour = self._hours_ago(4)
+        scheduled = _fixed_times_job(job, hours=[stale_hour])
+        await repo.upsert_setting(
+            "scheduler_test_fixed_job",
+            {"enabled": True, "mode": "fixed_times", "hours": [stale_hour],
+             "minute": 0, "timezone": "UTC", "catch_up_hours": 12},
+        )
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[scheduled])
+
+        await scheduler._maybe_run(scheduled)
+
+        assert calls == [stale_hour]
+
+
 class TestIntervalTiming:
     """The frequent-qualification job's timing rules (§ 2026-08-25 fix) — a
     once-a-day cadence is what let 16,602 of 16,774 discovered tokens go
@@ -564,8 +687,11 @@ class TestSlotIsToldNotGuessed:
         async def job(registry, repo, settings, *, slot=None):
             seen.append(slot)
 
+        # One hour, not two: two is exactly DEFAULT_CATCH_UP_HOURS, so a slot
+        # that far back is stale by any non-zero number of minutes and would
+        # be retired rather than run — testing the wrong thing.
         now = datetime.now(timezone.utc)
-        earlier = (now.hour - 2) % 24
+        earlier = (now.hour - 1) % 24
         if earlier >= now.hour:
             pytest.skip("degenerate near midnight — no earlier slot exists today")
 

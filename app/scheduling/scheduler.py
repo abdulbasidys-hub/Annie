@@ -38,6 +38,12 @@ every tick.
 Checking every 60 seconds rather than sleeping until the exact instant means
 a missed process restart self-heals on the next tick instead of silently
 skipping a run, and a daily job can never fire twice for the same local day.
+
+That self-healing is bounded (:data:`DEFAULT_CATCH_UP_HOURS`). Unbounded, a
+fixed-times job with no run state for today fires every slot the day already
+passed, one per tick — three briefs a minute apart on a deploy at 14:30. The
+grace window is what separates "we were down across the trigger" from "this
+state is simply new".
 """
 
 from __future__ import annotations
@@ -68,6 +74,21 @@ CHECK_INTERVAL_SECONDS = 60
 #: minutes is comfortably fast for a scheduling change and cuts the read
 #: count by 5x.
 CONFIG_CACHE_SECONDS = 300
+
+#: How late a fixed-time slot may be and still fire.
+#:
+#: The self-healing path exists for "the process was down across 00:00 and
+#: came back at 00:20". It is not meant for "it is 14:30, this deployment has
+#: no run state, so let us run midnight, 06:00 and noon back to back" — which
+#: is exactly what an empty ``last_fired`` produced: one brief per tick, a
+#: minute apart, until the day was caught up. Empty run state is normal, not
+#: exceptional. It happens on a first deploy, after a volume wipe, and on
+#: every redeploy if the memory directory is not actually on a volume.
+#:
+#: Two hours is comfortably longer than any deploy or restart and far shorter
+#: than the six between slots, so at most one slot is ever inside the window.
+#: Overridable per job as ``catch_up_hours`` in its config document.
+DEFAULT_CATCH_UP_HOURS = 2
 
 #: A job receives the registry, repo and settings, plus ``slot`` — which of
 #: its configured fixed-times hours this run is *for*. That is not always the
@@ -194,6 +215,7 @@ class Scheduler:
         )
         if job.mode == "fixed_times":
             base["hours"] = list(job.default_hours or [])
+            base["catch_up_hours"] = DEFAULT_CATCH_UP_HOURS
         else:
             base["hour"] = job.default_hour
         if job.mode == "weekly":
@@ -223,7 +245,9 @@ class Scheduler:
         """
         descriptions = {
             "interval": "Edit interval_minutes/enabled as JSON.",
-            "fixed_times": "Edit hours (a list)/minute/timezone/enabled as JSON.",
+            "fixed_times": "Edit hours (a list)/minute/timezone/catch_up_hours/enabled "
+                            "as JSON. catch_up_hours is how late a missed slot may "
+                            "still fire.",
             "daily": "Edit hour/minute/timezone/enabled as JSON.",
             "weekly": "Edit weekday (0=Monday)/hour/minute/timezone/enabled as JSON.",
             "monthly": "Edit day_of_month/hour/minute/timezone/enabled as JSON.",
@@ -318,16 +342,46 @@ class Scheduler:
 
         if job.mode == "fixed_times":
             last_fired: dict[str, Any] = dict(current.get("last_fired") or {})
+            grace = timedelta(
+                hours=float(config.get("catch_up_hours", DEFAULT_CATCH_UP_HOURS))
+            )
+            stale: list[int] = []
             for hour in config.get("hours") or []:
                 if last_fired.get(str(hour)) == today:
                     continue
-                if now_local < _trigger_at(now_local, hour, config.get("minute", 0)):
+                trigger = _trigger_at(now_local, hour, config.get("minute", 0))
+                if now_local < trigger:
                     continue
+
+                # Past its time. Recent enough to be a miss worth healing, or
+                # old enough that running it now would be re-enacting a
+                # moment rather than reporting on one?
+                if now_local - trigger > grace:
+                    stale.append(int(hour))
+                    last_fired[str(hour)] = today
+                    continue
+
                 last_fired[str(hour)] = today
+                if stale:
+                    # Retired alongside a real run, so they ride its write.
+                    log.info("scheduled_slots_skipped_as_stale", job=job.name, slots=stale)
                 await self._run_job(
                     job, state, extra={"last_fired": last_fired}, slot=hour
                 )
                 return  # one slot per tick; the next tick picks up any other due slot
+
+            if stale:
+                # Nothing ran, so the retirement needs its own write —
+                # otherwise every tick re-derives the same stale list and the
+                # log fills up once a minute for the rest of the day.
+                state.save(last_fired=last_fired)
+                log.warning(
+                    "scheduled_slots_skipped_as_stale",
+                    job=job.name,
+                    slots=stale,
+                    reason=f"more than {grace} past their time — no run state for today, "
+                           f"which is normal on a first deploy or after a volume wipe",
+                )
             return
 
         if current.get("last_run_date") == today:
