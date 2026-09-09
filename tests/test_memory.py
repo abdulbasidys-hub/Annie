@@ -286,6 +286,50 @@ class TestForgetting:
 
         assert ledger.get_sighting(mint) is not None
 
+    def test_a_qualifier_older_than_every_window_is_eventually_dropped(self, isolated_memory):
+        """"Kept forever" was written when a qualifier was rare.
+
+        At real volume roughly one token a minute clears the $100k floor —
+        about half a million rows a year that no window reads, since signals
+        compare a 7-day slice against a 90-day baseline.
+        """
+        from app.memory import db
+
+        ancient = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
+        recent = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+        for i, when in ((1, ancient), (2, recent)):
+            mint = f"Mint{i:040d}"
+            ledger.record_launch(mint=mint, creator="W")
+            ledger.record_price(mint=mint, market_cap=300_000, liquidity=50_000, tier=250_000)
+            db.execute("UPDATE sightings SET qualified_at = ? WHERE mint = ?", (when, mint))
+
+        result = ledger.prune(ttl_hours=48, keep_qualified_days=150)
+
+        assert result["expired_qualifiers"] == 1
+        assert ledger.get_sighting(f"Mint{1:040d}") is None
+        assert ledger.get_sighting(f"Mint{2:040d}") is not None, "a live qualifier was dropped"
+
+    def test_a_qualifier_annie_wrote_about_is_kept_however_old(self, isolated_memory):
+        """A memory file carries a contract address and is looked up by it.
+        Expiring the row underneath would leave a page pointing at nothing."""
+        from app.memory import db
+
+        mint = f"Mint{7:040d}"
+        ledger.record_launch(mint=mint, creator="W")
+        ledger.record_price(mint=mint, market_cap=900_000, liquidity=90_000, tier=250_000)
+        db.execute(
+            "UPDATE sightings SET qualified_at = ? WHERE mint = ?",
+            ((datetime.now(timezone.utc) - timedelta(days=400)).isoformat(), mint),
+        )
+        db.execute(
+            "INSERT INTO doc_keys(key, path) VALUES(?, ?)", (mint, f"tokens/{mint}.md")
+        )
+
+        result = ledger.prune(ttl_hours=48, keep_qualified_days=150)
+
+        assert result["expired_qualifiers"] == 0
+        assert ledger.get_sighting(mint) is not None
+
 
 class TestWindowBoundaries:
     """The clock-resolution bug, pinned.

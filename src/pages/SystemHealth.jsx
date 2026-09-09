@@ -156,6 +156,12 @@ function Pipeline({ onRan }) {
           formatResult={(r) =>
             `${r.checked ?? 0} checked, ${r.priced ?? 0} priced, ${r.unpriced ?? 0} with no pair yet, ` +
             `${r.qualified_count ?? 0} newly cleared a tier.` +
+            // The filtering is the point, so it is shown rather than implied:
+            // clearing $100k makes a token evidence, not something worth
+            // writing a page about.
+            (r.qualified_count
+              ? ` ${r.remembered ?? 0} earned a memory file, ${r.not_remembered ?? 0} stayed in the ledger only.`
+              : '') +
             (r.errors?.length ? ` ${r.errors.length} error(s) — see server logs.` : '')
           }
         />

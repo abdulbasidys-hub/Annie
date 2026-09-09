@@ -263,6 +263,29 @@ class Settings(BaseSettings):
     #: connections per token and will deliver the same event to both).
     annie_api_only: bool = False
 
+    #: The market-cap bar a token must clear to earn its own memory file.
+    #:
+    #: Deliberately higher than the $100k qualification floor. Qualification
+    #: decides cohort membership for the statistics, where a low bar is
+    #: correct — it is the denominator. A *memory* is different: it is prose
+    #: Annie writes and reads back, and at real Solana volume roughly one
+    #: token a minute clears $100k. Writing a file for each would be ~42,000
+    #: files a month, which is not a notebook, and ~1,400 Firestore snapshot
+    #: writes a day against a 4,000 budget.
+    #:
+    #: Below this, a qualifying token is still recorded in the ledger, still
+    #: counted in every signal, and still listed with its CA and creator in
+    #: the deterministic daily log. It just does not get its own page.
+    memory_tier_usd: float = 250_000.0
+
+    #: Hard ceiling on token memory files written in one UTC day.
+    #:
+    #: The floor above adapts badly to a genuinely exceptional day — if a
+    #: thousand tokens clear $250k, the bar did not stop anything. This does.
+    #: Once hit, further qualifiers are logged and skipped; nothing is lost
+    #: from the record, because the daily log lists them all regardless.
+    max_token_memories_per_day: int = 30
+
     #: A launch is only kept in the ledger's active watchlist for this long
     #: before being pruned unless it did something. A memecoin that has not
     #: moved in 48h is not going to; a human watching the market drops it

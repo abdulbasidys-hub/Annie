@@ -59,6 +59,12 @@ def _usd(value: float | None) -> str:
 # -----------------------------------------------------------------------------
 
 
+#: How many of the day's qualifiers get named in the daily log. Every one of
+#: them is in the ledger regardless; this is a bound on how long the file a
+#: person actually reads is allowed to get.
+DAILY_LOG_TOKENS = 50
+
+
 async def write_daily_log(*, now: datetime | None = None) -> dict[str, Any]:
     """The day's factual record. No model, no judgement, no hedging needed.
 
@@ -86,8 +92,17 @@ async def write_daily_log(*, now: datetime | None = None) -> dict[str, Any]:
     ]
 
     if qualified:
-        lines += ["", "## Qualified today"]
-        for token in qualified[:20]:
+        # Ordered by peak, so a cut here keeps the biggest. At real Solana
+        # volume this list can be four figures long; naming that in the file
+        # matters, because a reader who sees fifty entries under a heading
+        # that says 1,400 should know the rest is in the ledger and reachable
+        # by asking, not that the day was mis-recorded.
+        shown = qualified[:DAILY_LOG_TOKENS]
+        heading = "## Qualified today"
+        if len(qualified) > len(shown):
+            heading += f" — top {len(shown)} of {len(qualified)}"
+        lines += ["", heading]
+        for token in shown:
             lines.append(
                 f"- **{token.symbol or token.name or token.mint[:8]}** — "
                 f"crossed {_usd(token.tier)}, peaked {_usd(token.peak_market_cap)} "
@@ -127,9 +142,7 @@ async def write_daily_log(*, now: datetime | None = None) -> dict[str, Any]:
     if observations:
         body += "\n\n## Observations recorded during the day\n\n" + observations
 
-    keys = [t.mint for t in qualified[:20]] + [
-        t.creator for t in qualified[:20] if t.creator
-    ]
+    keys = [t.mint for t in shown] + [t.creator for t in shown if t.creator] if qualified else []
     await service.write(
         path,
         body=body,

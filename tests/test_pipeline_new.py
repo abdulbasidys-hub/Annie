@@ -201,6 +201,119 @@ class TestWatchLoop:
         assert index.by_key("Wa11etAAA")
 
 
+class TestTheMemoryBar:
+    """Qualifying and being worth writing about are different questions.
+
+    The $100k qualification floor is correct for statistics — it decides who
+    is in the cohort. It is wrong for the notebook. At real Solana volume
+    roughly one token a minute clears it, which would be ~42,000 markdown
+    files a month, ~1,400 Firestore snapshot writes a day against a 4,000
+    budget, and a notebook no person could read. So promotion to a file has
+    its own, higher bar.
+
+    Nothing is lost by failing it. The token stays in the ledger, counts in
+    every signal, and appears with its contract address and creator in the
+    deterministic daily log.
+    """
+
+    @staticmethod
+    def _market(prices: dict[str, int]):
+        from app.providers.types import MarketQuote, Provenance as P
+
+        class FakeMarket:
+            async def get_quotes(self, mints):
+                return {
+                    m: MarketQuote(
+                        mint=m,
+                        provenance=P(provider="dexscreener", operation="pair",
+                                     observed_at=datetime.now(timezone.utc)),
+                        market_cap=Decimal(prices[m]),
+                        liquidity_usd=Decimal("80000"),
+                    )
+                    for m in mints if m in prices
+                }
+
+        class FakeRegistry:
+            market_primary = FakeMarket()
+
+        return FakeRegistry()
+
+    async def test_a_qualifier_below_the_bar_is_counted_but_not_written(self, isolated_memory):
+        from app.config import get_settings
+        from app.memory import service
+        from app.pipeline import watch
+
+        stream.ingest_many([_launch(1)])
+        mint = f"Mint{1:040d}"
+        settings = get_settings()
+
+        # Comfortably qualified at $120k, comfortably under the $250k
+        # memory bar — the shape of the overwhelming majority.
+        run = await watch.run_watch(self._market({mint: 120_000}), settings, batch_size=5)
+
+        assert run.newly_qualified == [mint], "it should still be evidence"
+        assert run.remembered == []
+        assert run.not_remembered == 1
+        assert service.read(service.token_path(mint)) is None
+
+    async def test_the_evidence_survives_even_though_the_prose_does_not(self, isolated_memory):
+        """The distinction the whole design rests on: not writing about
+        something is not the same as not knowing it."""
+        from app.config import get_settings
+        from app.pipeline import watch
+
+        stream.ingest_many([_launch(1)])
+        mint = f"Mint{1:040d}"
+        await watch.run_watch(self._market({mint: 120_000}), get_settings(), batch_size=5)
+
+        sighting = ledger.get_sighting(mint)
+        assert sighting.qualified_at is not None
+        assert sighting.peak_market_cap == 120_000
+        assert ledger.qualified_in_window(
+            datetime.now(timezone.utc) - timedelta(hours=1), datetime.now(timezone.utc)
+        ), "it vanished from the window signals are computed over"
+
+    async def test_a_day_of_exceptional_volume_stops_at_the_cap(self, isolated_memory, monkeypatch):
+        """A floor cannot help on a day when a thousand tokens clear it.
+
+        This is the gate that holds when the market does something unusual,
+        which is exactly when an ungated system would write the most files.
+        """
+        from app.config import get_settings
+        from app.pipeline import watch
+
+        settings = get_settings()
+        monkeypatch.setattr(settings, "max_token_memories_per_day", 4)
+
+        count = 10
+        stream.ingest_many([_launch(i) for i in range(count)])
+        prices = {f"Mint{i:040d}": 900_000 for i in range(count)}
+
+        run = await watch.run_watch(self._market(prices), settings, batch_size=count)
+
+        assert len(run.newly_qualified) == count
+        assert len(run.remembered) == 4
+        assert run.not_remembered == count - 4
+
+    async def test_the_cap_is_per_day_not_per_process(self, isolated_memory, monkeypatch):
+        """Held in the counters table, which is keyed by UTC day, so a
+        restart does not hand the market a fresh budget."""
+        from app.config import get_settings
+        from app.memory import db
+        from app.pipeline import watch
+
+        settings = get_settings()
+        monkeypatch.setattr(settings, "max_token_memories_per_day", 2)
+        db.counter_add(watch._MEMORY_COUNTER, 2)
+
+        stream.ingest_many([_launch(1)])
+        mint = f"Mint{1:040d}"
+        run = await watch.run_watch(self._market({mint: 900_000}), settings, batch_size=5)
+
+        assert run.remembered == []
+        assert run.not_remembered == 1
+
+
 class TestSignals:
     def test_characteristics_are_derived_not_stored(self, isolated_memory):
         """Themes come from three short strings via pure functions. The old

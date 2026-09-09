@@ -34,11 +34,12 @@ ANNIE_MEMORY_DIR/                 (a Railway Volume in production)
 │   ├── market-model.md
 │   ├── whats-working.md
 │   ├── open-questions.md
-│   └── watchlist.md
+│   ├── watchlist.md
+│   └── instructions.md           standing orders you give her from chat
 ├── playbook/                     what has actually worked, with evidence
 ├── narratives/                   one file per live theme
 ├── creators/<wallet>.md          dossiers for tracked wallets
-├── tokens/<mint>.md              only tokens that moved; carries CA + creator
+├── tokens/<mint>.md              only tokens that moved *a lot*; carries CA + creator
 ├── daily/2026-09-08.md
 ├── weekly/2026-W36.md
 ├── monthly/2026-09.md
@@ -50,8 +51,49 @@ Three storage tiers, and which one a thing lands in is the whole design:
 | Tier | Holds | Cost | Lifetime |
 |---|---|---|---|
 | **Markdown files** | Annie's judgement | free | permanent, revised deliberately |
-| **SQLite** (`annie.db`) | every sighting, every creator movement, price checks, signals, the search index | free | sightings pruned at 48h; creator movements kept a year; index rebuildable |
+| **SQLite** (`annie.db`) | every sighting, every creator movement, price checks, signals, the search index | free | dead sightings pruned at 48h, qualifiers at 150 days; creator movements kept a year; index rebuildable |
 | **Firestore** | settings, bot sessions, conversations, research tasks/notes, reports, launchpads, narratives, and a mirror of the markdown | metered | permanent |
+
+### What earns a memory file
+
+Qualifying and being worth writing about are different questions, and
+conflating them is what makes a notebook unreadable.
+
+The **$100k qualification floor** decides cohort membership — who the
+statistics are computed over. It is right for that and wrong for the
+notebook, because at real Solana volume roughly one token a minute clears
+it. Promoting every qualifier would mean:
+
+```
+~1,400 memory files a day       ~42,000 a month
+~1,400 Firestore snapshot writes a day, against a 4,000/day budget
+a tokens/ directory no person could ever read
+```
+
+So promotion has its own bar, in [`_earns_a_memory`](app/pipeline/watch.py):
+
+| Gate | Setting | Asks |
+|---|---|---|
+| tier floor | `MEMORY_TIER_USD` (250,000) | is this notable at all |
+| daily cap | `MAX_TOKEN_MEMORIES_PER_DAY` (30) | has today already been exceptional |
+
+The cap exists because a floor cannot help on a day when a thousand tokens
+clear it — which is precisely the day an ungated system writes the most.
+It lives in the counters table, keyed by UTC day, so a restart does not hand
+the market a fresh budget.
+
+**Failing the bar is not data loss.** The token stays in the ledger, counts
+in every signal, is reachable by contract address from chat and the API, and
+is named in the daily log if it was among the day's biggest. It just does
+not get prose written about it — which is the same thing a person watching
+this market does, and the reason this is a memory and not a database.
+
+The mirror image is the prune: a qualifier stops being kept once it is older
+than every window that reads it (signals compare 7 days against a 90-day
+baseline, so 150 days is the retention with margin). The exception is any
+token Annie actually wrote a file about — those are kept regardless of age,
+because a memory whose contract address no longer resolves to a row is a
+broken memory.
 
 ---
 

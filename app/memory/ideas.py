@@ -370,23 +370,30 @@ async def record(
 
 
 def latest(origin: str | None = None) -> dict[str, Any] | None:
-    """The most recent idea set, optionally restricted to one origin."""
+    """The most recent idea set, optionally restricted to one origin.
+
+    The ``id DESC`` tiebreak is load-bearing, not decoration. The clock has
+    finite resolution — coarse on Windows — so two sets recorded inside the
+    same cycle (the daily three, then an operator asking for something else a
+    moment later) can carry an identical ``generated_at``, and SQLite is then
+    free to return either. The autoincrement id is the true insertion order.
+    """
     from app.memory import db
 
     if origin:
         row = db.query_one(
-            "SELECT * FROM ideas WHERE origin = ? ORDER BY generated_at DESC LIMIT 1",
+            "SELECT * FROM ideas WHERE origin = ? ORDER BY generated_at DESC, id DESC LIMIT 1",
             (origin,),
         )
     else:
-        row = db.query_one("SELECT * FROM ideas ORDER BY generated_at DESC LIMIT 1")
+        row = db.query_one("SELECT * FROM ideas ORDER BY generated_at DESC, id DESC LIMIT 1")
     return _row(row)
 
 
 def history(*, limit: int = 20) -> list[dict[str, Any]]:
     from app.memory import db
 
-    rows = db.query("SELECT * FROM ideas ORDER BY generated_at DESC LIMIT ?", (limit,))
+    rows = db.query("SELECT * FROM ideas ORDER BY generated_at DESC, id DESC LIMIT ?", (limit,))
     return [r for r in (_row(row) for row in rows) if r]
 
 

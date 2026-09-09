@@ -52,6 +52,10 @@ class WatchRun:
     unpriced: int = 0
     newly_qualified: list[str] = field(default_factory=list)
     new_peaks: int = 0
+    #: Qualifiers that earned a memory file, and how many did not. The second
+    #: number is the interesting one at real volume — it is the filtering.
+    remembered: list[str] = field(default_factory=list)
+    not_remembered: int = 0
     promoted_creators: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -62,6 +66,8 @@ class WatchRun:
             "unpriced": self.unpriced,
             "newly_qualified": self.newly_qualified[:25],
             "qualified_count": len(self.newly_qualified),
+            "remembered": len(self.remembered),
+            "not_remembered": self.not_remembered,
             "new_peaks": self.new_peaks,
             "promoted_creators": self.promoted_creators[:10],
             "errors": self.errors[:5],
@@ -142,31 +148,83 @@ async def run_watch(
         run.unpriced = len(unpriced)
 
     for mint in run.newly_qualified:
-        await _escalate(mint, run)
+        await _escalate(mint, run, settings)
 
     run.finished_at = datetime.now(timezone.utc)
     log.info("watch_run_complete", **run.to_dict())
     return run
 
 
-async def _escalate(mint: str, run: WatchRun) -> None:
-    """A token cleared a tier — turn it into memory, and reconsider its creator.
+#: Counter name for the daily token-memory budget, in the local counters table.
+_MEMORY_COUNTER = "token_memories_written"
 
-    This is the promotion boundary. Below it, a token is a disposable row in
-    a table that gets pruned. Above it, it is a markdown file carrying its
-    contract address and creator wallet, indexed so either can be looked up
-    directly from chat.
+
+def _earns_a_memory(sighting, settings) -> tuple[bool, str]:
+    """Should this token get its own page in the notebook?
+
+    Two gates, and they answer different questions.
+
+    The **tier floor** asks "is this notable at all". At real Solana volume
+    roughly one token a minute clears $100k, so the qualification floor —
+    correct for deciding cohort membership in the statistics — would make a
+    memory file for every one of them: ~42,000 files a month, and a notebook
+    nobody could read.
+
+    The **daily cap** asks "has today already been exceptional". A floor
+    cannot help on a day when a thousand tokens clear it. This can.
+
+    Failing either is not data loss. The token stays in the ledger, counts in
+    every signal, is reachable by contract address from chat and the API, and
+    is named in the daily log if it was among the day's biggest. It just does
+    not get prose written about it.
     """
+    from app.memory import db
+
+    peak = sighting.peak_market_cap or 0
+    floor = float(settings.memory_tier_usd)
+    if peak < floor:
+        return False, f"peak ${peak:,.0f} is below the ${floor:,.0f} memory bar"
+
+    written = db.counter_get(_MEMORY_COUNTER)
+    cap = int(settings.max_token_memories_per_day)
+    if written >= cap:
+        return False, f"already wrote {written} token memories today (cap {cap})"
+
+    return True, ""
+
+
+async def _escalate(mint: str, run: WatchRun, settings) -> None:
+    """A token cleared a tier — decide whether it becomes a memory.
+
+    This is the promotion boundary. Below it, a token is a row that gets
+    pruned. Above it, a markdown file carrying its contract address and
+    creator wallet, indexed so either can be looked up directly from chat.
+
+    The creator's dossier is refreshed whenever a *tracked* wallet produces a
+    qualifier, regardless of the token's own bar — a wallet's record is the
+    subject there, and one more winner changes it whether or not that
+    particular token was remarkable.
+    """
+    from app.memory import db
     from app.memory.rollup import update_creator_dossier, write_token_memory
 
-    try:
-        await write_token_memory(mint)
-    except Exception:
-        log.warning("token_memory_write_failed", mint=mint, exc_info=True)
+    sighting = ledger.get_sighting(mint)
+    if sighting is None:
         return
 
-    sighting = ledger.get_sighting(mint)
-    if sighting is None or not sighting.creator:
+    earns, why_not = _earns_a_memory(sighting, settings)
+    if earns:
+        try:
+            await write_token_memory(mint)
+            db.counter_add(_MEMORY_COUNTER)
+            run.remembered.append(mint)
+        except Exception:
+            log.warning("token_memory_write_failed", mint=mint, exc_info=True)
+    else:
+        run.not_remembered += 1
+        log.debug("token_not_remembered", mint=mint, reason=why_not)
+
+    if not sighting.creator:
         return
 
     creator = ledger.get_creator(sighting.creator)

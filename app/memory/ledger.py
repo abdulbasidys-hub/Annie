@@ -506,12 +506,24 @@ def stats() -> dict[str, Any]:
 # -----------------------------------------------------------------------------
 
 
-def prune(*, ttl_hours: int = 48, keep_moves_days: int = 400) -> dict[str, int]:
+def prune(
+    *, ttl_hours: int = 48, keep_moves_days: int = 400, keep_qualified_days: int = 150
+) -> dict[str, int]:
     """Drop what stopped mattering. The deliberate act of forgetting.
 
     What is kept, and why:
 
-    * Anything that ever qualified — kept forever. It is evidence.
+    * Anything that ever qualified — kept for ``keep_qualified_days``. It is
+      evidence, but evidence with an expiry: the signals engine compares a
+      7-day window against a 90-day baseline, so a qualifier from five months
+      ago is in no window and changes no number. "Kept forever" was the
+      original rule and it was written when a qualifier was rare; at real
+      Solana volume roughly one token a minute clears the $100k floor, which
+      is about half a million rows a year that nothing reads.
+    * Any qualifier Annie actually wrote a memory about — kept regardless of
+      age, found by asking the search index whether its mint is a key. Those
+      are the ones a file points at, and a page whose contract address no
+      longer resolves to a row is a broken memory.
     * Anything that ever traded above :data:`WATCH_FLOOR_USD` — kept, because
       it did something, even if it did not do enough.
     * Every ``creators`` row, and every ``moves`` row for over a year — kept,
@@ -541,6 +553,21 @@ def prune(*, ttl_hours: int = 48, keep_moves_days: int = 400) -> dict[str, int]:
         (cutoff, WATCH_FLOOR_USD),
     ).rowcount or 0
 
+    # Ordered after the cheap delete so the expensive one sees fewer rows.
+    # The NOT IN is over doc_keys, which is small (one row per indexed key)
+    # and primary-keyed on the key column — this is an index probe per row,
+    # not a scan, and it runs once a cycle.
+    stale_cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_qualified_days)).isoformat()
+    expired = db.execute(
+        """
+        DELETE FROM sightings
+         WHERE qualified_at IS NOT NULL
+           AND qualified_at < ?
+           AND mint NOT IN (SELECT key FROM doc_keys)
+        """,
+        (stale_cutoff,),
+    ).rowcount or 0
+
     move_cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_moves_days)).isoformat()
     old_moves = db.execute("DELETE FROM moves WHERE at < ?", (move_cutoff,)).rowcount or 0
 
@@ -558,8 +585,21 @@ def prune(*, ttl_hours: int = 48, keep_moves_days: int = 400) -> dict[str, int]:
     db.prune_counters()
     db.execute("PRAGMA optimize")
 
-    log.info("ledger_pruned", sightings=dropped, faded=faded, moves=old_moves, points=points)
-    return {"sightings_dropped": dropped, "faded": faded, "moves_dropped": old_moves, "points_dropped": points}
+    log.info(
+        "ledger_pruned",
+        sightings=dropped,
+        expired_qualifiers=expired,
+        faded=faded,
+        moves=old_moves,
+        points=points,
+    )
+    return {
+        "sightings_dropped": dropped,
+        "expired_qualifiers": expired,
+        "faded": faded,
+        "moves_dropped": old_moves,
+        "points_dropped": points,
+    }
 
 
 def vacuum() -> None:
