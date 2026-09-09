@@ -261,29 +261,42 @@ async def _deliver_brief(
     # stamps the time, so restating it only ever added a second clock to
     # disagree with the first.
     lines = [f"**{label}**", ""]
-    headline = learning.get("headline")
-    if headline:
-        lines.append(headline)
+
+    # Her prose, not a status field. `brief` is written for this; `headline`
+    # is the one-liner for logs and the health page, and only stands in when
+    # an older cycle result predates the richer field.
+    prose = (learning.get("brief") or learning.get("headline") or "").strip()
+    if prose:
+        lines += [prose, ""]
+
+    window_hours = 24 if full_day else 6
+    qualified = ledger.qualified_in_window(now - timedelta(hours=window_hours), now)
+    if qualified:
+        lines.append("**Crossed a tier**")
+        for token in qualified[:5]:
+            name = token.symbol or token.name or token.mint[:8]
+            lines.append(f"- {name} — peaked {_usd(token.peak_market_cap)}")
+            lines.append(f"  `{token.mint}`")
+        if len(qualified) > 5:
+            lines.append(f"- …and {len(qualified) - 5} more")
+        lines.append("")
+
+    # The counts go last, as a footer. They are context for the prose above,
+    # not the report itself — leading with them was what made this read like
+    # a form rather than something she wrote.
     lines.append(
-        f"\nSeen in 24h: {stats['sightings_24h']} launches · "
-        f"{stats['qualified_24h']} reached a tier · "
-        f"watching {stats['watching']} · tracking {stats['creators_tracked']} creators"
+        f"_{stats['sightings_24h']:,} launches seen in 24h · "
+        f"{stats['qualified_24h']:,} reached a tier · "
+        f"{stats['watching']:,} on the watchlist · "
+        f"{stats['creators_tracked']:,} creators tracked_"
     )
 
-    qualified = ledger.qualified_in_window(now - timedelta(hours=24 if full_day else 6), now)
-    if qualified:
-        lines.append("\n**Crossed a tier:**")
-        for token in qualified[:5]:
-            lines.append(
-                f"- {token.symbol or token.mint[:8]} — peak "
-                f"${(token.peak_market_cap or 0) / 1000:.0f}k · `{token.mint}`"
-            )
-
-    applied = learning.get("applied") or []
-    if applied:
-        lines.append("\n**Memory updated:**")
-        for edit in applied[:5]:
-            lines.append(f"- `{edit['path']}` ({edit['op']})")
+    # Only when something went wrong. A successful notebook write is the
+    # normal case and does not need reporting — the operator asked not to be
+    # told about work that simply worked.
+    trouble = _memory_trouble(learning)
+    if trouble:
+        lines += ["", trouble]
 
     delivered = await send_channel_message(
         settings.discord_bot_token, channel.channel_id, "\n".join(lines)
@@ -292,6 +305,46 @@ async def _deliver_brief(
     if full_day:
         outcome.update(await _deliver_ideas(repo, settings, cycle, fallback=channel))
     return outcome
+
+
+def _usd(value: float | None) -> str:
+    """Market caps the way she writes them everywhere else.
+
+    The brief was formatting with a bare `/ 1000` and a "k" suffix, which
+    rendered a $261M peak as "$261452k" — technically the number, unreadable
+    as a quantity, and contradicting the house style stated in her own
+    persona ("$250k, $1.2M — not 250000").
+    """
+    if not value:
+        return "an unknown amount"
+    if value >= 1_000_000:
+        return f"${value / 1_000_000:.1f}M"
+    if value >= 1_000:
+        return f"${value / 1_000:.0f}k"
+    return f"${value:,.0f}"
+
+
+def _memory_trouble(learning: dict[str, Any]) -> str:
+    """A line about the notebook, but only when there is bad news.
+
+    Every brief used to end with a "Memory updated" list of file paths and
+    operations. That is a log of work succeeding, and it was in the one
+    message meant to be read by a person — noise on every single delivery,
+    reporting a thing whose normal state is "fine".
+
+    Silence now means it worked.
+    """
+    if learning.get("error"):
+        return f"⚠ Memory was not updated — {learning['error']}"
+
+    rejected = learning.get("rejected") or []
+    applied = learning.get("applied") or []
+    if rejected and not applied:
+        return (
+            f"⚠ Nothing was written to memory: {len(rejected)} edit(s) were "
+            f"rejected as invalid."
+        )
+    return ""
 
 
 async def _deliver_ideas(

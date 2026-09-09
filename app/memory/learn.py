@@ -102,14 +102,31 @@ worked), notes (loose thinking)."""
 EDIT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["headline", "edits", "watch"],
+    "required": ["headline", "brief", "edits", "watch"],
     "properties": {
         "headline": {
             "type": "string",
-            "description": "One sentence on what this window actually showed, "
-            "in your own voice — this is the line that opens the brief the "
-            "operator reads, so it should sound like you and not like a "
-            "status field. Say 'nothing notable' when that is the truth.",
+            "description": "One sentence on what this window showed. Kept "
+            "short: this is the line that appears in logs and on the health "
+            "page, not the thing the operator reads.",
+        },
+        "brief": {
+            "type": "string",
+            "description": (
+                "What you would actually say to the operator about this "
+                "window. Two to four sentences, in your own voice, as "
+                "continuous prose — not a list, not a restatement of the "
+                "counts, which are printed underneath you anyway.\n\n"
+                "Tell them what happened and what you make of it. Name the "
+                "tokens or creators that mattered and say why they mattered. "
+                "If something looks like a pattern, say how confident you "
+                "are and what would confirm it. If a window was genuinely "
+                "unremarkable, say so plainly and briefly — a quiet market "
+                "described in one honest sentence is far better than three "
+                "sentences manufacturing significance for it.\n\n"
+                "Do not open with a greeting or the words 'this window'. "
+                "Lead with the most interesting true thing you have."
+            ),
         },
         "edits": {
             "type": "array",
@@ -156,6 +173,8 @@ EDIT_SCHEMA: dict[str, Any] = {
 @dataclass(slots=True)
 class LearnResult:
     headline: str = ""
+    #: The prose the operator actually reads. `headline` is for logs.
+    brief: str = ""
     applied: list[dict[str, Any]] = field(default_factory=list)
     rejected: list[dict[str, Any]] = field(default_factory=list)
     watch_creators: list[str] = field(default_factory=list)
@@ -167,6 +186,7 @@ class LearnResult:
     def to_dict(self) -> dict[str, Any]:
         return {
             "headline": self.headline,
+            "brief": self.brief,
             "applied": self.applied,
             "rejected": self.rejected,
             "watch_creators": self.watch_creators,
@@ -195,7 +215,11 @@ async def learn_from_window(
         # Nothing moved. Costing a model call to be told so is exactly the
         # kind of spend this rewrite exists to remove.
         log.info("learn_skipped_quiet_window", window_hours=window_hours)
-        return LearnResult(headline="Quiet window — nothing moved.", skipped="quiet window")
+        return LearnResult(
+            headline="Quiet window — nothing moved.",
+            brief="Nothing moved in this window worth reporting.",
+            skipped="quiet window",
+        )
 
     client = await registry.reasoning.raw_client()
     try:
@@ -226,6 +250,7 @@ async def learn_from_window(
 
     result = LearnResult(
         headline=str(payload.get("headline") or "").strip(),
+        brief=str(payload.get("brief") or "").strip(),
         input_tokens=getattr(usage, "prompt_tokens", 0) or 0,
         output_tokens=getattr(usage, "completion_tokens", 0) or 0,
     )

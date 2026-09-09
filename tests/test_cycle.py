@@ -319,6 +319,131 @@ class TestFullCycle:
 
 
 
+
+class TestWhatTheBriefReadsLike:
+    """It is the one message a person reads without asking for it.
+
+    The first real one arrived as a status field over a data dump: a
+    one-sentence headline, then counts, then market caps rendered as
+    "$261452k", then a list of file paths under the heading "Memory
+    updated" — a log of work succeeding, in the message meant for a human.
+    """
+
+    async def test_the_brief_carries_her_prose_not_the_log_headline(
+        self, seeded, monkeypatch
+    ):
+        from app.config import get_settings
+        from app.scheduling.jobs import _cycle
+
+        payload = {
+            **EDITS,
+            "headline": "short thing for the logs",
+            "brief": "pump.fun ran the window and several names round-tripped hard.",
+        }
+        sent = _capture(monkeypatch)
+        await _cycle(FakeRegistry(payload), FakeRepo({"morning_brief": "111"}),
+                     get_settings(), slot=12)
+
+        text = next(t for c, t in sent if c == "111")
+        assert "round-tripped hard" in text
+        assert "short thing for the logs" not in text
+
+    async def test_the_headline_still_stands_in_if_prose_is_missing(
+        self, seeded, monkeypatch
+    ):
+        """An older cycle result predates `brief`; the brief must not arrive
+        with an empty space where the writing goes."""
+        from app.config import get_settings
+        from app.scheduling.jobs import _cycle
+
+        sent = _capture(monkeypatch)
+        await _cycle(FakeRegistry(EDITS), FakeRepo({"morning_brief": "111"}),
+                     get_settings(), slot=12)
+
+        text = next(t for c, t in sent if c == "111")
+        assert EDITS["headline"][:30] in text
+
+    async def test_nothing_is_said_about_memory_when_it_worked(
+        self, seeded, monkeypatch
+    ):
+        """Silence means it worked. A successful notebook write is the normal
+        case and does not belong in a message for a person."""
+        from app.config import get_settings
+        from app.scheduling.jobs import _cycle
+
+        sent = _capture(monkeypatch)
+        result = await _cycle(FakeRegistry(EDITS), FakeRepo({"morning_brief": "111"}),
+                              get_settings(), slot=12)
+
+        assert result["learning"]["applied"], "nothing was written, so this proves nothing"
+        text = next(t for c, t in sent if c == "111")
+        assert "Memory updated" not in text
+        assert "notes/" not in text
+
+    async def test_a_memory_failure_is_reported(self, seeded, monkeypatch):
+        """The inverse. Bad news is exactly what the operator does want."""
+        from app.scheduling.jobs import _memory_trouble
+
+        assert "not updated" in _memory_trouble({"error": "model call timed out"})
+        assert "rejected" in _memory_trouble({"rejected": [1, 2], "applied": []})
+        assert _memory_trouble({"applied": [{"path": "x", "op": "append"}]}) == ""
+
+
+class TestMoneyIsReadable:
+    """`$261452k` was technically the number and unreadable as a quantity —
+    and it contradicted the house style stated in her own persona."""
+
+    def test_millions_read_as_millions(self):
+        from app.scheduling.jobs import _usd
+
+        assert _usd(261_452_000) == "$261.5M"
+
+    def test_thousands_read_as_thousands(self):
+        from app.scheduling.jobs import _usd
+
+        assert _usd(261_452) == "$261k"
+
+    def test_nothing_is_not_zero(self):
+        from app.scheduling.jobs import _usd
+
+        assert _usd(None) == "an unknown amount"
+
+    async def test_the_brief_uses_it(self, seeded, monkeypatch):
+        from app.config import get_settings
+        from app.memory import db, ledger
+        from app.scheduling.jobs import _cycle
+
+        mint = "Mint" + "7" * 40
+        ledger.record_launch(mint=mint, creator="W", symbol="BIG")
+        ledger.record_price(mint=mint, market_cap=261_452_000,
+                            liquidity=900_000, tier=1_000_000)
+        db.execute("UPDATE sightings SET peak_market_cap = ? WHERE mint = ?",
+                   (261_452_000, mint))
+
+        sent = _capture(monkeypatch)
+        await _cycle(FakeRegistry(EDITS), FakeRepo({"morning_brief": "111"}),
+                     get_settings(), slot=12)
+
+        text = next(t for c, t in sent if c == "111")
+        assert "$261.5M" in text
+        assert "261452k" not in text
+
+    async def test_counts_are_grouped_and_sit_under_the_prose(
+        self, seeded, monkeypatch
+    ):
+        """Leading with counts is what made it read like a form."""
+        from app.config import get_settings
+        from app.scheduling.jobs import _cycle
+
+        sent = _capture(monkeypatch)
+        await _cycle(FakeRegistry({**EDITS, "brief": "Here is what happened."}),
+                     FakeRepo({"morning_brief": "111"}), get_settings(), slot=12)
+
+        text = next(t for c, t in sent if c == "111")
+        assert "launches seen in 24h" in text
+        assert text.index("Here is what happened.") < text.index("launches seen in 24h")
+
+
 class TestTheCycleStillIngests:
     """The regression this class exists for.
 
