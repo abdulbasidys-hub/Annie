@@ -382,6 +382,44 @@ class TestTheDayBoundary:
         assert result["delivered"] is False
         assert result["reason"], "no reason given for an undelivered brief"
 
+    async def test_the_heading_carries_no_byline_and_no_timestamp(
+        self, seeded, monkeypatch
+    ):
+        """It read `**Annie — Daily brief, 09 Sep 00:03 UTC**`.
+
+        She is the only thing posting in the channel, so the name is noise on
+        every message. And Discord stamps every message itself, so restating
+        the time only ever added a second clock — one that disagrees with the
+        first whenever a slot self-heals and fires late.
+        """
+        from app.config import get_settings
+        from app.scheduling.jobs import _cycle
+
+        sent = _capture(monkeypatch)
+        await _cycle(FakeRegistry(EDITS_AND_IDEAS), FakeRepo({"morning_brief": "111"}),
+                     get_settings(), slot=0)
+
+        brief = next(text for channel, text in sent if channel == "111")
+        assert brief.startswith("**Daily brief**")
+        assert "Annie" not in brief.splitlines()[0]
+        assert "UTC" not in brief.splitlines()[0]
+
+    async def test_a_six_hourly_brief_still_says_which_kind_it_is(
+        self, seeded, monkeypatch
+    ):
+        """Dropping the timestamp must not also drop the window. A six-hour
+        brief and a daily one carry different numbers under the same
+        headings, and nothing else in the message distinguishes them."""
+        from app.config import get_settings
+        from app.scheduling.jobs import _cycle
+
+        sent = _capture(monkeypatch)
+        await _cycle(FakeRegistry(EDITS), FakeRepo({"morning_brief": "111"}),
+                     get_settings(), slot=12)
+
+        brief = next(text for channel, text in sent if channel == "111")
+        assert brief.startswith("**6-hour brief**")
+
     async def test_the_days_ideas_are_actually_sent(self, seeded, monkeypatch):
         """They were generated, written to a memory file, and then posted
         nowhere. `format_for_delivery` existed and was tested; nothing in

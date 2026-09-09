@@ -218,7 +218,11 @@ async def _deliver_brief(
     learning = cycle.get("learning") or {}
     stats = ledger.stats()
 
-    lines = [f"**Annie — {label}, {now.strftime('%d %b %H:%M UTC')}**", ""]
+    # No byline and no timestamp. She is the only thing posting in the
+    # channel, so the name is noise on every message; and Discord already
+    # stamps the time, so restating it only ever added a second clock to
+    # disagree with the first.
+    lines = [f"**{label}**", ""]
     headline = learning.get("headline")
     if headline:
         lines.append(headline)
