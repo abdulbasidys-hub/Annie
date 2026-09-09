@@ -31,20 +31,122 @@ def _webhook(**overrides):
     return {**base, **overrides}
 
 
+#: Fields the live list endpoint does not return, confirmed against the real
+#: API on 2026-09-09. The fixture strips them so a test cannot pass by reading
+#: something production would never have been given.
+_DETAIL_ONLY = ("accountAddresses",)
+
+
 @pytest.fixture
 def registered(monkeypatch):
-    """Control what Helius reports back."""
+    """Control what Helius reports back — as two different shapes.
+
+    `GET /v0/webhooks` and `GET /v0/webhooks/{id}` do not agree: the list
+    omits `accountAddresses`. A fixture that returned the full object from
+    both made a real bug untestable, and did worse than that — it made the
+    broken code look correct, because the check read a field that in
+    production was simply absent and concluded the programs were missing.
+    """
     box = {"webhooks": []}
 
     async def fake_list(api_key):
-        return box["webhooks"]
+        return [{k: v for k, v in w.items() if k not in _DETAIL_ONLY} for w in box["webhooks"]]
+
+    async def fake_get(api_key, webhook_id):
+        return next(
+            (w for w in box["webhooks"] if str(w.get("webhookID")) == str(webhook_id)), None
+        )
 
     monkeypatch.setattr(helius_webhook, "list_webhooks", fake_list)
+    monkeypatch.setattr(helius_webhook, "get_webhook", fake_get)
     return box
 
 
 async def _inspect(secret=SECRET):
     return await helius_webhook.inspect("key", base_url=BASE, secret=secret)
+
+
+
+class TestWhatTheListEndpointDoesNotSay:
+    """`GET /v0/webhooks` omits `accountAddresses`.
+
+    Reading membership from the list reports every webhook as filtering on
+    nothing — identical to a genuinely broken one. It produced a permanent
+    false "accountAddresses is missing", and would have made the boot-time
+    reconciler rewrite a correct registration on every single deploy.
+    """
+
+    async def test_a_correct_registration_is_not_called_misconfigured(self, registered):
+        registered["webhooks"] = [_webhook()]
+
+        report = await _inspect()
+
+        assert report["ok"] is True, report["problems"]
+        assert not any("accountAddresses" in p for p in report["problems"])
+
+    async def test_the_programs_are_read_from_the_detail_response(self, registered):
+        """And a genuinely empty list is still caught — the fix must not
+        simply stop looking."""
+        registered["webhooks"] = [_webhook(accountAddresses=[])]
+
+        report = await _inspect()
+
+        assert report["ok"] is False
+        assert any("accountAddresses" in p for p in report["problems"])
+
+
+class TestAWebhookHeliusSwitchedOff:
+    """The failure that was live here for eleven days.
+
+    Helius auto-disables a webhook after sustained delivery failures — a
+    deployment down for a day is enough — and it stays off once the
+    deployment returns. Every field reads correctly; it simply is not
+    running. Nothing looked at the flag, so the check that exists to answer
+    "why is nothing arriving" could not see the answer.
+    """
+
+    async def test_a_disabled_webhook_is_reported(self, registered):
+        registered["webhooks"] = [
+            _webhook(
+                active=False,
+                disabledAt="2026-08-29T12:00:35.797Z",
+                disabledReason="auto-disabled: 100.0% failure rate over 24h",
+            )
+        ]
+
+        report = await _inspect()
+
+        assert report["ok"] is False
+        assert report["state"] == "disabled"
+        problem = " ".join(report["problems"])
+        assert "DISABLED" in problem
+        assert "100.0% failure rate" in problem, "the reason Helius gave was dropped"
+        assert "2026-08-29" in problem, "when it happened is how you tell what caused it"
+
+    async def test_disabled_is_its_own_state_not_misconfigured(self, registered):
+        """The fixes differ: there is nothing to correct, it just has to be
+        switched back on."""
+        registered["webhooks"] = [_webhook(active=False)]
+
+        assert (await _inspect())["state"] == "disabled"
+
+    async def test_an_active_webhook_is_not_flagged(self, registered):
+        registered["webhooks"] = [_webhook(active=True)]
+
+        report = await _inspect()
+
+        assert report["ok"] is True
+        assert report["active"] is True
+
+    async def test_a_disabled_and_misconfigured_one_reports_both(self, registered):
+        """Re-enabling a webhook that still filters on nothing fixes
+        nothing, so both have to be visible at once."""
+        registered["webhooks"] = [_webhook(active=False, accountAddresses=[])]
+
+        problems = " ".join((await _inspect())["problems"])
+
+        assert "DISABLED" in problems
+        assert "accountAddresses" in problems
 
 
 class TestDiagnosis:

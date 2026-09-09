@@ -83,8 +83,30 @@ def expected_url(base: str) -> str:
 
 
 async def list_webhooks(api_key: str) -> list[dict[str, Any]]:
+    """Every webhook on this key — as the *list* endpoint reports them.
+
+    Deliberately not the whole truth, and callers must know it: the list
+    response omits ``accountAddresses`` entirely. Reading membership from
+    here reports every webhook as having none, which is indistinguishable
+    from a real misconfiguration. Use :func:`get_webhook` for the one you
+    actually care about.
+    """
     found = await _call("GET", api_key)
     return found if isinstance(found, list) else []
+
+
+async def get_webhook(api_key: str, webhook_id: str) -> dict[str, Any] | None:
+    """One webhook, in full.
+
+    ``GET /v0/webhooks`` and ``GET /v0/webhooks/{id}`` do not return the same
+    fields. Confirmed against the live API on 2026-09-09: the list omits
+    ``accountAddresses``, so a correctly-registered webhook read from the list
+    looks like it is filtering on nothing — which is exactly what a broken one
+    looks like. Everything that decides whether a registration is healthy has
+    to come from here.
+    """
+    found = await _call("GET", api_key, path=f"/{webhook_id}")
+    return found if isinstance(found, dict) else None
 
 
 async def inspect(api_key: str, *, base_url: str, secret: str) -> dict[str, Any]:
@@ -138,7 +160,29 @@ async def inspect(api_key: str, *, base_url: str, secret: str) -> dict[str, Any]
             "webhooks": [_summarise(w, secret) for w in registered],
         }
 
+    # Re-read ours in full. The list entry is missing accountAddresses, so
+    # every check below that reads it would otherwise be answering from a
+    # field the API never sent.
+    detailed = await get_webhook(api_key, str(ours.get("webhookID") or ""))
+    if detailed:
+        ours = {**ours, **detailed}
+
     problems: list[str] = []
+
+    # First, because it makes every other field moot. Helius switches a
+    # webhook off by itself after sustained delivery failures — a deployment
+    # down for a day is enough — and it stays off after the deployment comes
+    # back. Nothing about the registration looks wrong; it simply is not
+    # running. This was live for eleven days here before anything noticed,
+    # because nothing looked at the flag.
+    if detailed and detailed.get("active") is False:
+        reason = str(detailed.get("disabledReason") or "no reason given")
+        since = str(detailed.get("disabledAt") or "unknown")
+        problems.append(
+            f"Helius has this webhook DISABLED (since {since}: {reason}). It is "
+            f"registered correctly and switched off, so nothing is being delivered "
+            f"and nothing about the configuration would show why."
+        )
 
     actual_url = str(ours.get("webhookURL", ""))
     if actual_url.rstrip("/") != want_url.rstrip("/"):
@@ -179,13 +223,25 @@ async def inspect(api_key: str, *, base_url: str, secret: str) -> dict[str, Any]
             "HELIUS_WEBHOOK_SECRET is not set here, so the receiver rejects everything."
         )
 
+    disabled = bool(detailed and detailed.get("active") is False)
+    if not problems:
+        state = "healthy"
+    elif disabled:
+        # Its own state, because the fix differs: nothing to correct, just
+        # switch it back on.
+        state = "disabled"
+    else:
+        state = "misconfigured"
+
     return {
         "ok": not problems,
-        "state": "healthy" if not problems else "misconfigured",
+        "state": state,
         "problems": problems,
         "expected_url": want_url,
         "webhook_id": ours.get("webhookID"),
-        "webhooks": [_summarise(w, secret) for w in registered],
+        "active": (detailed or {}).get("active"),
+        "webhooks": [_summarise({**w, **(detailed or {})} if w is ours else w, secret)
+                     for w in registered],
     }
 
 
@@ -197,6 +253,8 @@ def _summarise(webhook: dict[str, Any], secret: str) -> dict[str, Any]:
         "url": webhook.get("webhookURL"),
         "transaction_types": webhook.get("transactionTypes") or [],
         "account_addresses": webhook.get("accountAddresses") or [],
+        "active": webhook.get("active"),
+        "disabled_reason": webhook.get("disabledReason"),
         "type": webhook.get("webhookType"),
         "auth_header_set": bool(auth),
         "auth_header_matches": bool(secret.strip()) and auth == secret.strip(),
@@ -228,6 +286,11 @@ async def repair(api_key: str, *, base_url: str, secret: str) -> dict[str, Any]:
         "accountAddresses": sorted(KNOWN_LAUNCHPAD_PROGRAMS),
         "webhookType": WEBHOOK_TYPE,
         "authHeader": secret.strip(),
+        # Explicit, because the most common thing wrong with a webhook that
+        # has been running a while is not its configuration but that Helius
+        # switched it off after the deployment was unreachable. Correcting
+        # the fields without clearing that flag repairs nothing.
+        "active": True,
     }
 
     registered = await list_webhooks(api_key)

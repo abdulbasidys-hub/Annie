@@ -44,7 +44,16 @@ def helius(monkeypatch):
     state = {"webhooks": [], "puts": [], "posts": []}
 
     async def fake_list(api_key):
-        return state["webhooks"]
+        # The live list endpoint omits accountAddresses. Returning the full
+        # object here would let a reconciler that reads membership from the
+        # list pass its tests and then rewrite a correct registration on
+        # every boot in production.
+        return [{k: v for k, v in w.items() if k != "accountAddresses"} for w in state["webhooks"]]
+
+    async def fake_get(api_key, webhook_id):
+        return next(
+            (w for w in state["webhooks"] if str(w.get("webhookID")) == str(webhook_id)), None
+        )
 
     async def fake_call(method, api_key, path="", json=None):
         if method == "PUT":
@@ -56,6 +65,7 @@ def helius(monkeypatch):
         return state["webhooks"]
 
     monkeypatch.setattr(hw, "list_webhooks", fake_list)
+    monkeypatch.setattr(hw, "get_webhook", fake_get)
     monkeypatch.setattr(hw, "_call", fake_call)
     monkeypatch.delenv("PUBLIC_BASE_URL", raising=False)
     monkeypatch.delenv("RAILWAY_PUBLIC_DOMAIN", raising=False)
@@ -70,6 +80,7 @@ def _registration(**overrides):
         "accountAddresses": PROGRAMS,
         "webhookType": "enhanced",
         "authHeader": SECRET,
+        "active": True,
     }
     base.update(overrides)
     return base
@@ -112,6 +123,40 @@ class TestItFixesTheRealFailures:
         assert result["action"] == "created"
         assert helius["posts"][0]["accountAddresses"] == PROGRAMS
         assert helius["posts"][0]["authHeader"] == SECRET
+
+
+
+class TestAWebhookHeliusSwitchedOff:
+    """The failure that was actually live: `active: false`.
+
+    Helius auto-disabled this deployment's webhook on 2026-08-29 —
+    "100.0% failure rate over 24h", earned while Railway was down — and it
+    stayed off for eleven days after Railway came back. Every field was
+    correct. It just was not running, and nothing read the flag.
+    """
+
+    async def test_a_disabled_webhook_is_switched_back_on(self, helius):
+        helius["webhooks"] = [
+            _registration(
+                active=False,
+                disabledReason="auto-disabled: 100.0% failure rate over 24h",
+            )
+        ]
+
+        result = await hw.reconcile(FakeSettings(), base_url=URL)
+
+        assert result["action"] == "repaired"
+        assert helius["puts"][0]["active"] is True
+
+    async def test_repair_always_asserts_active(self, helius):
+        """Correcting the fields without clearing the flag repairs nothing,
+        so `active` is sent on every write rather than only when it is the
+        thing that is wrong."""
+        helius["webhooks"] = [_registration(accountAddresses=[])]
+
+        await hw.reconcile(FakeSettings(), base_url=URL)
+
+        assert helius["puts"][0]["active"] is True
 
 
 class TestItLeavesAWorkingSetupAlone:
