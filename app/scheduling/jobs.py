@@ -198,11 +198,18 @@ async def _deliver_brief(
             fix="ask Annie in Discord to create one, or set the purpose on an "
                 "existing channel",
         )
-        return {
+        missing = {
             "delivered": False,
             "reason": "no Discord channel is set up with purpose 'morning_brief' — "
-                      "ask Annie in Discord to create one",
+                      "set one on System Health, or ask Annie in Discord to create it",
         }
+        if full_day:
+            # The ideas have their own channel purpose, so a deployment that
+            # configured only that one should still get them. Losing the
+            # brief is not a reason to also drop the thing the brief was
+            # merely going to sit above.
+            missing.update(await _deliver_ideas(repo, settings, cycle, fallback=None))
+        return missing
 
     from app.bots.discord_bot import send_channel_message
     from app.memory import ledger
@@ -239,7 +246,65 @@ async def _deliver_brief(
     delivered = await send_channel_message(
         settings.discord_bot_token, channel.channel_id, "\n".join(lines)
     )
-    return {"delivered": delivered, "channel_id": channel.channel_id}
+    outcome: dict[str, Any] = {"delivered": delivered, "channel_id": channel.channel_id}
+    if full_day:
+        outcome.update(await _deliver_ideas(repo, settings, cycle, fallback=channel))
+    return outcome
+
+
+async def _deliver_ideas(
+    repo: FirestoreRepo, settings, cycle: dict[str, Any], *, fallback
+) -> dict[str, Any]:
+    """Post the day's three launch ideas, as their own message.
+
+    Separate from the brief rather than appended to it, for two reasons. The
+    brief is a report and the ideas are a proposal — different things to do
+    something with, and worth being able to route to different channels. And
+    the ideas are long: pinning or quoting one is a normal thing to want,
+    and that is awkward when they are the tail of a status summary.
+
+    Routing prefers a channel whose purpose is ``launch_ideas`` and falls
+    back to the brief channel, so configuring one channel is enough to start
+    and a second is an upgrade rather than a prerequisite.
+    """
+    from app.bots.discord_bot import send_channel_message
+    from app.memory import ideas
+
+    generated = (cycle.get("ideas") or {}).get("generated")
+    if not generated:
+        # Not a failure. `generate_daily` skips itself when nothing moved,
+        # which is the honest output — three speculative ideas from no data
+        # would arrive looking exactly like grounded ones.
+        return {"ideas_delivered": False, "ideas_reason": "none were generated"}
+
+    latest = ideas.latest(origin="daily")
+    text = ideas.format_for_delivery(latest, limit=3) if latest else ""
+    if not text:
+        log.warning("ideas_not_delivered", reason="generated but could not be formatted")
+        return {"ideas_delivered": False, "ideas_reason": "could not be formatted"}
+
+    target = await repo.get_discord_channel_by_purpose("launch_ideas") or fallback
+    if target is None:
+        log.warning("ideas_not_delivered", reason="no channel for 'launch_ideas' or 'morning_brief'")
+        return {
+            "ideas_delivered": False,
+            "ideas_reason": "no Discord channel is set up for launch ideas",
+        }
+
+    delivered = await send_channel_message(
+        settings.discord_bot_token, target.channel_id, text
+    )
+    if not delivered:
+        log.warning(
+            "ideas_not_delivered",
+            reason="discord rejected the send",
+            channel_id=target.channel_id,
+        )
+    return {
+        "ideas_delivered": delivered,
+        "ideas_channel_id": target.channel_id,
+        "ideas_count": generated,
+    }
 
 
 async def _weekly_rollup(

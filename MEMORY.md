@@ -112,8 +112,11 @@ free   mirror changed files to Firestore          only files whose hash moved
 ```
 
 At the 00:00 WAT boundary the cycle also writes the day's deterministic log
-and generates three launch ideas (one more call), which go out with the
-brief.
+and generates three launch ideas (one more call). The brief and the ideas go
+out as two Discord messages, routed by channel purpose: `morning_brief` and
+`launch_ideas`. The second is optional and falls back to the first, so one
+configured channel is enough to start. Set either on System Health, under
+"Where Annie posts".
 
 A quiet window skips the paid call entirely, and the daily ideas are skipped
 outright when nothing moved. Weekly and monthly rollups add one call each —

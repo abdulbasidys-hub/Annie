@@ -278,12 +278,36 @@ async def webhook_repair(
     return result
 
 
+#: The purposes an operator can point a channel at, mapped to the message
+#: posted to verify it. That message is not a formality: it is the proof the
+#: bot can actually post there — the whole reason a channel is verified
+#: before it is saved — and it stays in the channel as a marker saying why
+#: Annie is writing in it.
+_CHANNEL_PURPOSES = {
+    "morning_brief": (
+        "**Annie will post the daily brief here.**\n\n"
+        "That is the 00:00 WAT summary of what moved, what she changed her mind "
+        "about, and what she is watching."
+    ),
+    "launch_ideas": (
+        "**Annie will post the day's launch ideas here.**\n\n"
+        "Three of them, once a day at 00:00 WAT, each grounded in something that "
+        "actually moved in the previous 24 hours — name, ticker, image direction, "
+        "why now, and the risk."
+    ),
+}
+
+
 @router.get("/brief-channel")
 async def brief_channel(
     repo: FirestoreRepo = Depends(get_repo),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
-    """Where the daily brief and launch ideas get sent, if anywhere.
+    """Where the daily brief and the launch ideas get sent, if anywhere.
+
+    Two purposes, because they are two kinds of thing: ``morning_brief`` is a
+    report of what happened, ``launch_ideas`` is a proposal for what to do
+    next. The second is optional and falls back to the first.
 
     Until 2026-09-09 the only way to set this was to ask Annie in Discord to
     create a channel, which needs the bot to hold Manage Channels in a guild
@@ -292,15 +316,27 @@ async def brief_channel(
     every single day.
     """
     channels = await repo.list_discord_channels()
-    current = next((c for c in channels if c.purpose == "morning_brief"), None)
+
+    def _for(purpose: str):
+        return next((c for c in channels if c.purpose == purpose), None)
+
+    def _describe(c):
+        if c is None:
+            return None
+        return {"channel_id": c.channel_id, "name": c.name, "guild_id": c.guild_id}
+
+    current = _for("morning_brief")
+    ideas_channel = _for("launch_ideas")
     return {
         "discord_configured": settings.is_available("discord"),
         "configured": current is not None,
-        "channel": (
-            {"channel_id": current.channel_id, "name": current.name, "guild_id": current.guild_id}
-            if current
-            else None
-        ),
+        "channel": _describe(current),
+        # Where the day's three launch ideas go. Falls back to the brief
+        # channel when unset, so this is an optional split rather than a
+        # second thing that must be configured before anything arrives.
+        "ideas_configured": ideas_channel is not None,
+        "ideas_channel": _describe(ideas_channel),
+        "ideas_fall_back_to_brief": ideas_channel is None and current is not None,
         "known_channels": [
             {
                 "channel_id": c.channel_id,
@@ -319,7 +355,11 @@ async def set_brief_channel(
     repo: FirestoreRepo = Depends(get_repo),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
-    """Point the brief at a Discord channel by ID.
+    """Point the brief — or the launch ideas — at a Discord channel by ID.
+
+    ``purpose`` is ``morning_brief`` (the default) or ``launch_ideas``. They
+    may be the same channel; leaving ``launch_ideas`` unset sends the ideas
+    to the brief channel.
 
     Verified by actually posting to it before the record is written.
     Registering a channel the bot cannot post to would produce exactly the
@@ -339,6 +379,13 @@ async def set_brief_channel(
             detail="DISCORD_BOT_TOKEN is not set, so there is nothing to deliver through.",
         )
 
+    purpose = str(body.get("purpose") or "morning_brief").strip()
+    if purpose not in _CHANNEL_PURPOSES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"purpose must be one of {', '.join(sorted(_CHANNEL_PURPOSES))}.",
+        )
+
     channel_id = str(body.get("channel_id") or "").strip()
     if not channel_id.isdigit():
         raise HTTPException(
@@ -348,11 +395,7 @@ async def set_brief_channel(
         )
 
     delivered = await send_channel_message(
-        settings.discord_bot_token,
-        channel_id,
-        "**Annie will post the daily brief here.**\n\n"
-        "That is the 00:00 WAT summary of what moved, what she changed her mind "
-        "about, and the day's three launch ideas.",
+        settings.discord_bot_token, channel_id, _CHANNEL_PURPOSES[purpose]
     )
     if not delivered:
         raise HTTPException(
@@ -366,12 +409,12 @@ async def set_brief_channel(
         DiscordChannel(
             channel_id=channel_id,
             guild_id=str(body.get("guild_id") or ""),
-            name=str(body.get("name") or "brief"),
-            purpose="morning_brief",
+            name=str(body.get("name") or purpose),
+            purpose=purpose,
             enabled=True,
         )
     )
-    return {"configured": True, "channel_id": channel_id}
+    return {"configured": True, "channel_id": channel_id, "purpose": purpose}
 
 
 @router.get("/pipeline-status")

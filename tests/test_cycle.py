@@ -68,14 +68,39 @@ class FakeRegistry:
         self.reasoning = FakeReasoner(payload)
 
 
+class FakeChannel:
+    def __init__(self, channel_id):
+        self.channel_id = channel_id
+
+
 class FakeRepo:
     """Only the small operator-facing collections the cycle still touches."""
 
-    def __init__(self):
+    def __init__(self, channels: dict | None = None):
         self.writes = 0
+        self.channels = channels or {}
 
     async def get_discord_channel_by_purpose(self, purpose, **kwargs):
-        return None
+        found = self.channels.get(purpose)
+        return FakeChannel(found) if found else None
+
+
+def _capture(monkeypatch) -> list[tuple[str, str]]:
+    """Record what Discord would have received, per channel."""
+    sent: list[tuple[str, str]] = []
+
+    async def fake_send(bot_token, channel_id, text):
+        sent.append((channel_id, text))
+        return True
+
+    import app.bots.discord_bot as bot
+
+    monkeypatch.setattr(bot, "send_channel_message", fake_send)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "bot-token")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    return sent
 
 
 EDITS = {
@@ -145,6 +170,32 @@ def seeded(isolated_memory):
             mint=f"Mint{i:040d}", market_cap=320_000, liquidity=60_000, tier=250_000
         )
     signals.recompute()
+
+
+#: One payload, both readers. The day boundary makes two model calls through
+#: the same fake client — the learning step, which reads `headline`/`edits`,
+#: and the ideas step, which reads `ideas`. A payload carrying only the first
+#: set makes the ideas step return "generated 0", which silently turns every
+#: delivery assertion below into a test of nothing.
+EDITS_AND_IDEAS = {
+    **EDITS,
+    "read_of_the_market": "Cat-adjacent still running; AI agents saturated.",
+    "ideas": [
+        {
+            "name": "Cat Lawyer",
+            "ticker": "LAWCAT",
+            "description": "objection your honour my bags are down bad",
+            "image": "A tabby in an ill-fitting suit behind a courtroom bench, "
+                     "flat vector, muted palette.",
+            "angle": "A cat in a courtroom filing motions for bag-holders.",
+            "why_now": "Third week of cat-adjacent, specific variants at ~3x generic.",
+            "evidence": "11 of 14 modified animal names cleared this week.",
+            "grounding": "observed",
+            "risk": "Week three is usually where a theme saturates.",
+        }
+    ],
+    "avoid": ["AI (token)"],
+}
 
 
 class TestLearningStep:
@@ -330,6 +381,95 @@ class TestTheDayBoundary:
 
         assert result["delivered"] is False
         assert result["reason"], "no reason given for an undelivered brief"
+
+    async def test_the_days_ideas_are_actually_sent(self, seeded, monkeypatch):
+        """They were generated, written to a memory file, and then posted
+        nowhere. `format_for_delivery` existed and was tested; nothing in
+        production ever called it, so the brief-channel confirmation message
+        promised "the day's three launch ideas" to a channel that would never
+        receive one.
+        """
+        from app.config import get_settings
+        from app.scheduling.jobs import _cycle
+
+        sent = _capture(monkeypatch)
+        repo = FakeRepo({"morning_brief": "111"})
+
+        result = await _cycle(FakeRegistry(EDITS_AND_IDEAS), repo, get_settings(), slot=0)
+
+        assert result["ideas_delivered"] is True
+        bodies = [text for _, text in sent]
+        assert any("Launch ideas" in b for b in bodies), "the ideas were never posted"
+
+    async def test_the_ideas_go_to_their_own_channel_when_one_is_set(
+        self, seeded, monkeypatch
+    ):
+        """A proposal and a report are different things to act on, and
+        pinning an idea is awkward when it is the tail of a status summary."""
+        from app.config import get_settings
+        from app.scheduling.jobs import _cycle
+
+        sent = _capture(monkeypatch)
+        repo = FakeRepo({"morning_brief": "111", "launch_ideas": "222"})
+
+        result = await _cycle(FakeRegistry(EDITS_AND_IDEAS), repo, get_settings(), slot=0)
+
+        assert result["ideas_channel_id"] == "222"
+        ideas_post = next(text for channel, text in sent if channel == "222")
+        assert "Launch ideas" in ideas_post
+        brief_post = next(text for channel, text in sent if channel == "111")
+        assert "brief" in brief_post.lower()
+
+    async def test_ideas_still_arrive_when_only_their_own_channel_is_set(
+        self, seeded, monkeypatch
+    ):
+        """Losing the brief is not a reason to also drop the thing the brief
+        was merely going to sit above."""
+        from app.config import get_settings
+        from app.scheduling.jobs import _cycle
+
+        sent = _capture(monkeypatch)
+        repo = FakeRepo({"launch_ideas": "222"})
+
+        result = await _cycle(FakeRegistry(EDITS_AND_IDEAS), repo, get_settings(), slot=0)
+
+        assert result["delivered"] is False, "there is no brief channel"
+        assert result["ideas_delivered"] is True
+        assert [channel for channel, _ in sent] == ["222"]
+
+    async def test_a_six_hourly_slot_sends_no_ideas(self, seeded, monkeypatch):
+        """Ideas are a judgement about what to do next, and one that changes
+        every six hours is noise."""
+        from app.config import get_settings
+        from app.scheduling.jobs import _cycle
+
+        sent = _capture(monkeypatch)
+        repo = FakeRepo({"morning_brief": "111"})
+
+        result = await _cycle(FakeRegistry(EDITS_AND_IDEAS), repo, get_settings(), slot=12)
+
+        assert "ideas_delivered" not in result
+        assert not any("Launch ideas" in text for _, text in sent)
+
+    async def test_nothing_is_posted_when_no_ideas_were_generated(
+        self, isolated_memory, monkeypatch
+    ):
+        """An empty ledger produces no ideas by design. Posting a heading
+        with nothing under it would read as a failure of the market rather
+        than an honest abstention."""
+        from app.config import get_settings
+        from app.memory import bootstrap
+        from app.scheduling.jobs import _cycle
+
+        bootstrap._seed_files()
+        sent = _capture(monkeypatch)
+        repo = FakeRepo({"morning_brief": "111"})
+
+        result = await _cycle(FakeRegistry(EDITS), repo, get_settings(), slot=0)
+
+        assert result["ideas_delivered"] is False
+        assert result["ideas_reason"] == "none were generated"
+        assert not any("Launch ideas" in text for _, text in sent)
 
     async def test_the_diagnosis_surfaces_an_undelivered_brief(self, seeded):
         from app.memory import db, health

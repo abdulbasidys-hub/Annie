@@ -109,7 +109,77 @@ class TestSetting:
 
         _, text = repo_state["sent"][0]
         assert "daily brief" in text
+
+    def test_each_purpose_describes_itself(self, client, repo_state, monkeypatch):
+        """The two messages must not be interchangeable. The brief one used
+        to promise "the day's three launch ideas" — in a channel that, at the
+        time, was never going to receive any."""
+        _sending(monkeypatch, repo_state, succeeds=True)
+        client.post(
+            "/api/system/brief-channel",
+            json={"channel_id": "123", "purpose": "launch_ideas"},
+        )
+
+        _, text = repo_state["sent"][0]
         assert "launch ideas" in text
+        assert "Three of them" in text
+        assert repo_state["channels"][0].purpose == "launch_ideas"
+
+
+class TestTheTwoPurposes:
+    """The brief is a report; the ideas are a proposal.
+
+    They are worth routing separately — pinning an idea is a normal thing to
+    want and awkward when it is the tail of a status summary — but requiring
+    two channels before anything arrives would be worse than the problem.
+    Hence: optional, with a fallback.
+    """
+
+    def test_an_unknown_purpose_is_refused(self, client, repo_state, monkeypatch):
+        _sending(monkeypatch, repo_state, succeeds=True)
+
+        response = client.post(
+            "/api/system/brief-channel", json={"channel_id": "123", "purpose": "whatever"}
+        )
+
+        assert response.status_code == 422
+        assert "launch_ideas" in response.json()["detail"]
+        assert repo_state["sent"] == [], "it posted before validating the purpose"
+
+    def test_the_default_purpose_is_still_the_brief(self, client, repo_state, monkeypatch):
+        """Callers written before the split must keep working."""
+        _sending(monkeypatch, repo_state, succeeds=True)
+        client.post("/api/system/brief-channel", json={"channel_id": "123"})
+
+        assert repo_state["channels"][0].purpose == "morning_brief"
+
+    def test_ideas_report_as_falling_back_when_only_the_brief_is_set(
+        self, client, repo_state
+    ):
+        repo_state["channels"] = [
+            DiscordChannel(channel_id="1", name="briefing", purpose="morning_brief")
+        ]
+        body = client.get("/api/system/brief-channel").json()
+
+        assert body["ideas_configured"] is False
+        assert body["ideas_fall_back_to_brief"] is True
+
+    def test_a_separate_ideas_channel_is_reported_as_its_own(self, client, repo_state):
+        repo_state["channels"] = [
+            DiscordChannel(channel_id="1", name="briefing", purpose="morning_brief"),
+            DiscordChannel(channel_id="2", name="launch-radar", purpose="launch_ideas"),
+        ]
+        body = client.get("/api/system/brief-channel").json()
+
+        assert body["ideas_channel"]["channel_id"] == "2"
+        assert body["ideas_fall_back_to_brief"] is False
+
+    def test_nothing_falls_back_when_nothing_is_configured(self, client):
+        """The fallback flag is about where ideas go, so it must not read as
+        true when there is no brief channel to fall back to."""
+        body = client.get("/api/system/brief-channel").json()
+
+        assert body["ideas_fall_back_to_brief"] is False
 
     def test_an_unreachable_channel_is_refused_not_saved(self, client, repo_state, monkeypatch):
         """The whole point. Saving a channel the bot cannot post to would look

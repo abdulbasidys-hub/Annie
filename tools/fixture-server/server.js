@@ -1039,10 +1039,17 @@ const routes = [
     total: 2,
   })],
 
-  // Deliberately a broken registration — the healthy case renders nothing,
-  // so the fixture shows the state worth looking at.
+  // The brief is configured and the ideas are not — the state a real
+  // deployment sits in right after someone sets their first channel, and the
+  // one where the setter used to disappear entirely.
   ['GET', /^\/api\/system\/brief-channel$/, () => ({
-    discord_configured: true, configured: false, channel: null, known_channels: [],
+    discord_configured: true,
+    configured: true,
+    channel: { channel_id: '111', name: 'briefing', guild_id: '9' },
+    ideas_configured: false,
+    ideas_channel: null,
+    ideas_fall_back_to_brief: true,
+    known_channels: [{ channel_id: '111', name: 'briefing', purpose: 'morning_brief', guild_id: '9' }],
   })],
   ['POST', /^\/api\/system\/brief-channel$/, (q, m, body) => ({
     configured: true, channel_id: body.channel_id,

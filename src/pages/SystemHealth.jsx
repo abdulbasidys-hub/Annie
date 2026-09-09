@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { api } from '../api/client.js'
 import { useApi } from '../api/useApi.js'
@@ -276,7 +276,10 @@ function PipelineStatus({ state }) {
       )}
 
       {d.delivery?.status === 'undelivered' && (
-        <BriefChannel detail={d.delivery.detail} onSet={state.reload} />
+        <p className="modal__warn" style={{ marginTop: 12 }}>
+          <strong>The last brief was written but not sent.</strong> {d.delivery.detail}{' '}
+          Set a channel under "Where Annie posts" below.
+        </p>
       )}
 
       <dl className="deflist" style={{ marginTop: 'var(--space-4)' }}>
@@ -313,30 +316,101 @@ function PipelineStatus({ state }) {
  * delivery 401s — and all three look identical to a quiet market.
  */
 /**
- * Point the brief at a Discord channel.
+ * Where Annie posts: the daily brief, and the day's launch ideas.
  *
- * Until this existed the only way was to ask Annie in Discord to create one,
- * which needs the bot to hold Manage Channels in a guild it shares with you.
- * Without that permission there was no path at all — the brief was written
- * every day and went nowhere, and the only sign was a reason buried in a job
- * result.
+ * Until this existed the only way to set a channel was to ask Annie in
+ * Discord to create one, which needs the bot to hold Manage Channels in a
+ * guild it shares with you. Without that permission there was no path at all
+ * — the brief was written every day and went nowhere, and the only sign was
+ * a reason buried in a job result.
  *
- * The ID is verified by actually posting to it before anything is saved.
- * Registering a channel the bot cannot reach would reproduce exactly the
- * failure this fixes: a configuration that looks right and delivers nothing.
+ * Two purposes, because they are two kinds of thing: the brief reports what
+ * happened, the ideas propose what to do next. The ideas channel is optional
+ * and falls back to the brief channel, so one is enough to start.
+ *
+ * Always rendered, never hidden behind a failed delivery. Gating it on
+ * "undelivered" was wrong the same way gating the webhook check on a broken
+ * pipeline was: a control you can only reach while something is broken
+ * cannot be used to confirm the fix, and it left no way at all to add the
+ * second channel once the first one worked.
  */
-function BriefChannel({ detail, onSet }) {
+function DeliveryChannels({ onSet }) {
+  const [state, setState] = useState(null)
+
+  const load = useCallback(async () => {
+    try {
+      setState(await api.briefChannel())
+    } catch {
+      setState(null) // Not worth an error panel; the row simply stays quiet.
+    }
+  }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  if (!state) return null
+
+  const refresh = () => {
+    load()
+    onSet?.()
+  }
+
+  return (
+    <Panel
+      title="Where Annie posts"
+      meta={state.configured ? null : <Badge status="alert">nothing set</Badge>}
+    >
+      {!state.discord_configured ? (
+        <p className="modal__warn" style={{ margin: 0 }}>
+          <strong>Discord is not configured.</strong> Set DISCORD_BOT_TOKEN and the brief
+          has somewhere it can go.
+        </p>
+      ) : (
+        <div className="stack" style={{ gap: 14 }}>
+          <ChannelRow
+            purpose="morning_brief"
+            label="Daily brief"
+            hint="The 00:00 WAT summary of what moved and what she changed her mind about."
+            current={state.channel}
+            onSet={refresh}
+          />
+          <ChannelRow
+            purpose="launch_ideas"
+            label="Launch ideas"
+            hint={
+              state.ideas_fall_back_to_brief
+                ? 'Going to the brief channel. Set one here to split them out.'
+                : "The day's three ideas, once a day, each grounded in something that moved."
+            }
+            current={state.ideas_channel}
+            onSet={refresh}
+          />
+        </div>
+      )}
+    </Panel>
+  )
+}
+
+/**
+ * One purpose, one channel. The ID is verified by actually posting to it
+ * before anything is saved — registering a channel the bot cannot reach
+ * would reproduce exactly the failure this fixes: a configuration that looks
+ * right in the UI and delivers nothing.
+ */
+function ChannelRow({ purpose, label, hint, current, onSet }) {
+  const [open, setOpen] = useState(!current)
   const [channelId, setChannelId] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
-  const [done, setDone] = useState(false)
 
   const save = async () => {
     setBusy(true)
     setError(null)
     try {
-      await api.setBriefChannel({ channel_id: channelId.trim() })
-      setDone(true)
+      await api.setBriefChannel({ channel_id: channelId.trim(), purpose })
+      setChannelId('')
+      setOpen(false)
       onSet?.()
     } catch (err) {
       setError(err)
@@ -345,46 +419,59 @@ function BriefChannel({ detail, onSet }) {
     }
   }
 
-  if (done) {
-    return (
-      <p className="modal__warn" style={{ marginTop: 12 }}>
-        <strong>Set.</strong> A confirmation has been posted to that channel — the next
-        brief will go there. To send today's now, use "Full cycle, as midnight" below.
-      </p>
-    )
-  }
-
   return (
-    <div className="modal__warn" style={{ marginTop: 12 }}>
-      <p style={{ margin: '0 0 8px' }}>
-        <strong>The last brief was written but not sent.</strong> {detail}
-      </p>
-      <p style={{ margin: '0 0 10px' }}>
-        Paste a channel ID below and Annie will post there from now on. In Discord:
-        User Settings → Advanced → Developer Mode, then right-click the channel →
-        Copy Channel ID. The bot must be in that server with permission to view and
-        post in it.
-      </p>
-      {error && <ErrorState error={error} />}
-      <div className="row gap-2 wrap">
-        <input
-          className="input"
-          style={{ flex: '1 1 220px', minWidth: 0 }}
-          value={channelId}
-          onChange={(e) => setChannelId(e.target.value)}
-          placeholder="1234567890123456789"
-          inputMode="numeric"
-          aria-label="Discord channel ID"
-          onKeyDown={(e) => e.key === 'Enter' && channelId.trim() && !busy && save()}
-        />
-        <button
-          className="btn btn--primary"
-          onClick={save}
-          disabled={busy || !channelId.trim()}
-        >
-          {busy ? 'Checking…' : 'Send briefs here'}
-        </button>
+    <div className="stack" style={{ gap: 6 }}>
+      <div className="row gap-2 wrap" style={{ alignItems: 'baseline' }}>
+        <strong style={{ fontSize: 'var(--text-sm)' }}>{label}</strong>
+        {current ? (
+          <span className="faint" style={{ fontSize: 'var(--text-xs)' }}>
+            → #{current.name || current.channel_id}
+          </span>
+        ) : (
+          <span className="faint" style={{ fontSize: 'var(--text-xs)' }}>not set</span>
+        )}
+        {!open && (
+          <button className="btn btn--ghost btn--sm" onClick={() => setOpen(true)}>
+            {current ? 'Change' : 'Set'}
+          </button>
+        )}
       </div>
+      <span className="faint" style={{ fontSize: 'var(--text-xs)' }}>{hint}</span>
+
+      {open && (
+        <>
+          <span className="faint" style={{ fontSize: 'var(--text-xs)' }}>
+            In Discord: User Settings → Advanced → Developer Mode, then right-click the
+            channel → Copy Channel ID. The bot must be in that server with permission to
+            view and post in it.
+          </span>
+          {error && <ErrorState error={error} />}
+          <div className="row gap-2 wrap">
+            <input
+              className="input"
+              style={{ flex: '1 1 220px', minWidth: 0 }}
+              value={channelId}
+              onChange={(e) => setChannelId(e.target.value)}
+              placeholder="1234567890123456789"
+              inputMode="numeric"
+              aria-label={`Discord channel ID for ${label}`}
+              onKeyDown={(e) => e.key === 'Enter' && channelId.trim() && !busy && save()}
+            />
+            <button
+              className="btn btn--primary"
+              onClick={save}
+              disabled={busy || !channelId.trim()}
+            >
+              {busy ? 'Checking…' : 'Post here'}
+            </button>
+            {current && (
+              <button className="btn btn--ghost" onClick={() => setOpen(false)} disabled={busy}>
+                Cancel
+              </button>
+            )}
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -640,6 +727,8 @@ export default function SystemHealth() {
       <PipelineStatus state={pipeline} />
 
       <WebhookCheck pipelineState={pipeline.data?.state} />
+
+      <DeliveryChannels onSet={pipeline.reload} />
 
       <Cost />
 
