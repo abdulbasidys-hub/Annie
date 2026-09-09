@@ -460,6 +460,78 @@ class TestRunState:
         assert setting.value["enabled"] is False
 
 
+class TestConfigOutlivingItsShape:
+    """A stored document written before the job changed shape.
+
+    The cycle moved from "every 360 minutes" to "at 00:00, 06:00, 12:00 and
+    18:00", and the document Firestore already held said interval. Scheduling
+    stayed correct — `_due` branches on the mode in the code, and an interval
+    document carries no `hours` to override with — but the Settings page kept
+    showing `interval_minutes: 360`, so the one place an operator looks to
+    confirm a schedule showed them something that was not what ran.
+    """
+
+    @staticmethod
+    def _fixed_job():
+        async def job(registry, repo, settings, *, slot=None):
+            pass
+
+        return ScheduledJob(
+            name="cycle", settings_key="scheduler_test_job", run=job,
+            default_hours=[0, 6, 12, 18], default_minute=0, default_timezone="Africa/Lagos",
+        )
+
+    async def test_a_document_from_the_old_shape_is_rewritten(self, repo):
+        await repo.upsert_setting(
+            "scheduler_test_job", {"enabled": True, "mode": "interval", "interval_minutes": 360}
+        )
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[self._fixed_job()])
+
+        await scheduler._ensure_defaults_visible()
+
+        value = (await repo.get_setting("scheduler_test_job")).value
+        assert value["mode"] == "fixed_times"
+        assert value["hours"] == [0, 6, 12, 18]
+        assert value["timezone"] == "Africa/Lagos"
+        assert "interval_minutes" not in value
+
+    async def test_the_operators_on_off_choice_survives_the_rewrite(self, repo):
+        """Shape is the code's business; whether a job runs at all is not."""
+        await repo.upsert_setting(
+            "scheduler_test_job", {"enabled": False, "mode": "interval", "interval_minutes": 360}
+        )
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[self._fixed_job()])
+
+        await scheduler._ensure_defaults_visible()
+
+        assert (await repo.get_setting("scheduler_test_job")).value["enabled"] is False
+
+    async def test_a_matching_document_is_left_alone(self, repo):
+        """Chosen hours are an operator's, and must not be reset on boot."""
+        await repo.upsert_setting(
+            "scheduler_test_job",
+            {"enabled": True, "mode": "fixed_times", "hours": [7, 19], "minute": 30,
+             "timezone": "UTC"},
+        )
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[self._fixed_job()])
+
+        await scheduler._ensure_defaults_visible()
+
+        value = (await repo.get_setting("scheduler_test_job")).value
+        assert value["hours"] == [7, 19]
+        assert value["minute"] == 30
+
+    async def test_a_document_with_no_mode_at_all_is_left_alone(self, repo):
+        """Hand-written, or older than the field. Rewriting it would throw
+        away chosen hours to fix a cosmetic problem."""
+        await repo.upsert_setting("scheduler_test_job", {"enabled": True, "hours": [3]})
+        scheduler = Scheduler(registry=None, repo=repo, settings=None, jobs=[self._fixed_job()])
+
+        await scheduler._ensure_defaults_visible()
+
+        assert (await repo.get_setting("scheduler_test_job")).value["hours"] == [3]
+
+
 class TestSlotIsToldNotGuessed:
     """The bug that lost a day's brief in production (2026-09-09).
 

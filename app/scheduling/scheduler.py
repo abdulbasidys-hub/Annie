@@ -205,7 +205,22 @@ class Scheduler:
     async def _ensure_defaults_visible(self) -> None:
         """Write each job's default config the first time it is seen, so it
         appears as an editable row on the Settings page before it has ever
-        run rather than only after."""
+        run rather than only after.
+
+        Also repairs a document whose ``mode`` no longer matches the job's.
+        That mismatch means the code changed shape under a document written
+        by an earlier deployment — the cycle moving from "every 360 minutes"
+        to "at 00:00, 06:00, 12:00 and 18:00", say. It is not a correctness
+        bug, because :meth:`_due` branches on ``job.mode`` from the code and
+        an interval document carries no ``hours`` key to override with. It is
+        worse than that in practice: the Settings page would keep showing
+        ``interval_minutes: 360`` while the scheduler ran fixed times, so the
+        one place an operator looks to confirm a schedule would show them
+        something that is not what runs.
+
+        ``enabled`` is carried across, because that is an operator's choice
+        rather than a stale artefact of the old shape.
+        """
         descriptions = {
             "interval": "Edit interval_minutes/enabled as JSON.",
             "fixed_times": "Edit hours (a list)/minute/timezone/enabled as JSON.",
@@ -214,7 +229,34 @@ class Scheduler:
             "monthly": "Edit day_of_month/hour/minute/timezone/enabled as JSON.",
         }
         for job in self._jobs:
-            if await self._repo.get_setting(job.settings_key) is not None:
+            existing = await self._repo.get_setting(job.settings_key)
+            if existing is not None:
+                stored = existing.value if isinstance(existing.value, dict) else {}
+                # Only a document that *states* a mode and states the wrong
+                # one is stale. One with no mode at all was hand-written or
+                # predates the field, and rewriting it would throw away an
+                # operator's chosen hours to fix a cosmetic problem.
+                if "mode" not in stored or stored["mode"] == job.mode:
+                    continue
+                defaults = self._defaults(job)
+                if "enabled" in stored:
+                    defaults["enabled"] = stored["enabled"]
+                await self._repo.upsert_setting(
+                    job.settings_key,
+                    defaults,
+                    description=(
+                        f"Scheduled job '{job.name}' ({job.mode}). "
+                        f"{descriptions[job.mode]} No redeploy needed. "
+                        f"Run history is kept locally, not here."
+                    ),
+                    actor="scheduler",
+                )
+                log.info(
+                    "scheduler_config_migrated",
+                    job=job.name,
+                    was=stored.get("mode"),
+                    now=job.mode,
+                )
                 continue
             await self._repo.upsert_setting(
                 job.settings_key,
