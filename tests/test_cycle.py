@@ -318,6 +318,94 @@ class TestFullCycle:
         assert "W0" in log.body
 
 
+
+class TestTheCycleStillIngests:
+    """The regression this class exists for.
+
+    The old cycle ran discovery as its first stage every six hours. The
+    memory rewrite replaced that job wholesale and did not carry the stage
+    across, so the webhook became the only way anything could enter the
+    ledger — with no schedule, no fallback and no test noticing.
+
+    The consequence was not subtle. One misconfigured webhook (an empty
+    `accountAddresses`, which matches no transactions and so never fires)
+    meant nothing arrived at all, and every downstream stage correctly
+    reported zero: no qualifiers, no signals, no ideas, a brief full of
+    zeros. Everything worked and nothing happened.
+
+    Polling cannot be primary coverage — a few hundred signatures covers
+    seconds at Pump.fun's volume — but it is the difference between a thin
+    trickle and total silence, and between a visible fault and an invisible
+    one.
+    """
+
+    async def test_the_cycle_attempts_ingest(self, seeded, monkeypatch):
+        called = {}
+
+        async def fake_discovery(registry, repo, *, hours=24):
+            called["hours"] = hours
+            return {"launches_seen": 3, "tokens_created": 2}
+
+        import app.pipeline.tracking as tracking
+
+        monkeypatch.setattr(tracking, "run_discovery_stage", fake_discovery)
+
+        from app.config import get_settings
+        from app.scheduling.jobs import _cycle
+
+        result = await _cycle(FakeRegistry(EDITS), FakeRepo(), get_settings(), slot=12)
+
+        assert called, "the cycle computed over the ledger without ever filling it"
+        assert result["discovery"]["tokens_created"] == 2
+
+    async def test_ingest_runs_before_the_work_that_reads_it(self, seeded, monkeypatch):
+        """Order matters: signals, learning and the daily log all compute
+        over the ledger, so a sweep after them lands a cycle late."""
+        order = []
+
+        async def fake_discovery(registry, repo, *, hours=24):
+            order.append("discovery")
+            return {}
+
+        import app.memory.signals as signals_mod
+        import app.pipeline.tracking as tracking
+
+        real_recompute = signals_mod.recompute
+
+        def traced(*args, **kwargs):
+            order.append("signals")
+            return real_recompute(*args, **kwargs)
+
+        monkeypatch.setattr(tracking, "run_discovery_stage", fake_discovery)
+        monkeypatch.setattr(signals_mod, "recompute", traced)
+
+        from app.config import get_settings
+        from app.scheduling.jobs import _cycle
+
+        await _cycle(FakeRegistry(EDITS), FakeRepo(), get_settings(), slot=12)
+
+        assert order[:2] == ["discovery", "signals"]
+
+    async def test_a_failing_sweep_does_not_abort_the_cycle(self, seeded, monkeypatch):
+        """Helius being down must not cost the thinking. There is already a
+        ledger to reason over."""
+        async def boom(registry, repo, *, hours=24):
+            raise RuntimeError("helius unreachable")
+
+        import app.pipeline.tracking as tracking
+
+        monkeypatch.setattr(tracking, "run_discovery_stage", boom)
+
+        from app.config import get_settings
+        from app.scheduling.jobs import _cycle
+
+        result = await _cycle(FakeRegistry(EDITS), FakeRepo(), get_settings(), slot=12)
+
+        assert "error" in result["discovery"]
+        assert result["signals"]["cohorts"] >= 0, "the cycle stopped at the failed stage"
+        assert "learning" in result
+
+
 class TestTheDayBoundary:
     """What actually broke in production on 2026-09-09.
 

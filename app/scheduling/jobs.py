@@ -92,6 +92,7 @@ async def _cycle(
 
     from app.memory import bootstrap, ideas, ledger, rollup, service, signals, snapshot
     from app.memory.learn import learn_from_window
+    from app.pipeline.tracking import run_discovery_stage
     from app.pipeline.watch import enrich_qualified, refresh_tracked_creators
 
     now = datetime.now(timezone.utc)
@@ -113,6 +114,20 @@ async def _cycle(
         except Exception as exc:
             log.warning("cycle_stage_failed", stage=name, error=str(exc), exc_info=True)
             result[name] = {"error": str(exc)[:200]}
+
+    # -- ingest ---------------------------------------------------------------
+    # First, because everything below computes over what it puts in the
+    # ledger. This is a backfill sweep, not primary coverage: Pump.fun's
+    # transaction volume means a few hundred signatures covers seconds, so
+    # polling can never keep up with the webhook and is not meant to.
+    #
+    # It is here because the memory rewrite dropped it and did not replace
+    # it. The old cycle ran discovery as its first stage every six hours; the
+    # new one ran signals, learning and rollups over a ledger that only the
+    # webhook could fill. That made a single misconfigured webhook the
+    # difference between a working system and total silence, with every
+    # downstream stage correctly reporting zero.
+    await stage("discovery", run_discovery_stage(registry, repo, hours=6))
 
     # -- free work ------------------------------------------------------------
     try:
