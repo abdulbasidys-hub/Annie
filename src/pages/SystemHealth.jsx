@@ -239,8 +239,7 @@ function Pipeline({ onRan }) {
  * fixing. Silent when healthy — a banner that is always there is one nobody
  * reads.
  */
-function PipelineStatus() {
-  const state = useApi(() => api.pipelineStatus(), [])
+function PipelineStatus({ state }) {
   const d = state.data
   // An undelivered brief happens on a perfectly healthy pipeline — everything
   // ran and there was nowhere to send it — so it has to keep the panel open
@@ -316,7 +315,16 @@ function WebhookCheck({ pipelineState }) {
   const [error, setError] = useState(null)
   const [repaired, setRepaired] = useState(null)
 
-  if (pipelineState === 'healthy' || pipelineState === 'warming_up') return null
+  // Always rendered, never hidden behind a broken pipeline. It was gated on
+  // `state !== 'healthy'` and that was wrong twice over: a diagnostic you can
+  // only reach while something is already broken cannot be used to confirm a
+  // fix worked, and it cannot answer "is the second launchpad registered?"
+  // on a deployment that is merely receiving less than it should.
+  //
+  // When the stream is fine it collapses to one line and a button, because a
+  // panel shouting about a problem that does not exist is how people learn to
+  // scroll past a page.
+  const stalled = pipelineState && pipelineState !== 'healthy' && pipelineState !== 'warming_up'
 
   const check = async () => {
     setBusy(true)
@@ -347,7 +355,11 @@ function WebhookCheck({ pipelineState }) {
   return (
     <Panel
       title="Is the webhook actually registered?"
-      meta="asks Helius directly"
+      meta={
+        stalled
+          ? 'asks Helius directly — worth checking first, nothing is arriving'
+          : 'asks Helius directly'
+      }
       actions={
         <>
           <button className="btn btn--ghost" onClick={check} disabled={busy}>
@@ -365,10 +377,9 @@ function WebhookCheck({ pipelineState }) {
 
       {!report && !error && (
         <p style={{ margin: 0 }}>
-          Nothing has arrived, and the reason is almost always here rather than in
-          this app. Press Check and it will ask Helius what is registered against
-          your key, compare it to what this deployment expects, and name the
-          difference.
+          {stalled
+            ? 'Nothing is arriving, and the reason is almost always here rather than in this app. Press Check and it will ask Helius what is registered against your key, compare it to what this deployment expects, and name the difference.'
+            : 'Press Check to confirm the registration still points here, carries both launchpad program IDs, and uses a secret this app will accept.'}
         </p>
       )}
 
@@ -526,16 +537,14 @@ function Cost() {
   )
 }
 
-/** Only renders the webhook check when the stream is actually in trouble. */
-function WebhookGate() {
-  const state = useApi(() => api.pipelineStatus(), [])
-  return <WebhookCheck pipelineState={state.data?.state} />
-}
-
 export default function SystemHealth() {
   const health = useApi(() => api.health(), [])
   const capabilities = useApi(() => api.capabilities(), [])
   const quality = useApi(() => api.dataQuality({ days: 14 }), [])
+  // Fetched once here and passed down. The banner and the webhook check both
+  // need it, and fetching it in each meant two identical requests on every
+  // page load plus a flicker as they resolved at different times.
+  const pipeline = useApi(() => api.pipelineStatus(), [])
 
   return (
     <>
@@ -548,9 +557,9 @@ export default function SystemHealth() {
         </p>
       </div>
 
-      <PipelineStatus />
+      <PipelineStatus state={pipeline} />
 
-      <WebhookGate />
+      <WebhookCheck pipelineState={pipeline.data?.state} />
 
       <Cost />
 
