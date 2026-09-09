@@ -40,6 +40,7 @@ from typing import Any
 
 import structlog
 
+from app.annie import voice
 from app.config import Settings
 from app.memory import index, ledger, service, signals
 from app.providers.registry import ProviderRegistry
@@ -184,7 +185,7 @@ async def generate(
         response = await client.chat.completions.create(
             model=settings.openai_reasoning_model,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": await voice.prefix(SYSTEM_PROMPT)},
                 {
                     "role": "user",
                     "content": f"{context}\n\nGive me {max(1, min(count, 4))} idea(s).",

@@ -33,6 +33,7 @@ from typing import Any
 
 import structlog
 
+from app.annie import voice
 from app.config import Settings
 from app.memory import digest as digest_module
 from app.memory import service
@@ -105,8 +106,10 @@ EDIT_SCHEMA: dict[str, Any] = {
     "properties": {
         "headline": {
             "type": "string",
-            "description": "One sentence on what this window actually showed. "
-            "Say 'nothing notable' when that is the truth.",
+            "description": "One sentence on what this window actually showed, "
+            "in your own voice — this is the line that opens the brief the "
+            "operator reads, so it should sound like you and not like a "
+            "status field. Say 'nothing notable' when that is the truth.",
         },
         "edits": {
             "type": "array",
@@ -199,7 +202,7 @@ async def learn_from_window(
         response = await client.chat.completions.create(
             model=settings.openai_reasoning_model,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": await voice.prefix(SYSTEM_PROMPT)},
                 {"role": "user", "content": digest.render()},
             ],
             response_format={

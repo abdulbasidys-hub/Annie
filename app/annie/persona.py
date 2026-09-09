@@ -15,6 +15,7 @@ database" behaves differently.
 from __future__ import annotations
 
 from textwrap import dedent
+from typing import Any
 
 #: The one-line description used in the UI header.
 TAGLINE = "Research assistant. Reads the data, argues with you about it."
@@ -313,6 +314,7 @@ def system_prompt(
     autonomous: bool = False,
     capabilities_note: str = "",
     personality_overrides: dict[str, str] | None = None,
+    personality_source_text: str = "",
 ) -> str:
     """Assemble Annie's system prompt.
 
@@ -341,10 +343,17 @@ def system_prompt(
         FORMATTING,
     ]
 
-    if personality_overrides:
-        configured = _personality_override_section(personality_overrides)
-        if configured:
-            sections.append(configured)
+    if personality_overrides or personality_source_text.strip():
+        # Same renderer the scheduled prompts use, so chat cannot drift into
+        # sounding like a different person from the daily brief.
+        configured = voice_section(
+            personality_overrides, source_text=personality_source_text
+        )
+        # PERSONALITY is already in `sections`; keep only what was configured
+        # on top of it.
+        extra = configured.split("\n\n---\n\n", 1)
+        if len(extra) == 2:
+            sections.append(extra[1])
 
     if autonomous:
         sections.append(
@@ -369,6 +378,41 @@ def system_prompt(
         sections.append(f"# This deployment\n\n{capabilities_note}")
 
     return "\n\n---\n\n".join(sections)
+
+
+def voice_section(
+    overrides: dict[str, Any] | None = None, *, source_text: str = ""
+) -> str:
+    """How Annie sounds — the built-in voice plus whatever is configured.
+
+    Split out of :func:`system_prompt` so the prompts that are not the chat
+    agent can share it. The cycle headline, the launch ideas and the weekly
+    and monthly summaries each had their own "You are Annie" prompt that
+    described a job and never described a voice, so the messages an operator
+    reads without asking sounded nothing like the one they have to go looking
+    for.
+
+    Only the voice travels. The epistemic rules stay in :func:`system_prompt`,
+    because those prompts already carry their own — a notebook-editing prompt
+    does not need to be told how to format a market cap in prose.
+    """
+    parts = [PERSONALITY]
+    if overrides:
+        configured = _personality_override_section(overrides)
+        if configured:
+            parts.append(configured)
+    if source_text.strip():
+        # Verbatim, and after the derived fields so it has the last word. The
+        # five fields are an LLM's extraction from this paragraph, and the
+        # extraction loses precisely what matters here: "dry, a bit sardonic,
+        # never chirpy" becomes tone="dry" and the rest is gone.
+        parts.append(
+            "# How the operator described you\n\n"
+            "In their own words. Where this and the fields above disagree, "
+            "this is what they meant:\n\n"
+            f"{source_text.strip()}"
+        )
+    return "\n\n---\n\n".join(parts)
 
 
 _OVERRIDE_LABELS = {

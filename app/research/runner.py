@@ -102,13 +102,16 @@ async def _execute(
     prior_notes = await repo.list_research_notes(current_only=True, limit=5)
     brief = _task_brief(task, prior_notes)
 
+    overrides = await _personality_overrides(repo)
+    source_text = (overrides or {}).pop("__source_text__", "")
     messages: list[dict[str, Any]] = [
         {
             "role": "system",
             "content": persona.system_prompt(
                 autonomous=True,
                 capabilities_note=_capabilities_note(settings),
-                personality_overrides=await _personality_overrides(repo),
+                personality_overrides=overrides,
+                personality_source_text=source_text,
             ),
         },
         {"role": "user", "content": brief},

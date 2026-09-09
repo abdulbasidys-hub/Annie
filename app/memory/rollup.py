@@ -32,6 +32,7 @@ from typing import Any
 import structlog
 
 from app.config import Settings
+from app.annie import voice
 from app.memory import ledger, service, signals
 from app.memory.files import MemoryStore
 from app.providers.registry import ProviderRegistry
@@ -445,7 +446,10 @@ async def _synthesise(
         response = await client.chat.completions.create(
             model=settings.openai_reasoning_model,
             messages=[
-                {"role": "system", "content": ROLLUP_PROMPT.format(period=period)},
+                {
+                    "role": "system",
+                    "content": await voice.prefix(ROLLUP_PROMPT.format(period=period)),
+                },
                 {"role": "user", "content": body},
             ],
             response_format={

@@ -138,6 +138,10 @@ class AnnieAgent:
         sender_note = _sender_context_note(self.platform_context)
         instructions_note = _standing_instructions_note()
         personality_overrides = await _personality_overrides(self.repo)
+        # Popped before the call rather than inside the argument list: the
+        # two are the same dict, so doing it inline would depend on Python's
+        # left-to-right keyword evaluation to mutate it in time.
+        personality_source = (personality_overrides or {}).pop("__source_text__", "")
         messages: list[dict[str, Any]] = [
             {
                 "role": "system",
@@ -146,6 +150,7 @@ class AnnieAgent:
                         capabilities_note + channel_note + sender_note + instructions_note
                     ),
                     personality_overrides=personality_overrides,
+                    personality_source_text=personality_source,
                 ),
             },
         ]
@@ -1575,6 +1580,10 @@ async def _personality_overrides(repo: FirestoreRepo) -> dict[str, str] | None:
         "skepticism_level": config.skepticism_level,
         "pushback_degree": config.pushback_degree,
         "explanation_style": config.explanation_style,
+        # Carried alongside the derived fields, not instead of them. The five
+        # above are an LLM's extraction from this paragraph and the
+        # extraction is lossy in the one dimension that matters for voice.
+        "__source_text__": config.source_text or "",
     }
 
 
