@@ -97,6 +97,32 @@ broken memory.
 
 ---
 
+## What happens on boot
+
+Deploying is when the correct answer is known — the code and the public URL
+are both right there — and it is also when that answer most often changes.
+So the things that used to need a button converge here instead:
+
+```
+memory restored from the Firestore mirror   only into an empty directory
+scheduler config document repaired          only if its mode no longer matches
+Helius webhook reconciled                   only if the live registration is wrong
+```
+
+Each is a read first and a write only on mismatch, so a healthy redeploy
+changes nothing. The webhook one matters most: every way that registration
+breaks — no `accountAddresses` so the filter matches nothing, a URL left
+pointing at a previous deployment, a missing transaction type covering half
+the market — looks identical from the receiving end, as silence. It is fixed
+automatically rather than reported, because a fix that depends on somebody
+noticing silence is not a fix.
+
+It refuses rather than guesses. With no `RAILWAY_PUBLIC_DOMAIN` or
+`PUBLIC_BASE_URL` it does nothing and says so, because a webhook pointing at
+the wrong host is worse than none — it is silence that looks configured.
+
+---
+
 ## What happens each cycle
 
 Four times a day (00:00 / 06:00 / 12:00 / 18:00 WAT), and **one** model call:

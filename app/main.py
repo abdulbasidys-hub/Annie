@@ -97,6 +97,32 @@ async def _start_bots(settings: Settings) -> None:
         log.info("discord_bot_enabled")
 
 
+async def _reconcile_webhook(settings: Settings) -> None:
+    """Make the Helius registration match this deployment, on every boot.
+
+    The ingest path has exactly one external dependency and every way it
+    breaks looks the same from here: nothing arrives. A registration with no
+    ``accountAddresses`` matches no transactions; one pointing at a previous
+    deployment delivers somewhere else; one missing a transaction type covers
+    half the market. None of them is visible without asking Helius, and all of
+    them are mechanically fixable from what this process already knows.
+
+    So it is fixed here rather than offered as a button. Deploying is the
+    moment the correct answer is known — the code and the public URL are both
+    right here — and it is also the moment the answer most often changes.
+    """
+    from app.providers import helius_webhook
+
+    try:
+        result = await helius_webhook.reconcile(settings)
+    except Exception:
+        # reconcile() does not raise, but boot must not depend on that.
+        log.warning("webhook_reconcile_crashed", exc_info=True)
+        return
+    if result.get("action") not in {"none", "skipped"}:
+        log.info("webhook_reconcile_result", **result)
+
+
 async def _start_scheduler(settings: Settings) -> None:
     """Start the daily job scheduler (see app/scheduling/) as a background
     task in this same process — same reasoning as `_start_bots` above."""
@@ -194,6 +220,12 @@ async def lifespan(app: FastAPI):
     else:
         await _start_bots(settings)
         await _start_scheduler(settings)
+        # Deliberately not awaited: a third-party API must never sit between
+        # this process and serving traffic. It writes only when the live
+        # registration is actually wrong, so the usual case is one GET.
+        _bot_tasks.append(
+            asyncio.create_task(_reconcile_webhook(settings), name="webhook_reconcile")
+        )
 
     yield
 

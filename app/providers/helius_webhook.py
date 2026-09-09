@@ -252,3 +252,95 @@ async def repair(api_key: str, *, base_url: str, secret: str) -> dict[str, Any]:
         "webhook_id": (updated or ours).get("webhookID", webhook_id),
         "url": want_url,
     }
+
+
+def public_base_url() -> str | None:
+    """This deployment's externally-reachable base URL, or None.
+
+    Returning None is a real answer, not a failure to try. The registration
+    tells Helius where to deliver, so a guessed URL does not degrade to "no
+    webhook" — it degrades to "a webhook pointing somewhere wrong", which is
+    indistinguishable from silence and survives until someone thinks to look.
+    Better to do nothing loudly.
+
+    ``RAILWAY_PUBLIC_DOMAIN`` is the platform's own answer and needs no
+    request, which is what makes boot-time reconciliation possible at all;
+    ``PUBLIC_BASE_URL`` is the escape hatch for anywhere else.
+    """
+    import os
+
+    explicit = (os.environ.get("PUBLIC_BASE_URL") or "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+
+    railway = (os.environ.get("RAILWAY_PUBLIC_DOMAIN") or "").strip()
+    if railway:
+        return f"https://{railway}"
+
+    return None
+
+
+async def reconcile(settings, *, base_url: str | None = None) -> dict[str, Any]:
+    """Make the live registration match this deployment. Safe to call on every boot.
+
+    Inspects first and writes only when something is actually wrong, so a
+    correct deployment restarting costs one GET and changes nothing.
+
+    This exists because the alternative was a button. Every failure this
+    repairs — no ``accountAddresses`` so the filter matches nothing, a URL
+    left pointing at a previous deployment, a missing transaction type
+    covering half the market — presents identically from the receiving end,
+    as silence. A fix that depends on someone noticing silence and then
+    remembering which button addresses it is not a fix; it is a standing
+    invitation to the same outage.
+
+    Never raises. A boot must not fail because a third-party API was briefly
+    unreachable, and the next boot reconciles anyway.
+    """
+    if not settings.is_available("blockchain"):
+        return {"action": "skipped", "reason": "HELIUS_API_KEY is not configured"}
+    if not settings.helius_webhook_secret.strip():
+        # Registering without one would set an authHeader this app then
+        # rejects on every delivery: a webhook that looks correct in the
+        # Helius dashboard and 401s everything.
+        log.warning("webhook_reconcile_skipped", reason="HELIUS_WEBHOOK_SECRET is unset")
+        return {"action": "skipped", "reason": "HELIUS_WEBHOOK_SECRET is not set"}
+
+    base = base_url or public_base_url()
+    if not base:
+        log.warning(
+            "webhook_reconcile_skipped",
+            reason="cannot determine this deployment's public URL",
+            fix="set PUBLIC_BASE_URL, or deploy somewhere that sets RAILWAY_PUBLIC_DOMAIN",
+        )
+        return {"action": "skipped", "reason": "public base URL unknown"}
+
+    try:
+        report = await inspect(settings.helius_api_key, base_url=base, secret=settings.helius_webhook_secret)
+    except Exception:
+        log.warning("webhook_reconcile_failed", stage="inspect", exc_info=True)
+        return {"action": "failed", "reason": "could not read the current registration"}
+
+    if report.get("ok"):
+        log.info("webhook_reconciled", action="none", url=expected_url(base))
+        return {"action": "none", "url": expected_url(base)}
+
+    # `points_elsewhere` is deliberately included: webhooks on this key that
+    # serve something else are left alone (repair only ever touches the one
+    # whose URL carries our path), and if none of them is ours, one is created.
+    problems = report.get("problems") or []
+    try:
+        result = await repair(
+            settings.helius_api_key, base_url=base, secret=settings.helius_webhook_secret
+        )
+    except Exception:
+        log.error("webhook_reconcile_failed", stage="repair", problems=problems, exc_info=True)
+        return {"action": "failed", "reason": "repair call failed", "problems": problems}
+
+    log.warning(
+        "webhook_reconciled",
+        action=result.get("action"),
+        url=result.get("url"),
+        fixed=problems,
+    )
+    return {**result, "fixed": problems}
