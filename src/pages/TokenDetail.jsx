@@ -39,7 +39,7 @@ export default function TokenDetail() {
               ← Tokens
             </Link>
             <div className="row gap-3 wrap">
-              <h2 className="page-head__title">{t.symbol || t.name || 'Unnamed'}</h2>
+              <h2 className="page-head__title">{t.symbol || t.name || `${t.mint?.slice(0, 6)}…`}</h2>
               {t.is_qualified ? (
                 <Badge status="verified" variant="outline">
                   Cleared {usd(t.peak_tier)}

@@ -364,7 +364,7 @@ export function TokenLink({ token }) {
   if (!token) return <Value>{null}</Value>
   return (
     <Link to={`/tokens/${token.mint}`} className="row gap-2" style={{ minWidth: 0 }}>
-      <strong className="truncate">{token.symbol || token.name || 'Unnamed'}</strong>
+      <strong className="truncate">{token.symbol || token.name || `${token.mint?.slice(0, 6)}…`}</strong>
       <span className="mono faint">{token.mint.slice(0, 4)}…</span>
     </Link>
   )

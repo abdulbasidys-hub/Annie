@@ -81,7 +81,7 @@ export default function CreatorDetail() {
                         <ClickableRow key={t.mint} to={`/tokens/${t.mint}`}>
                           <td className="primary" data-label="Token">
                             <div className="row gap-2">
-                              <strong>{t.symbol || t.name || 'Unnamed'}</strong>
+                              <strong>{t.symbol || t.name || `${t.mint?.slice(0, 6)}…`}</strong>
                               <CopyableAddress value={t.mint} className="mono faint" />
                             </div>
                           </td>

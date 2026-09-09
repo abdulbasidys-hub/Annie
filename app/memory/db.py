@@ -272,6 +272,44 @@ def today_utc() -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
 
+#: Columns added to an existing table after it shipped, as
+#: ``table -> {column: declaration}``.
+#:
+#: ``CREATE TABLE IF NOT EXISTS`` is a no-op on a database that already has
+#: the table, so a new column in :data:`SCHEMA` reaches a fresh deployment and
+#: never reaches the one with the data in it. On a Railway Volume holding a
+#: live ledger that is the difference between a working feature and a column
+#: that does not exist in the only place it matters.
+#:
+#: Additive only, and deliberately so — no drops, no renames, no type changes.
+#: Anything that could lose a row does not belong in a migration that runs
+#: unattended on every boot.
+_ADDED_COLUMNS: dict[str, dict[str, str]] = {
+    "sightings": {
+        # When metadata was last looked up, whether or not anything came back.
+        # A token DAS has nothing for has to be distinguishable from one never
+        # tried, or the unresolvable ones sit at the front of the queue and
+        # crowd out real winners on every pass.
+        "metadata_checked_at": "TEXT",
+        # Same idea for the deployer walk, which is far more expensive and so
+        # runs in much smaller batches.
+        "deployer_checked_at": "TEXT",
+    },
+}
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    for table, columns in _ADDED_COLUMNS.items():
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if not existing:
+            continue  # table not created yet; SCHEMA will have made it above
+        for name, declaration in columns.items():
+            if name in existing:
+                continue
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
+            log.info("sqlite_column_added", table=table, column=name)
+
+
 def connect() -> sqlite3.Connection:
     """The process-wide connection, created and migrated on first use.
 
@@ -303,6 +341,7 @@ def connect() -> sqlite3.Connection:
 
         for statement in SCHEMA:
             conn.execute(statement)
+        _add_missing_columns(conn)
         try:
             for statement in FTS_SCHEMA:
                 conn.execute(statement)

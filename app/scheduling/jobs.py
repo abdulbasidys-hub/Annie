@@ -49,11 +49,26 @@ log = structlog.get_logger(__name__)
 async def _watch(
     registry: ProviderRegistry, repo: FirestoreRepo, settings, *, slot: int | None = None
 ) -> dict[str, Any]:
-    """Re-price the watchlist. Batched, local, no Firestore."""
-    from app.pipeline.watch import run_watch
+    """Re-price the watchlist, then name whatever just qualified.
+
+    Naming rides this job rather than the six-hourly cycle because it is the
+    same shape of work — one batched provider call over a slice of the
+    ledger — and because six hours is a long time for a winner to sit on the
+    page as "Unnamed". A pass with nothing newly qualified costs one indexed
+    query and no request at all.
+    """
+    from app.pipeline.watch import enrich_qualified, run_watch
 
     run = await run_watch(registry, settings)
-    return run.to_dict()
+    result = run.to_dict()
+    try:
+        result["naming"] = await enrich_qualified(registry, settings)
+    except Exception as exc:
+        # Pricing already succeeded and is the job's actual point; a naming
+        # failure must not discard it.
+        log.warning("watch_naming_failed", error=str(exc), exc_info=True)
+        result["naming"] = {"error": str(exc)[:200]}
+    return result
 
 
 async def _cycle(
@@ -93,7 +108,11 @@ async def _cycle(
     from app.memory import bootstrap, ideas, ledger, rollup, service, signals, snapshot
     from app.memory.learn import learn_from_window
     from app.pipeline.tracking import run_discovery_stage
-    from app.pipeline.watch import enrich_qualified, refresh_tracked_creators
+    from app.pipeline.watch import (
+        enrich_qualified,
+        refresh_tracked_creators,
+        resolve_qualified_creators,
+    )
 
     now = datetime.now(timezone.utc)
     # Told, not guessed. Falls back to the wall clock only for a manual run,
@@ -136,7 +155,11 @@ async def _cycle(
         log.warning("cycle_stage_failed", stage="signals", exc_info=True)
         result["signals"] = {"error": str(exc)[:200]}
 
-    await stage("enrichment", enrich_qualified(registry, settings, limit=25))
+    # Names are also filled every watch pass; this is the catch-up for
+    # anything that arrived between passes, plus the deployer walk, which is
+    # far too expensive to run every ten minutes.
+    await stage("enrichment", enrich_qualified(registry, settings))
+    await stage("deployers", resolve_qualified_creators(registry, settings))
 
     # -- the one paid call ----------------------------------------------------
     window_hours = 24 if is_day_boundary else 6

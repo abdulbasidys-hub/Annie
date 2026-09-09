@@ -130,7 +130,7 @@ export default function Tokens() {
                       <td className="primary" data-label="Token">
                         <div className="row gap-3">
                           <span className="stack" style={{ gap: 0, minWidth: 0 }}>
-                            <strong className="truncate">{t.symbol || 'Unnamed'}</strong>
+                            <strong className="truncate">{t.symbol || t.name || `${t.mint?.slice(0, 6)}…`}</strong>
                             <span className="row gap-1" style={{ minWidth: 0 }}>
                               <span className="faint truncate" style={{ fontSize: 'var(--text-2xs)' }}>
                                 {t.name}

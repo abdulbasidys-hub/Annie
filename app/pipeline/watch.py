@@ -240,19 +240,29 @@ async def _escalate(mint: str, run: WatchRun, settings) -> None:
 
 
 async def enrich_qualified(
-    registry: ProviderRegistry, settings: Settings, *, limit: int = 25
+    registry: ProviderRegistry, settings: Settings, *, limit: int = 300
 ) -> dict[str, Any]:
-    """Fill in on-chain metadata for qualified tokens that are missing it.
+    """Fill in names for qualified tokens that are missing them.
 
-    Only qualified tokens, only the ones still missing a name — a bounded
-    handful per cycle rather than the old "resolve metadata and the real
-    deployer wallet for everything" pass. Metadata matters because the
-    signals engine derives themes from names, so a winner with no name is a
-    winner that teaches nothing; it does not matter at all for the thousands
-    that never traded.
+    Only qualified tokens. Names matter because the signals engine derives
+    themes from them, so a winner with no name is a winner that teaches
+    nothing; they do not matter at all for the thousands that never traded,
+    which is why this does not simply name everything.
 
-    A failed creator lookup means "unknown", never a fallback wallet. The
-    creator-tracking model depends on that being the real deployer.
+    **Batched, and that is the whole point.** This called
+    ``get_token_metadata`` once per mint, 25 mints per six-hour cycle — 100
+    names a day. At real volume roughly 750 tokens clear a tier in a day, so
+    it fell behind within the first afternoon and could never catch up: every
+    page read "Unnamed", the digest fed the model mint addresses instead of
+    names, and every theme signal was computed over empty strings. The adapter
+    has had ``get_token_metadata_batch`` all along (DAS ``getAssetBatch``, 100
+    ids per request), so 300 names is three requests rather than three hundred.
+
+    Every mint considered is stamped whether or not anything came back. A
+    token DAS has nothing for must be distinguishable from one never tried,
+    or the unresolvable ones sit at the head of the queue and crowd out real
+    winners on every pass — the same failure ``mark_checked`` prevents in the
+    pricing loop.
     """
     if not settings.is_available("blockchain"):
         return {"skipped": "helius not configured"}
@@ -262,7 +272,9 @@ async def enrich_qualified(
     rows = db.query(
         """
         SELECT mint FROM sightings
-         WHERE qualified_at IS NOT NULL AND (name IS NULL OR name = '')
+         WHERE qualified_at IS NOT NULL
+           AND (name IS NULL OR name = '')
+           AND metadata_checked_at IS NULL
          ORDER BY qualified_at DESC LIMIT ?
         """,
         (limit,),
@@ -270,37 +282,101 @@ async def enrich_qualified(
     if not rows:
         return {"enriched": 0}
 
-    enriched = failed = 0
+    mints = [row["mint"] for row in rows]
+    try:
+        found = await registry.blockchain.get_token_metadata_batch(mints)
+    except Exception:
+        # Not stamped: a provider outage is not evidence about any mint, and
+        # stamping here would permanently skip everything in this batch.
+        log.warning("qualified_enrichment_failed", mints=len(mints), exc_info=True)
+        return {"enriched": 0, "failed": len(mints), "considered": len(mints)}
+
+    stamp = db.utcnow_iso()
+    enriched = 0
+    for mint in mints:
+        metadata = found.get(mint)
+        if metadata is not None and (metadata.name or metadata.symbol):
+            db.execute(
+                "UPDATE sightings "
+                "   SET name = COALESCE(?, name), symbol = COALESCE(?, symbol), "
+                "       metadata_checked_at = ? "
+                " WHERE mint = ?",
+                (metadata.name, metadata.symbol, stamp, mint),
+            )
+            enriched += 1
+        else:
+            db.execute(
+                "UPDATE sightings SET metadata_checked_at = ? WHERE mint = ?",
+                (stamp, mint),
+            )
+
+    log.info("qualified_enriched", enriched=enriched, considered=len(mints))
+    return {
+        "enriched": enriched,
+        "unresolvable": len(mints) - enriched,
+        "considered": len(mints),
+    }
+
+
+async def resolve_qualified_creators(
+    registry: ProviderRegistry, settings: Settings, *, limit: int = 15
+) -> dict[str, Any]:
+    """Confirm the real deployer for qualified tokens, a few at a time.
+
+    Split out of :func:`enrich_qualified` because the two costs are nothing
+    alike. Names come back a hundred to a request; a deployer needs its own
+    walk to the mint's oldest transaction, one mint at a time. Bundling them
+    meant the cheap half ran at the expensive half's rate.
+
+    The webhook's ``feePayer`` is recorded at ingest and is usually already
+    right. This is for when it is not — a launch paid for by a different
+    wallet than the one that deployed it — and a correction is recorded as a
+    creator movement so the change is visible rather than silent.
+
+    A failed lookup means "unknown", never a fallback wallet. The
+    creator-tracking model depends on that being the real deployer.
+    """
+    if not settings.is_available("blockchain"):
+        return {"skipped": "helius not configured"}
+
+    from app.memory import db
+
+    rows = db.query(
+        """
+        SELECT mint, creator FROM sightings
+         WHERE qualified_at IS NOT NULL AND deployer_checked_at IS NULL
+         ORDER BY qualified_at DESC LIMIT ?
+        """,
+        (limit,),
+    )
+    if not rows:
+        return {"checked": 0, "corrected": 0}
+
+    corrected = failed = 0
     for row in rows:
         mint = row["mint"]
         try:
-            metadata = await registry.blockchain.get_token_metadata(mint)
-            if metadata is None:
-                continue
-            db.execute(
-                "UPDATE sightings SET name = COALESCE(?, name), symbol = COALESCE(?, symbol) "
-                "WHERE mint = ?",
-                (metadata.name, metadata.symbol, mint),
-            )
-            enriched += 1
-        except Exception:
-            failed += 1
-            log.info("qualified_enrichment_failed", mint=mint, exc_info=True)
-
-        try:
             wallet = await registry.blockchain.get_creator_wallet(mint)
         except Exception:
-            wallet = None
-        if wallet:
-            existing = db.query_one("SELECT creator FROM sightings WHERE mint = ?", (mint,))
-            if existing and existing["creator"] != wallet:
-                db.execute("UPDATE sightings SET creator = ? WHERE mint = ?", (wallet, mint))
-                ledger.record_creator_move(
-                    wallet=wallet, mint=mint, kind="deployer_confirmed",
-                    detail="resolved from chain after qualification",
-                )
+            failed += 1
+            log.info("deployer_lookup_failed", mint=mint, exc_info=True)
+            continue
 
-    return {"enriched": enriched, "failed": failed, "considered": len(rows)}
+        db.execute(
+            "UPDATE sightings SET deployer_checked_at = ? WHERE mint = ?",
+            (db.utcnow_iso(), mint),
+        )
+        if wallet and wallet != row["creator"]:
+            db.execute("UPDATE sightings SET creator = ? WHERE mint = ?", (wallet, mint))
+            ledger.record_creator_move(
+                wallet=wallet,
+                mint=mint,
+                kind="deployer_confirmed",
+                detail="resolved from chain after qualification",
+            )
+            corrected += 1
+
+    return {"checked": len(rows), "corrected": corrected, "failed": failed}
 
 
 async def refresh_tracked_creators(*, limit: int = 15) -> dict[str, Any]:
