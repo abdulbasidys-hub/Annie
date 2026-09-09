@@ -270,10 +270,7 @@ function PipelineStatus({ state }) {
       )}
 
       {d.delivery?.status === 'undelivered' && (
-        <p className="modal__warn" style={{ marginTop: 12 }}>
-          <strong>The last brief was written but not sent.</strong> {d.delivery.detail}
-          {d.delivery.fix ? ` ${d.delivery.fix}` : ''}
-        </p>
+        <BriefChannel detail={d.delivery.detail} onSet={state.reload} />
       )}
 
       <dl className="deflist" style={{ marginTop: 'var(--space-4)' }}>
@@ -309,6 +306,83 @@ function PipelineStatus({ state }) {
  * a previous domain, or an authHeader that no longer matches so every
  * delivery 401s — and all three look identical to a quiet market.
  */
+/**
+ * Point the brief at a Discord channel.
+ *
+ * Until this existed the only way was to ask Annie in Discord to create one,
+ * which needs the bot to hold Manage Channels in a guild it shares with you.
+ * Without that permission there was no path at all — the brief was written
+ * every day and went nowhere, and the only sign was a reason buried in a job
+ * result.
+ *
+ * The ID is verified by actually posting to it before anything is saved.
+ * Registering a channel the bot cannot reach would reproduce exactly the
+ * failure this fixes: a configuration that looks right and delivers nothing.
+ */
+function BriefChannel({ detail, onSet }) {
+  const [channelId, setChannelId] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+  const [done, setDone] = useState(false)
+
+  const save = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      await api.setBriefChannel({ channel_id: channelId.trim() })
+      setDone(true)
+      onSet?.()
+    } catch (err) {
+      setError(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (done) {
+    return (
+      <p className="modal__warn" style={{ marginTop: 12 }}>
+        <strong>Set.</strong> A confirmation has been posted to that channel — the next
+        brief will go there. To send today's now, use "Full cycle, as midnight" below.
+      </p>
+    )
+  }
+
+  return (
+    <div className="modal__warn" style={{ marginTop: 12 }}>
+      <p style={{ margin: '0 0 8px' }}>
+        <strong>The last brief was written but not sent.</strong> {detail}
+      </p>
+      <p style={{ margin: '0 0 10px' }}>
+        Paste a channel ID below and Annie will post there from now on. In Discord:
+        User Settings → Advanced → Developer Mode, then right-click the channel →
+        Copy Channel ID. The bot must be in that server with permission to view and
+        post in it.
+      </p>
+      {error && <ErrorState error={error} />}
+      <div className="row gap-2 wrap">
+        <input
+          className="input"
+          style={{ flex: '1 1 220px', minWidth: 0 }}
+          value={channelId}
+          onChange={(e) => setChannelId(e.target.value)}
+          placeholder="1234567890123456789"
+          inputMode="numeric"
+          aria-label="Discord channel ID"
+          onKeyDown={(e) => e.key === 'Enter' && channelId.trim() && !busy && save()}
+        />
+        <button
+          className="btn btn--primary"
+          onClick={save}
+          disabled={busy || !channelId.trim()}
+        >
+          {busy ? 'Checking…' : 'Send briefs here'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function WebhookCheck({ pipelineState }) {
   const [report, setReport] = useState(null)
   const [busy, setBusy] = useState(false)

@@ -6,7 +6,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 from app.api.schemas import CapabilityOut, DataQualityOut, Page, PipelineRunOut, ProviderHealthOut, SettingOut
 from app.config import Settings, get_settings
@@ -276,6 +276,102 @@ async def webhook_repair(
     except helius_webhook.WebhookError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return result
+
+
+@router.get("/brief-channel")
+async def brief_channel(
+    repo: FirestoreRepo = Depends(get_repo),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Where the daily brief and launch ideas get sent, if anywhere.
+
+    Until 2026-09-09 the only way to set this was to ask Annie in Discord to
+    create a channel, which needs the bot to hold Manage Channels in a guild
+    it shares with you. When that permission is missing — or the bot is only
+    in DMs — there was no path at all, and the brief silently went nowhere
+    every single day.
+    """
+    channels = await repo.list_discord_channels()
+    current = next((c for c in channels if c.purpose == "morning_brief"), None)
+    return {
+        "discord_configured": settings.is_available("discord"),
+        "configured": current is not None,
+        "channel": (
+            {"channel_id": current.channel_id, "name": current.name, "guild_id": current.guild_id}
+            if current
+            else None
+        ),
+        "known_channels": [
+            {
+                "channel_id": c.channel_id,
+                "name": c.name,
+                "purpose": c.purpose,
+                "guild_id": c.guild_id,
+            }
+            for c in channels
+        ],
+    }
+
+
+@router.post("/brief-channel")
+async def set_brief_channel(
+    body: dict[str, Any] = Body(...),
+    repo: FirestoreRepo = Depends(get_repo),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Point the brief at a Discord channel by ID.
+
+    Verified by actually posting to it before the record is written.
+    Registering a channel the bot cannot post to would produce exactly the
+    failure being fixed — a configuration that looks correct and delivers
+    nothing — and the confirmation message doubles as a marker in the channel
+    saying what it is now for.
+
+    To get the ID: Discord → User Settings → Advanced → Developer Mode, then
+    right-click the channel → Copy Channel ID.
+    """
+    from app.bots.discord_bot import send_channel_message
+    from app.db.models.discord import DiscordChannel
+
+    if not settings.is_available("discord"):
+        raise HTTPException(
+            status_code=400,
+            detail="DISCORD_BOT_TOKEN is not set, so there is nothing to deliver through.",
+        )
+
+    channel_id = str(body.get("channel_id") or "").strip()
+    if not channel_id.isdigit():
+        raise HTTPException(
+            status_code=422,
+            detail="channel_id must be a Discord channel ID (digits only). Enable "
+            "Developer Mode in Discord, then right-click the channel → Copy Channel ID.",
+        )
+
+    delivered = await send_channel_message(
+        settings.discord_bot_token,
+        channel_id,
+        "**Annie will post the daily brief here.**\n\n"
+        "That is the 00:00 WAT summary of what moved, what she changed her mind "
+        "about, and the day's three launch ideas.",
+    )
+    if not delivered:
+        raise HTTPException(
+            status_code=400,
+            detail="The bot could not post to that channel. Check the ID is right, "
+            "that the bot is in that server, and that it has View Channel and "
+            "Send Messages permission there.",
+        )
+
+    await repo.create_discord_channel(
+        DiscordChannel(
+            channel_id=channel_id,
+            guild_id=str(body.get("guild_id") or ""),
+            name=str(body.get("name") or "brief"),
+            purpose="morning_brief",
+            enabled=True,
+        )
+    )
+    return {"configured": True, "channel_id": channel_id}
 
 
 @router.get("/pipeline-status")

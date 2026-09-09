@@ -214,6 +214,8 @@ export const api = {
     request('POST', '/api/system/run/cycle', { params: { full_day: fullDay || undefined } }),
   cost: () => request('GET', '/api/system/cost'),
   pipelineStatus: () => request('GET', '/api/system/pipeline-status'),
+  briefChannel: () => request('GET', '/api/system/brief-channel'),
+  setBriefChannel: (body) => request('POST', '/api/system/brief-channel', { body }),
   webhookStatus: () => request('GET', '/api/system/webhook'),
   repairWebhook: () => request('POST', '/api/system/webhook/repair'),
   pipelineRun: (id) => request('GET', `/api/system/pipeline-runs/${id}`),

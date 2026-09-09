@@ -297,8 +297,16 @@ the system now uses. **Movers** is what "Tokens" was: the ledger holds what
 moved, not a catalogue of everything seen. Both old URLs redirect, so a
 bookmark or a link Annie wrote into memory before the rename still resolves.
 
-**System Health** is where you check whether the pipeline is actually
-working. It carries a banner naming *why* there is no data — a webhook that
+**System Health** is where the two things that silently stop the system get
+fixed. **"Is the webhook actually registered?"** asks Helius what is
+registered against your key and names any mismatch — wrong URL, missing
+`CREATE_POOL`, an `authHeader` that makes every delivery a 401 — with a
+one-press repair. **The brief channel** is set by pasting a Discord channel
+ID; it is verified by posting to it before anything is saved, because
+registering a channel the bot cannot reach looks correct and delivers
+nothing. Both are reachable whether or not anything is currently broken.
+
+It also checks whether the pipeline is actually working. It carries a banner naming *why* there is no data — a webhook that
 never started, a volume that keeps wiping, a stream that stopped, or a
 deployment that is simply new — because those need completely different
 fixes and produce identical zeros without something classifying them.

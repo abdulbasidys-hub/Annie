@@ -1041,6 +1041,13 @@ const routes = [
 
   // Deliberately a broken registration — the healthy case renders nothing,
   // so the fixture shows the state worth looking at.
+  ['GET', /^\/api\/system\/brief-channel$/, () => ({
+    discord_configured: true, configured: false, channel: null, known_channels: [],
+  })],
+  ['POST', /^\/api\/system\/brief-channel$/, (q, m, body) => ({
+    configured: true, channel_id: body.channel_id,
+  })],
+
   ['GET', /^\/api\/system\/webhook$/, () => ({
     ok: false,
     state: 'misconfigured',
