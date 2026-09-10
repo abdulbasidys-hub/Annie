@@ -8,6 +8,7 @@ import { Freshness, Loading } from './components/primitives.jsx'
 import Login from './pages/Login.jsx'
 import Today from './pages/Today.jsx'
 import Ideas from './pages/Ideas.jsx'
+import Launches from './pages/Launches.jsx'
 import Tokens from './pages/Tokens.jsx'
 import TokenDetail from './pages/TokenDetail.jsx'
 import Trends from './pages/Trends.jsx'
@@ -66,6 +67,7 @@ const NAV = [
     section: 'Evidence',
     items: [
       { to: '/movers', label: 'Movers', icon: '◇', mobile: true },
+      { to: '/launches', label: 'Our launches', icon: '◈', mobile: true },
       { to: '/creators', label: 'Creators', icon: '◔' },
       { to: '/signals', label: 'Signals', icon: '◈', mobile: true },
       { to: '/narratives', label: 'Narratives', icon: '◑' },
@@ -90,6 +92,7 @@ const TITLES = {
   '/memory': 'Memory',
   '/ideas': 'Ideas',
   '/movers': 'Movers',
+  '/launches': 'Our launches',
   '/tokens': 'Movers',
   '/creators': 'Creators',
   '/signals': 'Signals',
@@ -279,6 +282,7 @@ function App({ onLogout }) {
             {/* Same for tokens -> movers: the ledger holds what moved, not a
                 catalogue of everything seen, and the label should say so. */}
             <Route path="/movers" element={<Tokens />} />
+            <Route path="/launches" element={<Launches />} />
             <Route path="/tokens" element={<Navigate to="/movers" replace />} />
             <Route path="/tokens/:mint" element={<TokenDetail />} />
 

@@ -107,7 +107,7 @@ async def _cycle(
 
     from app.memory import bootstrap, ideas, ledger, rollup, service, signals, snapshot
     from app.memory.learn import learn_from_window
-    from app.memory import coins
+    from app.memory import coins, launches
     from app.pipeline.tracking import run_discovery_stage
     from app.pipeline.watch import (
         enrich_qualified,
@@ -166,6 +166,12 @@ async def _cycle(
     # It runs after enrichment because a token with no name cannot be
     # searched for, and before learning so the cycle's thinking can read it.
     await stage("research", coins.run_research(registry, settings))
+
+    # Our own launches, every cycle regardless of what they are worth. There
+    # are never many, which is what makes the full treatment — price, outside
+    # chatter, and a written observation — affordable here and impossible at
+    # ninety a day.
+    await stage("our_launches", launches.run_reviews(registry, settings))
     await stage("deployers", resolve_qualified_creators(registry, settings))
 
     # -- the one paid call ----------------------------------------------------

@@ -64,7 +64,9 @@ IDEA_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "additionalProperties": False,
                 "required": [
-                    "name", "ticker", "description", "image", "angle",
+                    "name", "ticker", "description", "angle",
+                    "image_prompt", "image_style", "image_avoid",
+                    "first_tweet", "tweet_angle",
                     "why_now", "evidence", "grounding", "risk",
                 ],
                 "properties": {
@@ -83,11 +85,54 @@ IDEA_SCHEMA: dict[str, Any] = {
                         "in as-is. One or two lines in the register the token is aiming at — "
                         "not an explanation of the strategy, the actual copy.",
                     },
-                    "image": {
+                    "image_prompt": {
                         "type": "string",
-                        "description": "What the image should show, concretely enough to hand "
-                        "to an artist or an image model. Subject, style, and what it must not "
-                        "look like.",
+                        "description": (
+                            "A prompt ready to paste into an image model as-is. Describe the "
+                            "subject, the composition, the expression or action, and the "
+                            "background. Write it as an instruction to a generator, not as a "
+                            "description of a picture to a person. Memecoin art is read at "
+                            "32 pixels in a list, so say what makes it legible that small: "
+                            "one clear subject, strong silhouette, high contrast."
+                        ),
+                    },
+                    "image_style": {
+                        "type": "string",
+                        "description": (
+                            "The visual register, named specifically enough to be reproducible: "
+                            "'flat vector, thick outlines, four-colour palette', '2003 digital "
+                            "camera photo with flash', 'MS Paint, deliberately crude', "
+                            "'3D render, Pixar lighting'. The style carries as much of the "
+                            "signal as the subject does — a crude drawing and a polished render "
+                            "of the same joke are different tokens."
+                        ),
+                    },
+                    "image_avoid": {
+                        "type": "string",
+                        "description": (
+                            "What would make it look generic or like a scam. Be concrete: "
+                            "'no gold coins, no rocket, no laser eyes, not photoreal'."
+                        ),
+                    },
+                    "first_tweet": {
+                        "type": "string",
+                        "description": (
+                            "The launch post, written to be posted verbatim. Under 240 "
+                            "characters. No hashtags unless the joke needs one, no 'excited to "
+                            "announce', no contract address (that goes in a reply). It has to "
+                            "work as a post on its own merits to someone who has never heard of "
+                            "the token — if it only makes sense to someone already holding, it "
+                            "is not a launch post."
+                        ),
+                    },
+                    "tweet_angle": {
+                        "type": "string",
+                        "description": (
+                            "Why that post works, in one sentence: what makes it shareable, "
+                            "quotable, or worth replying to. If the honest answer is that it "
+                            "does not have a hook, say so — that is a reason to reconsider the "
+                            "whole idea, not a copywriting problem."
+                        ),
                     },
                     "angle": {"type": "string", "description": "The concept, in one or two sentences."},
                     "why_now": {"type": "string", "description": "What in the current market makes this timely."},
@@ -133,6 +178,12 @@ Rules:
   unclaimed corner of that space, not another generic cat.
 - Tickers should look like what actually wins in the data you are shown —
   match the observed shape, not a house style.
+- The strongest grounding available to you is a *catalyst that repeated*.
+  You are shown why recent winners actually moved — a viral clip, a post, a
+  copycat wave — and which of those looked deliberately repeatable. An idea
+  built on a repeatable catalyst is worth more than one built on a theme
+  that merely appears often, because the second tells you what was popular
+  and the first tells you what can be caused.
 - Be concrete. "Animal theme with a twist" is not an idea. Give a name, a
   ticker, the description copy and the image, all ready to use — someone
   should be able to open a launchpad and fill the form from your answer
@@ -175,9 +226,21 @@ async def generate(
     lessons = index.recall(topics=topics, budget=8)
     playbook = [h for h in index.search("what worked launch pattern", limit=4, section="playbook")]
 
+    # Researched causes, repeatable ones first — an idea built on something
+    # that can be caused again beats one built on something that was merely
+    # popular.
+    from app.memory import coins
+
+    reasons = sorted(
+        coins.recent(limit=25),
+        key=lambda r: (not r.repeatable, {"high": 0, "medium": 1}.get(r.confidence, 2)),
+    )
+    instructions = _standing_instructions()
+
     context = _render_context(
         now=now, brief=brief, movers=movers, winning=winning, crowded=crowded,
         rolling_over=rolling_over, words=words, lessons=lessons, playbook=playbook,
+        reasons=reasons, instructions=instructions,
     )
 
     client = await registry.reasoning.raw_client()
@@ -226,6 +289,27 @@ async def generate(
     return payload
 
 
+def _standing_instructions() -> str:
+    """What the operator has told her to keep doing, from `core/instructions.md`.
+
+    The same file the cycle already honours. It is loaded here because
+    naming a coin and writing the launch post are exactly the places an
+    operator has a house style — and a style stated once in chat is useless
+    if the thing that generates the ideas never reads it.
+    """
+    from app.memory import service
+
+    memory = service.read("core/instructions.md")
+    if memory is None:
+        return ""
+    body = memory.body.strip()
+    # Skip the seeded placeholder, which is prose about the file rather than
+    # an instruction and would otherwise read as one.
+    if "no standing instructions" in body.lower():
+        return ""
+    return body[:2000]
+
+
 def _render_context(
     *,
     now: datetime,
@@ -237,6 +321,8 @@ def _render_context(
     words: list[dict[str, Any]],
     lessons: list[index.Hit],
     playbook: list[index.Hit],
+    reasons: list[Any] | None = None,
+    instructions: str = "",
 ) -> str:
     def usd(value: float | None) -> str:
         if not value:
@@ -256,6 +342,21 @@ def _render_context(
                 f"- {m.symbol or m.name or m.mint[:8]} — peak {usd(m.peak_market_cap)}, "
                 f"{m.launchpad or 'unknown pad'}"
             )
+
+    if reasons:
+        # The most actionable block here. Everything above says what was
+        # popular; this says what *caused* it, which is the only part that
+        # can be deliberately reproduced.
+        lines += ["", "## Why recent winners actually moved"]
+        for r in reasons[:12]:
+            flag = "REPEATABLE" if r.repeatable else "one-off"
+            detail = f" — {r.catalyst_detail}" if r.catalyst_detail else ""
+            lines.append(
+                f"- {r.symbol or r.mint[:8]} [{r.category or 'uncategorised'}] "
+                f"{r.catalyst.replace('_', ' ')}{detail} ({flag}, {r.confidence} confidence)"
+            )
+            if r.why_now:
+                lines.append(f"  timing: {r.why_now}")
 
     if winning:
         lines += ["", "## Characteristics over-represented among tokens that cleared a tier"]
@@ -286,6 +387,21 @@ def _render_context(
             "_Nothing relevant recorded yet — this deployment has little history. "
             "Say so, and mark ideas accordingly rather than implying support you "
             "do not have._",
+        ]
+
+
+    if instructions.strip():
+        # Last, and framed as binding. These are the operator's standing
+        # orders on how to name a coin and how to write the post — given
+        # directly, and they outrank the model's own taste.
+        lines += [
+            "",
+            "## Standing instructions from the operator",
+            "",
+            "These are not suggestions. Follow them even where your own "
+            "judgement would differ.",
+            "",
+            instructions.strip(),
         ]
 
     return "\n".join(lines)
@@ -475,10 +591,26 @@ def format_for_delivery(payload: dict[str, Any], *, limit: int = 3) -> str:
         lines += [payload["read_of_the_market"], ""]
 
     for idea in ideas:
+        image = idea.get("image_prompt") or idea.get("image") or ""
+        style = idea.get("image_style") or ""
+        avoid = idea.get("image_avoid") or ""
+        tweet = idea.get("first_tweet") or ""
+
         lines += [
             f"**{idea.get('name')}**  `${idea.get('ticker')}`  _{idea.get('grounding')}_",
             f"{idea.get('description') or idea.get('angle')}",
-            f"· Image: {idea.get('image')}",
+        ]
+        if tweet:
+            # Quoted so it is obvious what is meant to be posted verbatim and
+            # what is Annie talking about it.
+            lines.append(f"> {tweet}")
+        if image:
+            lines.append(f"· Image: {image}")
+        if style:
+            lines.append(f"· Style: {style}")
+        if avoid:
+            lines.append(f"· Avoid: {avoid}")
+        lines += [
             f"· Why now: {idea.get('why_now')}",
             f"· Risk: {idea.get('risk')}",
             "",

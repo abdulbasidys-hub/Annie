@@ -25,6 +25,7 @@ const ROUTES = [
   ['signal-detail', '/signals/ai-narrative-100k'],
   ['signal-thin', '/signals/brand-parody-1m'],
   ['movers', '/movers'],
+  ['launches', '/launches'],
   ['token-detail', '/tokens/NEURxx000000Zk4Qv9Lm2Rt8Wp3Nc7Hb0'],
   ['launchpads', '/launchpads'],
   ['launchpad-detail', '/launchpads/unknown-9fk2mq1a'],

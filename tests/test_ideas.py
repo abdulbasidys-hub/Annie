@@ -18,8 +18,13 @@ IDEA = {
     "name": "Cat Lawyer",
     "ticker": "LAWCAT",
     "description": "objection your honour my bags are down bad",
-    "image": "A tabby in an ill-fitting suit behind a courtroom bench, flat vector, "
-             "muted palette. Not photoreal, not a 3D render.",
+    "image_prompt": "A tabby cat in an ill-fitting grey suit standing behind a "
+                    "courtroom bench, one paw raised mid-objection, flat plain "
+                    "background, single clear subject, strong silhouette.",
+    "image_style": "flat vector, thick outlines, four-colour muted palette",
+    "image_avoid": "no gold coins, no rocket, no laser eyes, not photoreal",
+    "first_tweet": "your honour i object to my bags being down 94%",
+    "tweet_angle": "It is a quotable one-liner that works without knowing the token.",
     "angle": "A cat in a courtroom filing motions on behalf of bag-holders.",
     "why_now": "Cat-adjacent is in its third week and the specific variants clear "
                "at roughly 3x the generic ones.",
@@ -148,8 +153,12 @@ class TestTheFormat:
         result = await ideas.generate(registry, get_settings(), count=2)
 
         idea = result["ideas"][0]
-        for field in ("name", "ticker", "description", "image"):
+        for field in ("name", "ticker", "description"):
             assert idea.get(field), f"{field} missing — the form cannot be filled from this"
+        for field in ("image_prompt", "image_style", "image_avoid"):
+            assert idea.get(field), f"{field} missing — the art cannot be briefed from this"
+        for field in ("first_tweet", "tweet_angle"):
+            assert idea.get(field), f"{field} missing — there is nothing to post"
         for field in ("why_now", "evidence", "grounding", "risk"):
             assert idea.get(field), f"{field} missing — the reasoning is not checkable"
 
@@ -157,7 +166,11 @@ class TestTheFormat:
         """A model that omits the description would produce an idea nobody can
         act on, so the schema refuses it rather than leaving it blank."""
         required = ideas.IDEA_SCHEMA["properties"]["ideas"]["items"]["required"]
-        assert {"name", "ticker", "description", "image"} <= set(required)
+        assert {
+            "name", "ticker", "description",
+            "image_prompt", "image_style", "image_avoid",
+            "first_tweet", "tweet_angle",
+        } <= set(required)
 
     async def test_grounding_is_constrained_to_three_honest_values(self, seeded):
         enum = ideas.IDEA_SCHEMA["properties"]["ideas"]["items"]["properties"]["grounding"]["enum"]
@@ -170,6 +183,7 @@ class TestTheFormat:
         assert "$LAWCAT" in text
         assert "objection your honour" in text, "the description is what gets pasted"
         assert "Image:" in text
+        assert "your honour i object" in text, "the launch post is the point"
         assert "observed" in text
         assert "Avoiding:" in text
 

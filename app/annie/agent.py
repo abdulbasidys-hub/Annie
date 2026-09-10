@@ -492,6 +492,70 @@ async def _tool_why_it_moved(agent: AnnieAgent, args: dict[str, Any]) -> dict[st
     }
 
 
+async def _tool_register_launch(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """Mark a contract address as one of ours.
+
+    From that point the token is exempt from every filter in the system: it
+    is never pruned, it is re-priced ahead of everything else, and it gets a
+    written check-in each cycle whatever it is worth. Ours matter at $4,000
+    exactly as much as at $4M, because what we need from them is the
+    post-mortem rather than a verdict.
+    """
+    from app.memory import launches
+
+    mint = str(args.get("mint") or "").strip()
+    if len(mint) < 32:
+        return {"registered": False, "error": "That does not look like a Solana contract address."}
+
+    launch = await launches.register(
+        mint,
+        name=str(args.get("name") or "").strip(),
+        ticker=str(args.get("ticker") or "").strip().upper(),
+        note=str(args.get("note") or "").strip(),
+        idea_id=args.get("idea_id"),
+    )
+    return {
+        "registered": True,
+        "mint": launch.mint,
+        "ticker": launch.ticker,
+        "memory_path": launch.memory_path,
+        "note": "Tracked from now on. I will check in on it every cycle and "
+                "write what I see to its file.",
+    }
+
+
+async def _tool_our_launches(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """What we have launched, how each is doing, and what the record says."""
+    from app.memory import launches, ledger, service
+
+    mint = str(args.get("mint") or "").strip()
+    if mint:
+        launch = launches.get(mint)
+        if launch is None:
+            return {"found": False, "note": "Not one of ours — I have no launch on that mint."}
+        sighting = ledger.get_sighting(mint)
+        memory = service.read(launches.launch_path(mint))
+        return {
+            "found": True,
+            **launch.to_dict(),
+            "market_cap": sighting.market_cap if sighting else None,
+            "record": (memory.body if memory else "")[:4000],
+        }
+
+    rows = launches.listing(status=(args.get("status") or "").strip() or None, limit=50)
+    out = []
+    for launch in rows:
+        sighting = ledger.get_sighting(launch.mint)
+        out.append({
+            "mint": launch.mint, "ticker": launch.ticker, "name": launch.name,
+            "status": launch.status, "launched_at": launch.launched_at,
+            "checkins": launch.checkins,
+            "market_cap": sighting.market_cap if sighting else None,
+            "peak_market_cap": sighting.peak_market_cap if sighting else None,
+        })
+    return {"count": len(out), "launches": out}
+
+
 async def _tool_coin_categories(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
     """What themes the researched coins actually fall into.
 
@@ -1213,6 +1277,8 @@ _TOOL_HANDLERS = {
     "get_token": _tool_get_token,
     "why_it_moved": _tool_why_it_moved,
     "coin_categories": _tool_coin_categories,
+    "register_launch": _tool_register_launch,
+    "our_launches": _tool_our_launches,
     "live_token_lookup": _tool_live_token_lookup,
     "list_signals": _tool_list_signals,
     "get_signal": _tool_get_signal,
@@ -1458,6 +1524,42 @@ def _tool_specs(settings: Settings, platform_context: PlatformContext | None = N
                     "category": {"type": "string",
                                  "description": "Filter to a theme, e.g. 'ai agent'."},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                },
+            },
+        ),
+        _spec(
+            "register_launch",
+            "Mark a contract address as OUR launch. Use this the moment the operator "
+            "says they have launched something and gives you a CA — it is the trigger "
+            "for everything else. From then on the token is never pruned, is re-priced "
+            "first, and gets a written check-in every cycle no matter how small it is. "
+            "If it came from one of your idea sets, pass idea_id so the file can "
+            "compare what you predicted against what happened.",
+            {
+                "type": "object", "required": ["mint"], "additionalProperties": False,
+                "properties": {
+                    "mint": {"type": "string", "description": "The contract address."},
+                    "name": {"type": "string"},
+                    "ticker": {"type": "string"},
+                    "note": {"type": "string",
+                             "description": "Anything the operator said about it — why "
+                                            "they launched it, what they expect."},
+                    "idea_id": {"type": "integer",
+                                "description": "The idea set it came from, if it did."},
+                },
+            },
+        ),
+        _spec(
+            "our_launches",
+            "What we have launched ourselves, how each is doing, and the written "
+            "record of check-ins. Pass a mint for one launch's full history, or "
+            "nothing for the list. These are OUR coins — distinct from the market "
+            "tokens in search_tokens.",
+            {
+                "type": "object", "additionalProperties": False,
+                "properties": {
+                    "mint": {"type": "string"},
+                    "status": {"type": "string", "enum": ["live", "graduated", "dead", "abandoned"]},
                 },
             },
         ),

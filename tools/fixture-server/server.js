@@ -999,6 +999,70 @@ const routes = [
   })],
 
   // -- Ideas: the only surface that spends anything ------------------------
+  // Our own launches. Deliberately a mixed set: one that ran and gave it
+  // back, one flat, and one closed out — the page has to read honestly when
+  // a launch did nothing, which is the common case.
+  ['GET', /^\/api\/launches$/, () => ({
+    items: [
+      {
+        mint: 'DoiDmTARKwqsxdDVngWe2NEevBUAGz1h3k9F9iApump',
+        ticker: 'LAWCAT', name: 'Cat Lawyer', status: 'live',
+        launched_at: iso(30 * HOUR), checkins: 4,
+        market_cap: 41200, peak_market_cap: 612000,
+        note: 'Third cat variant. Launched off the courtroom clip.',
+      },
+      {
+        mint: 'ZgNHJ6z8cbZEboXvXmxhJ27eVowoP8hgLoAptWypump',
+        ticker: 'NOJOB', name: 'Unemployed Capybara', status: 'live',
+        launched_at: iso(6 * HOUR), checkins: 1,
+        market_cap: 8100, peak_market_cap: 9400,
+        note: '',
+      },
+      {
+        mint: 'GWrzfGMuPpaV31Jkb9vfnxHE9uN3QUWfBemVFzBpump',
+        ticker: 'WOTF', name: 'Worst Of The Fest', status: 'dead',
+        launched_at: iso(96 * HOUR), checkins: 7,
+        market_cap: 0, peak_market_cap: 21000,
+        note: 'Launched a day late into a theme that had already rolled over.',
+      },
+    ],
+    total: 3,
+  })],
+  ['GET', /^\/api\/launches\/([^/]+)$/, (q, m) => ({
+    mint: m[1], ticker: 'LAWCAT', name: 'Cat Lawyer', status: 'live',
+    launched_at: iso(30 * HOUR), checkins: 4,
+    market_cap: 41200, peak_market_cap: 612000,
+    note: 'Third cat variant. Launched off the courtroom clip.',
+    record: [
+      '**Cat Lawyer** — our launch',
+      '',
+      '- CA: `' + m[1] + '`',
+      '- Ticker: $LAWCAT',
+      '- Status: live',
+      '',
+      '## The idea it came from',
+      '',
+      '- Angle: A cat in a courtroom filing motions for bag-holders.',
+      '- Why now: Third week of cat-adjacent, specific variants at ~3x generic.',
+      '- Risk flagged: Week three is usually where a theme saturates.',
+      '',
+      '## Check-ins',
+      '',
+      '### 2026-09-09 18:00 UTC — check-in 3',
+      '',
+      'Peaked at $612k about four hours in and has given back almost all of it. The',
+      'courtroom joke landed — two accounts with real followings quoted the launch',
+      'post — but nothing held it after the first wave sold.',
+      '',
+      '- Traction: fading',
+      '- Working: the one-line launch post got quoted, which is the part to repeat.',
+      '- Change next time: have the second post ready before the first one lands.',
+    ].join('\n'),
+  })],
+  ['POST', /^\/api\/launches$/, (q, m, body) => ({ ...body, status: 'live', checkins: 0 })],
+  ['POST', /^\/api\/launches\/([^/]+)\/review$/, (q, m) => ({
+    mint: m[1], traction: 'fading', observation: 'Nothing has changed since the last check.',
+  })],
   ['GET', /^\/api\/ideas\/context$/, () => ({
     movers: TOKENS.slice(0, 10),
     winning_characteristics: TRENDS.slice(0, 6).map((t) => ({

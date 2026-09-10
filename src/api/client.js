@@ -182,6 +182,11 @@ export const api = {
   signal: (slug) => request('GET', `/api/signals/${slug}`),
 
   // On demand only — this is the one read path that costs a model call.
+  launches: (params) => request('GET', '/api/launches', { params }),
+  launch: (mint) => request('GET', `/api/launches/${mint}`),
+  registerLaunch: (body) => request('POST', '/api/launches', { body }),
+  reviewLaunch: (mint) => request('POST', `/api/launches/${mint}/review`),
+
   generateIdeas: (body) => request('POST', '/api/ideas', { body }),
   latestIdeas: (origin) => request('GET', '/api/ideas/latest', { params: { origin } }),
   ideaHistory: (limit) => request('GET', '/api/ideas/history', { params: { limit } }),

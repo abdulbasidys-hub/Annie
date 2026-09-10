@@ -50,6 +50,12 @@ SECTIONS: dict[str, str] = {
         "One file per notable token: the ones that actually moved. Holds the "
         "CA and the creator wallet so they can be looked up by either."
     ),
+    "launches": (
+        "One file per token we launched ourselves. Unlike everything else "
+        "here these are not filtered by whether they did well — ours matter "
+        "at any market cap, because the point is the post-mortem: what was "
+        "predicted, what happened, and what to change next time."
+    ),
     "narratives": "One file per live narrative/theme Annie is tracking.",
     "playbook": (
         "What has actually worked. The section a launch idea is generated "

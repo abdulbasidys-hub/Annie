@@ -322,12 +322,22 @@ def due_for_check(limit: int, *, tracked_first: bool = True) -> list[Sighting]:
     :data:`WATCH_FLOOR_USD` that has already been checked a few times and
     stayed flat falls off the end naturally.
     """
+    # Ours sort above everything, always. A launch of ours that is flat and
+    # unloved is precisely the one whose price history we most need, and the
+    # ordering below is explicitly designed to starve exactly that shape.
+    ours = _our_launch_mints()
+    ours_clause = (
+        f"CASE WHEN s.mint IN ({', '.join('?' for _ in ours)}) THEN 0 ELSE 1 END,"
+        if ours
+        else ""
+    )
     rows = db.query(
-        """
+        f"""
         SELECT s.* FROM sightings s
         LEFT JOIN creators c ON c.wallet = s.creator
         WHERE s.status IN (?, ?)
         ORDER BY
+            {ours_clause}
             CASE WHEN ? AND COALESCE(c.tracked, 0) = 1 THEN 0 ELSE 1 END,
             CASE WHEN COALESCE(s.market_cap, 0) >= ? THEN 0 ELSE 1 END,
             CASE WHEN s.last_checked IS NULL THEN 0 ELSE 1 END,
@@ -335,7 +345,14 @@ def due_for_check(limit: int, *, tracked_first: bool = True) -> list[Sighting]:
             s.last_seen DESC
         LIMIT ?
         """,
-        (STATUS_WATCHING, STATUS_QUALIFIED, 1 if tracked_first else 0, WATCH_FLOOR_USD, limit),
+        (
+            STATUS_WATCHING,
+            STATUS_QUALIFIED,
+            *ours,
+            1 if tracked_first else 0,
+            WATCH_FLOOR_USD,
+            limit,
+        ),
     )
     return [Sighting.from_row(r) for r in rows]
 
@@ -506,6 +523,32 @@ def stats() -> dict[str, Any]:
 # -----------------------------------------------------------------------------
 
 
+def _our_launch_mints() -> list[str]:
+    """Mints registered as our own. Empty list if the table does not exist yet.
+
+    Imported lazily and defensively: this is called from the prune, which
+    must not fail because a newer table is missing on an older database.
+    """
+    try:
+        from app.memory import launches
+
+        return launches.all_mints()
+    except Exception:  # pragma: no cover - defensive
+        return []
+
+
+def _not_in_clause(mints: list[str]) -> str:
+    """A NOT IN fragment, or nothing at all when there is nothing to exempt.
+
+    Written out rather than always emitting `AND mint NOT IN ()`, which is a
+    syntax error in SQLite rather than a no-op.
+    """
+    if not mints:
+        return ""
+    placeholders = ", ".join("?" for _ in mints)
+    return f"AND mint NOT IN ({placeholders})"
+
+
 def prune(
     *, ttl_hours: int = 48, keep_moves_days: int = 400, keep_qualified_days: int = 150
 ) -> dict[str, int]:
@@ -543,14 +586,23 @@ def prune(
     dead token rows is not how you record a pattern.
     """
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=ttl_hours)).isoformat()
+
+    # Our own launches are exempt from every rule below. They are tracked
+    # because we said so, not because they cleared a bar, and a launch of
+    # ours matters at $4,000 exactly as much as at $4M — what we need from
+    # it is the post-mortem, which a pruned row cannot provide.
+    ours = _our_launch_mints()
+    exempt = _not_in_clause(ours)
+
     dropped = db.execute(
-        """
+        f"""
         DELETE FROM sightings
          WHERE qualified_at IS NULL
            AND last_seen < ?
            AND COALESCE(peak_market_cap, 0) < ?
+           {exempt}
         """,
-        (cutoff, WATCH_FLOOR_USD),
+        (cutoff, WATCH_FLOOR_USD, *ours),
     ).rowcount or 0
 
     # Ordered after the cheap delete so the expensive one sees fewer rows.
@@ -559,24 +611,26 @@ def prune(
     # not a scan, and it runs once a cycle.
     stale_cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_qualified_days)).isoformat()
     expired = db.execute(
-        """
+        f"""
         DELETE FROM sightings
          WHERE qualified_at IS NOT NULL
            AND qualified_at < ?
            AND mint NOT IN (SELECT key FROM doc_keys)
+           {exempt}
         """,
-        (stale_cutoff,),
+        (stale_cutoff, *ours),
     ).rowcount or 0
 
     move_cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_moves_days)).isoformat()
     old_moves = db.execute("DELETE FROM moves WHERE at < ?", (move_cutoff,)).rowcount or 0
 
     faded = db.execute(
-        """
+        f"""
         UPDATE sightings SET status = ?
          WHERE status = ? AND last_seen < ? AND COALESCE(peak_market_cap, 0) < ?
+           {exempt}
         """,
-        (STATUS_FADED, STATUS_WATCHING, cutoff, WATCH_FLOOR_USD),
+        (STATUS_FADED, STATUS_WATCHING, cutoff, WATCH_FLOOR_USD, *ours),
     ).rowcount or 0
 
     points = db.execute(
