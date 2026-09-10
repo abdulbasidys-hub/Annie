@@ -33,7 +33,10 @@ export default function Tokens() {
   const [query, setQuery] = useState('')
   const [tier, setTier] = useState('')
   const [hours, setHours] = useState(168)
-  const [qualifiedOnly, setQualifiedOnly] = useState(false)
+  // Defaults to on. A token that traded but never cleared $100k is a row in
+  // the ledger, not a subject — showing hundreds of them buried the ~90 a day
+  // that actually mean something. The filter is still there to turn off.
+  const [qualifiedOnly, setQualifiedOnly] = useState(true)
   const debounced = useDebounced(query, 300)
 
   const state = useApi(

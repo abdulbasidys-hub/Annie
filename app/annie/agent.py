@@ -423,7 +423,11 @@ async def _tool_search_tokens(agent: AnnieAgent, args: dict[str, Any]) -> dict[s
     """
     from app.memory import ledger
 
-    limit = min(int(args.get("limit") or 10), 25)
+    # 25 was the cap that made her answer "I only have the numbers" when asked
+    # to list a day's tier-crossers: about ninety clear one on a normal day, so
+    # the tool could physically never return them all. The rows are local
+    # SQLite and tiny; the real bound is the model's context, not the ledger.
+    limit = min(int(args.get("limit") or 10), 250)
     hours = min(int(args.get("hours") or 24), 720)
     floor = float(args.get("min_market_cap_usd") or ledger.WATCH_FLOOR_USD)
 
@@ -1366,10 +1370,14 @@ def _tool_specs(settings: Settings, platform_context: PlatformContext | None = N
         ),
         _spec(
             "search_tokens",
-            "Tokens that actually moved, from the ledger. Note this does NOT cover the "
-            "thousands of launches a day that never traded — those are seen, then "
-            "forgotten within 48 hours. For a specific mint that is not here, use "
-            "live_token_lookup.",
+            "Tokens that actually moved, from the ledger. Use this to answer "
+            "\"which coins crossed a tier\" for any window — with qualified_only "
+            "and a high enough limit it returns every one of them, not a sample, "
+            "so never tell someone you only have the count. Roughly 90 clear a "
+            "tier on a normal day. Note this does NOT cover the thirty-odd "
+            "thousand launches a day that never traded — those are seen, then "
+            "forgotten within 48 hours. For a specific mint that is not here, "
+            "use live_token_lookup.",
             {
                 "type": "object", "additionalProperties": False,
                 "properties": {
@@ -1378,7 +1386,9 @@ def _tool_specs(settings: Settings, platform_context: PlatformContext | None = N
                     "qualified_only": {"type": "boolean", "description": "Only ones that cleared a tier."},
                     "min_market_cap_usd": {"type": "number"},
                     "launchpad_slug": {"type": "string"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 25},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 250,
+                              "description": "Default 10. Raise it to list a whole "
+                                             "day's qualifiers rather than a sample."},
                 },
             },
         ),
