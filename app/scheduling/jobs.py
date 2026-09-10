@@ -107,6 +107,7 @@ async def _cycle(
 
     from app.memory import bootstrap, ideas, ledger, rollup, service, signals, snapshot
     from app.memory.learn import learn_from_window
+    from app.memory import coins
     from app.pipeline.tracking import run_discovery_stage
     from app.pipeline.watch import (
         enrich_qualified,
@@ -159,6 +160,12 @@ async def _cycle(
     # anything that arrived between passes, plus the deployer walk, which is
     # far too expensive to run every ten minutes.
     await stage("enrichment", enrich_qualified(registry, settings))
+
+    # Why each of them moved. Bounded per cycle and idempotent per mint, so
+    # once the queue is drained this costs only what new qualifiers cost.
+    # It runs after enrichment because a token with no name cannot be
+    # searched for, and before learning so the cycle's thinking can read it.
+    await stage("research", coins.run_research(registry, settings))
     await stage("deployers", resolve_qualified_creators(registry, settings))
 
     # -- the one paid call ----------------------------------------------------

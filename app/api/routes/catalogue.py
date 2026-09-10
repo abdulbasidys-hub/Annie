@@ -64,6 +64,29 @@ def _sighting_summary(sighting: Any) -> dict[str, Any]:
             and sighting.market_cap < sighting.peak_market_cap * 0.5
         ),
         "themes": _themes(sighting.name, sighting.symbol),
+        # The researched half. `themes` above are seeded-vocabulary matches
+        # against the name; this is what the coin actually was and why anyone
+        # bought it. None until the next cycle's research pass reaches it.
+        **_research_summary(sighting.mint),
+    }
+
+
+def _research_summary(mint: str) -> dict[str, Any]:
+    from app.memory import coins
+
+    record = coins.get(mint)
+    if record is None:
+        return {"researched": False}
+    return {
+        "researched": True,
+        "why_it_moved": record.why_it_moved,
+        "catalyst": record.catalyst,
+        "catalyst_detail": record.catalyst_detail,
+        "why_now": record.why_now,
+        "category": record.category,
+        "confidence": record.confidence,
+        "repeatable": record.repeatable,
+        "sources": record.sources[:5],
     }
 
 

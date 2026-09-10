@@ -455,8 +455,58 @@ async def _tool_search_tokens(agent: AnnieAgent, args: dict[str, Any]) -> dict[s
     }
 
 
+async def _tool_why_it_moved(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """The researched reason a coin ran — the question the numbers cannot answer.
+
+    Either for one mint, or across a window so "what drove yesterday's
+    movers" is answerable as a set of causes rather than a list of tickers.
+    """
+    from app.memory import coins
+
+    mint = (args.get("mint") or "").strip()
+    if mint:
+        record = coins.get(mint)
+        if record is None:
+            return {
+                "found": False,
+                "note": "No research on that mint. Either it never cleared a "
+                        "tier, or it qualified within the last few hours and "
+                        "the next cycle has not reached it yet.",
+            }
+        return {"found": True, **record.to_dict()}
+
+    limit = min(int(args.get("limit") or 20), 100)
+    found = coins.recent(limit=limit, category=(args.get("category") or "").strip() or None)
+    return {
+        "count": len(found),
+        "coins": [
+            {
+                "mint": r.mint, "symbol": r.symbol, "name": r.name,
+                "peak_market_cap": r.peak_market_cap, "category": r.category,
+                "catalyst": r.catalyst, "catalyst_detail": r.catalyst_detail,
+                "why_it_moved": r.why_it_moved, "why_now": r.why_now,
+                "repeatable": r.repeatable, "confidence": r.confidence,
+            }
+            for r in found
+        ],
+    }
+
+
+async def _tool_coin_categories(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """What themes the researched coins actually fall into.
+
+    Distinct from `list_signals`, which matches names against a seeded
+    vocabulary and therefore cannot see a theme nobody thought to seed.
+    These labels come from having read what each coin was.
+    """
+    from app.memory import coins
+
+    hours = min(int(args.get("hours") or 168), 2160)
+    return {"window_hours": hours, "categories": coins.categories(since_hours=hours)}
+
+
 async def _tool_get_token(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
-    """Everything Annie holds about one mint: ledger row plus any memory.
+    """Everything Annie holds about one mint: ledger row, research, memory.
 
     The memory half is the interesting one — if this token was worth writing
     about, the file carries her actual reasoning, not just numbers.
@@ -1161,6 +1211,8 @@ _TOOL_HANDLERS = {
     "delete_memory": _tool_delete_memory,
     "search_tokens": _tool_search_tokens,
     "get_token": _tool_get_token,
+    "why_it_moved": _tool_why_it_moved,
+    "coin_categories": _tool_coin_categories,
     "live_token_lookup": _tool_live_token_lookup,
     "list_signals": _tool_list_signals,
     "get_signal": _tool_get_signal,
@@ -1389,6 +1441,38 @@ def _tool_specs(settings: Settings, platform_context: PlatformContext | None = N
                     "limit": {"type": "integer", "minimum": 1, "maximum": 250,
                               "description": "Default 10. Raise it to list a whole "
                                              "day's qualifiers rather than a sample."},
+                },
+            },
+        ),
+        _spec(
+            "why_it_moved",
+            "The researched reason a coin ran — catalyst, the specific thing behind "
+            "it, why that moment, and whether the setup is repeatable. This is the "
+            "question the ledger cannot answer, so reach for it whenever someone "
+            "asks why rather than what. Pass a mint for one coin, or leave it out "
+            "for the most recently researched across all of them.",
+            {
+                "type": "object", "additionalProperties": False,
+                "properties": {
+                    "mint": {"type": "string", "description": "One coin's contract address."},
+                    "category": {"type": "string",
+                                 "description": "Filter to a theme, e.g. 'ai agent'."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                },
+            },
+        ),
+        _spec(
+            "coin_categories",
+            "What themes the researched coins fall into, most common first, with how "
+            "many of each looked deliberately repeatable. Different from list_signals: "
+            "signals match names against a seeded vocabulary and cannot see a theme "
+            "nobody thought to seed, whereas these come from having read what each "
+            "coin actually was.",
+            {
+                "type": "object", "additionalProperties": False,
+                "properties": {
+                    "hours": {"type": "integer", "minimum": 1, "maximum": 2160,
+                              "description": "Window. Default 168 (a week)."},
                 },
             },
         ),

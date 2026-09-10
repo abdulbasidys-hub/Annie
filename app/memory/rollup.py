@@ -274,6 +274,29 @@ async def write_token_memory(mint: str, *, note: str = "") -> str | None:
             f"- Round-tripped: currently {_usd(token.market_cap)}, "
             f"{100 * (1 - token.market_cap / token.peak_market_cap):.0f}% off peak"
         )
+    # The researched half, when there is one. This is what makes a contract
+    # address pasted into chat resolve to a reason rather than a row — the
+    # numbers above were always available from the ledger.
+    from app.memory import coins
+
+    research = coins.get(mint)
+    if research and research.why_it_moved:
+        lines += ["", "## Why it moved", "", research.why_it_moved]
+        detail = [f"- Catalyst: {research.catalyst.replace('_', ' ')}"]
+        if research.catalyst_detail:
+            detail.append(f"- Specifically: {research.catalyst_detail}")
+        if research.why_now:
+            detail.append(f"- Why then: {research.why_now}")
+        if research.category:
+            detail.append(f"- Category: {research.category}")
+        detail.append(
+            f"- Repeatable: {'yes' if research.repeatable else 'no'} "
+            f"(confidence {research.confidence})"
+        )
+        lines += ["", *detail]
+        if research.sources:
+            lines += ["", "Sources:"] + [f"- {u}" for u in research.sources[:5]]
+
     if note:
         lines += ["", note]
 
@@ -283,7 +306,8 @@ async def write_token_memory(mint: str, *, note: str = "") -> str | None:
         body="\n".join(lines),
         title=f"{token.symbol or token.name or mint[:8]} ({mint[:6]}…)",
         kind="token",
-        tags=["token", token.launchpad or "unknown-pad"],
+        tags=["token", token.launchpad or "unknown-pad"]
+        + ([research.category] if research and research.category else []),
         keys=[mint] + ([token.creator] if token.creator else []) + (
             [token.symbol.lower()] if token.symbol else []
         ),

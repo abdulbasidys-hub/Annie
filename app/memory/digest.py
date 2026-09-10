@@ -146,10 +146,24 @@ class CycleDigest:
 
         if self.newly_qualified:
             lines += ["", "## Newly qualified this window"]
+            # The researched reason travels with each one. Without it the
+            # cycle can only ever notice that things moved, which is how a
+            # notebook fills up with counts instead of causes.
+            from app.memory import coins
+
             for m in self.newly_qualified:
-                lines.append(
-                    f"- {m.symbol or m.mint[:8]} crossed {_usd(m.tier)}, peak {_usd(m.peak_market_cap)}"
+                line = (
+                    f"- {m.symbol or m.mint[:8]} crossed {_usd(m.tier)}, "
+                    f"peak {_usd(m.peak_market_cap)}"
                 )
+                research = coins.get(m.mint)
+                if research and research.why_it_moved:
+                    line += (
+                        f" — {research.catalyst.replace('_', ' ')}"
+                        f"{': ' + research.catalyst_detail if research.catalyst_detail else ''}"
+                        f" [{research.category or 'uncategorised'}]"
+                    )
+                lines.append(line)
 
         if self.busy_creators:
             lines += ["", "## Creators launching most"]
