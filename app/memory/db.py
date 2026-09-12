@@ -297,6 +297,11 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         # The links from the token's own metadata. Kept because what a
         # launch *built* is evidence in its own right: the site a winner
         # shipped says more about what is working than its ticker does.
+        # When this token's market first existed, from the price provider.
+        # The only cheap way to tell a launch from a revival: the webhook
+        # cannot, because a pool opening for a three-year-old coin and a
+        # brand-new token look identical to it.
+        "first_pair_at": "TEXT",
         "website": "TEXT",
         "twitter": "TEXT",
         "telegram": "TEXT",

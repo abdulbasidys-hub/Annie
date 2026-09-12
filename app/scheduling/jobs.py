@@ -286,24 +286,44 @@ async def _deliver_brief(
     qualified = ledger.qualified_in_window(now - timedelta(hours=window_hours), now)
     fresh = coins.unreported(qualified, day=day)
 
-    if fresh:
-        lines.append(f"**New this window — {len(fresh)} crossed a tier**")
+    # Split, because they answer different questions. A launch tells you what
+    # someone shipped today and it worked; a revival tells you an event moved
+    # a coin that has existed for years. Only the first is a thing to copy,
+    # and mixing them was what put RAY and Bonk in a brief as new launches.
+    launches = [t for t in fresh if not t.is_revival]
+    revivals = [t for t in fresh if t.is_revival]
+
+    if launches:
+        lines.append(f"**Launched and moved — {len(launches)} of them**")
         lines.append("")
-        for token in fresh[:8]:
+        for token in launches[:8]:
             lines += _token_block(token)
-        if len(fresh) > 8:
+        if len(launches) > 8:
             lines.append(
-                f"…and {len(fresh) - 8} more. Ask me for the full list — "
+                f"…and {len(launches) - 8} more. Ask me for the full list — "
                 f"I have every one with its reason."
             )
         lines.append("")
-    elif qualified:
+
+    if revivals:
+        lines.append(f"**Older coins running again — {len(revivals)}**")
+        lines.append(
+            "_Not launches. Something brought people back to these._"
+        )
+        lines.append("")
+        for token in revivals[:4]:
+            lines += _token_block(token)
+        if len(revivals) > 4:
+            lines.append(f"…and {len(revivals) - 4} more.")
+            lines.append("")
+
+    if not fresh and qualified:
         lines += [
             f"Nothing new crossed a tier this window. The {len(qualified)} in the "
             f"last {window_hours}h were all in earlier briefs.",
             "",
         ]
-    else:
+    elif not fresh:
         lines += ["Nothing crossed a tier this window.", ""]
 
     coins.mark_briefed([t.mint for t in fresh], day=day)
@@ -358,6 +378,10 @@ def _token_block(token: Any) -> list[str]:
 
     name = token.symbol or token.name or token.mint[:8]
     head = f"**{name}** — {_usd(token.peak_market_cap)}"
+    if token.is_revival and token.age_days:
+        years = token.age_days / 365
+        age = f"{years:.1f}y old" if years >= 1 else f"{token.age_days:.0f}d old"
+        head += f" · {age}"
 
     research = coins.get(token.mint)
     out = [head]

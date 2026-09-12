@@ -202,14 +202,15 @@ class TestWatchLoop:
 
 
 
-class TestAnOldTokenIsNotANewLaunch:
-    """The second layer, and the one that does not depend on Helius labels.
+class TestALaunchIsNotARevival:
+    """An old coin running again is real, and it is not a launch.
 
-    A token's pair creation date rides the price response we already fetch,
-    so this costs nothing. It is what catches an established token that
-    reaches the ledger by any route — a relabelled event, a new launchpad,
-    the polling backfill — and stops it clearing a tier on a market cap it
-    reached three years ago.
+    Helius fires CREATE_POOL for any pool creation, so RAY (2022), Bonk
+    (2022), WBTC, $WIF and TRUMP all arrived indistinguishable from new
+    tokens and went into a brief as launches. The fix is not to refuse them:
+    an event that makes people come back to a three-year-old coin is exactly
+    the kind of thing worth knowing before launching something. The fix is to
+    say which is which.
     """
 
     @staticmethod
@@ -241,136 +242,69 @@ class TestAnOldTokenIsNotANewLaunch:
 
         return FakeRegistry()
 
-    async def test_a_three_year_old_token_does_not_qualify(self, isolated_memory):
+    async def _run(self, age_days):
         from app.config import get_settings
         from app.pipeline import watch
 
         stream.ingest_many([_launch(1)])
         mint = f"Mint{1:040d}"
-
         run = await watch.run_watch(
-            self._market(mint, age_days=1200), get_settings(), batch_size=5
+            self._market(mint, age_days=age_days), get_settings(), batch_size=5
         )
+        return mint, run
 
-        assert run.newly_qualified == [], "an established token qualified as a launch"
-        assert run.too_old == 1
-        assert ledger.get_sighting(mint).qualified_at is None
-
-    async def test_a_token_launched_today_qualifies(self, isolated_memory):
-        from app.config import get_settings
-        from app.pipeline import watch
-
-        stream.ingest_many([_launch(1)])
-        mint = f"Mint{1:040d}"
-
-        run = await watch.run_watch(
-            self._market(mint, age_days=0.2), get_settings(), batch_size=5
-        )
+    async def test_a_three_year_old_coin_still_qualifies(self, isolated_memory):
+        """It really did reach that market cap today."""
+        mint, run = await self._run(1200)
 
         assert run.newly_qualified == [mint]
-        assert run.too_old == 0
-
-    async def test_a_slow_burner_inside_the_window_still_counts(self, isolated_memory):
-        """A token that takes three weeks to run is still a launch."""
-        from app.config import get_settings
-        from app.pipeline import watch
-
-        stream.ingest_many([_launch(1)])
-        mint = f"Mint{1:040d}"
-
-        run = await watch.run_watch(
-            self._market(mint, age_days=21), get_settings(), batch_size=5
-        )
-
-        assert run.newly_qualified == [mint]
-
-    async def test_an_unknown_age_is_not_treated_as_old(self, isolated_memory):
-        """Refusing on missing data would silently drop real launches every
-        time the provider omitted the field."""
-        from app.config import get_settings
-        from app.pipeline import watch
-
-        stream.ingest_many([_launch(1)])
-        mint = f"Mint{1:040d}"
-
-        run = await watch.run_watch(
-            self._market(mint, age_days=None), get_settings(), batch_size=5
-        )
-
-        assert run.newly_qualified == [mint]
-
-    async def test_a_token_that_qualified_before_the_check_is_withdrawn(
-        self, isolated_memory
-    ):
-        """Production already held RAY, Bonk and $WIF as qualified launches.
-        The check is about what a token *is*, so those have to stop being
-        listed — this is the only place qualification is ever withdrawn."""
-        from app.config import get_settings
-        from app.memory import db
-        from app.pipeline import watch
-
-        stream.ingest_many([_launch(1)])
-        mint = f"Mint{1:040d}"
-        db.execute(
-            "UPDATE sightings SET qualified_at = ?, tier = 100000 WHERE mint = ?",
-            ("2026-09-01T00:00:00", mint),
-        )
-
-        await watch.run_watch(
-            self._market(mint, age_days=1200), get_settings(), batch_size=5
-        )
-
-        assert ledger.get_sighting(mint).qualified_at is None
-
-    async def test_a_real_launch_keeps_its_tier_when_the_price_falls(
-        self, isolated_memory
-    ):
-        """Withdrawal is only ever for age. A token that ran and came back
-        down genuinely did clear the tier."""
-        from app.config import get_settings
-        from app.pipeline import watch
-
-        stream.ingest_many([_launch(1)])
-        mint = f"Mint{1:040d}"
-        await watch.run_watch(
-            self._market(mint, age_days=1), get_settings(), batch_size=5
-        )
         assert ledger.get_sighting(mint).qualified_at is not None
 
-        from app.providers.types import MarketQuote, Provenance as P
+    async def test_but_it_is_marked_a_revival(self, isolated_memory):
+        mint, run = await self._run(1200)
 
-        class Crashed:
-            async def get_quotes(self, mints):
-                return {mint: MarketQuote(
-                    mint=mint,
-                    provenance=P(provider="dexscreener", operation="pair",
-                                 observed_at=datetime.now(timezone.utc)),
-                    market_cap=Decimal("900"), liquidity_usd=Decimal("400000"),
-                    pair_created_at=datetime.now(timezone.utc),
-                )}
+        sighting = ledger.get_sighting(mint)
+        assert sighting.is_revival is True
+        assert run.revivals == 1
+        assert sighting.age_days > 1000
 
-        class Reg:
-            market_primary = Crashed()
+    async def test_a_token_launched_today_is_a_launch(self, isolated_memory):
+        mint, run = await self._run(0.2)
 
-        await watch.run_watch(Reg(), get_settings(), batch_size=5)
+        assert ledger.get_sighting(mint).is_revival is False
+        assert run.revivals == 0
 
-        assert ledger.get_sighting(mint).qualified_at is not None
-
-    async def test_the_price_is_still_recorded_for_an_old_token(
+    async def test_a_slow_burner_inside_the_window_is_still_a_launch(
         self, isolated_memory
     ):
-        """It is not a launch, but the measurement is still true."""
+        """Three weeks to run is normal. The line is about identity, not
+        speed."""
+        mint, _ = await self._run(21)
+
+        assert ledger.get_sighting(mint).is_revival is False
+
+    async def test_an_unknown_age_reads_as_a_launch(self, isolated_memory):
+        """Refusing to call anything a launch without a date would empty the
+        thing the operator actually reads."""
+        mint, _ = await self._run(None)
+
+        assert ledger.get_sighting(mint).is_revival is False
+        assert ledger.get_sighting(mint).age_days is None
+
+    async def test_the_age_is_kept_from_the_first_reading(self, isolated_memory):
+        """A later pair opening must not make an old coin look young."""
+        mint, _ = await self._run(1200)
+        first = ledger.get_sighting(mint).first_pair_at
+
         from app.config import get_settings
         from app.pipeline import watch
 
-        stream.ingest_many([_launch(1)])
-        mint = f"Mint{1:040d}"
-
         await watch.run_watch(
-            self._market(mint, age_days=1200), get_settings(), batch_size=5
+            self._market(mint, age_days=0.1), get_settings(), batch_size=5
         )
 
-        assert ledger.get_sighting(mint).peak_market_cap == 9_000_000
+        assert ledger.get_sighting(mint).first_pair_at == first
+        assert ledger.get_sighting(mint).is_revival is True
 
 
 class TestTheMemoryBar:

@@ -174,34 +174,21 @@ _NON_MEMECOIN_MINTS = frozenset(
 )
 
 
-#: Event sources that genuinely mean "a token was just created".
+#: Sources whose events are about a token that already existed.
 #:
-#: `CREATE_POOL` on its own does not: Helius fires it whenever a *pool* is
-#: created, which includes an established token opening a new market. Left
-#: unfiltered, RAY (2022), Bonk (2022), WBTC, $WIF and TRUMP all arrived
-#: looking like brand-new launches, were priced at the market caps they
-#: reached years ago, and cleared a tier instantly — 7 of the 10 most recent
-#: qualifiers on production were tokens over 100 days old.
-#:
-#: `PUMP_AMM` is the one to notice: that is a Pump.fun token *migrating* off
-#: its bonding curve, an event about a token that already existed.
-LAUNCH_SOURCES = {"PUMP_FUN", "RAYDIUM_LAUNCHLAB"}
+#: Only PUMP_AMM is dropped, and only because it is a duplicate: a Pump.fun
+#: token graduating off its bonding curve is one we recorded at CREATE
+#: already. Everything else is kept, including pool creations for tokens
+#: years old — those are *revivals*, and a revival is a real market event
+#: worth seeing. It is classified by age in the watch loop rather than
+#: refused here, because "an event made people come back to this" is exactly
+#: the kind of thing worth knowing before launching something.
+ALREADY_KNOWN_SOURCES = {"PUMP_AMM"}
 
 
 def _is_a_launch(event: dict[str, Any]) -> bool:
-    """Whether this event is a token being created rather than a pool.
-
-    Unknown sources are accepted. A new launchpad appearing should show up as
-    unlabelled launches to investigate, not as silence — and the market-cap
-    age check in the watch loop catches anything old that slips through.
-    """
-    source = str(event.get("source") or "").upper()
-    if not source:
-        return True
-    if source in LAUNCH_SOURCES:
-        return True
-    # Explicitly known to be about an existing token.
-    return source not in {"PUMP_AMM", "RAYDIUM", "ORCA", "METEORA", "JUPITER"}
+    """Whether this event is worth storing at all."""
+    return str(event.get("source") or "").upper() not in ALREADY_KNOWN_SOURCES
 
 
 def _parse_token_mint(event: dict[str, Any]) -> TokenLaunch | None:

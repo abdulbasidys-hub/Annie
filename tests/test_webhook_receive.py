@@ -112,19 +112,19 @@ class TestADeliveryLands:
 
 
 
-class TestAPoolIsNotALaunch:
-    """The bug that put RAY, Bonk, WBTC, $WIF and TRUMP in a brief.
+class TestWhatIngestKeeps:
+    """Almost everything, now.
 
-    Helius fires CREATE_POOL whenever a *pool* is created, and that includes
-    an established token opening a new market. Those arrived as brand-new
-    launches, were priced at market caps they reached years ago, and cleared
-    a tier instantly — 7 of the 10 most recent qualifiers on production were
-    over 100 days old, several over three years.
+    An earlier fix dropped every pool-creation source, which also threw away
+    revivals — an event bringing people back to a three-year-old coin is a
+    real signal and worth seeing. Age is decided in the watch loop, where the
+    pair's creation date is already in hand; ingest only drops what is
+    genuinely a duplicate.
     """
 
     def test_a_pump_fun_migration_is_not_stored(self, client):
-        """PUMP_AMM is a token moving off its bonding curve. It already
-        existed; that is the whole meaning of the event."""
+        """PUMP_AMM is a Pump.fun token graduating off its bonding curve. We
+        recorded it at CREATE — this event is about a token we already have."""
         event = _event(signature="mig-1")
         event["type"] = "CREATE_POOL"
         event["source"] = "PUMP_AMM"
@@ -133,15 +133,16 @@ class TestAPoolIsNotALaunch:
 
         assert body["created"] == 0
         assert body["migrations"] == 1
-        assert ledger.get_sighting(MINT) is None
 
     @pytest.mark.parametrize("source", ["RAYDIUM", "ORCA", "METEORA", "JUPITER"])
-    def test_a_pool_on_an_existing_dex_is_not_stored(self, client, source):
+    def test_a_pool_for_an_old_coin_is_kept_to_be_classified(self, client, source):
+        """This is how a revival reaches us at all. Refusing it here would
+        mean never seeing that an old coin ran."""
         event = _event(signature=f"pool-{source}")
         event["type"] = "CREATE_POOL"
         event["source"] = source
 
-        assert _post(client, [event]).json()["created"] == 0
+        assert _post(client, [event]).json()["created"] == 1
 
     def test_a_real_launchlab_creation_still_lands(self, client):
         """The filter must not cost us the launchpad it was written around."""

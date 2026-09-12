@@ -110,13 +110,49 @@ class Sighting:
     website: str | None = None
     twitter: str | None = None
     telegram: str | None = None
+    #: When this token's market first existed. Older than the launch window
+    #: means it is a revival rather than a launch — see :meth:`is_revival`.
+    first_pair_at: str | None = None
 
     @classmethod
     def from_row(cls, row: Any) -> "Sighting":
         return cls(**{k: row[k] for k in row.keys() if k in cls.__slots__})
 
     def to_dict(self) -> dict[str, Any]:
-        return {slot: getattr(self, slot) for slot in self.__slots__}
+        out = {slot: getattr(self, slot) for slot in self.__slots__}
+        out["is_revival"] = self.is_revival
+        out["age_days"] = self.age_days
+        return out
+
+    @property
+    def age_days(self) -> float | None:
+        """How long this token's market has existed. None when unknown."""
+        if not self.first_pair_at:
+            return None
+        try:
+            created = datetime.fromisoformat(self.first_pair_at)
+        except (TypeError, ValueError):
+            return None
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - created).total_seconds() / 86400
+
+    @property
+    def is_revival(self) -> bool:
+        """An established coin running again, rather than a new launch.
+
+        Both are real and both belong in the ledger. They are different
+        answers to "what should I launch", which is the question this system
+        exists to serve: a revival tells you an event moved an old coin, a
+        launch tells you what someone shipped today and it worked.
+
+        Unknown age reads as a launch. Refusing to call anything a launch
+        without a date would empty the thing the operator actually reads.
+        """
+        from app.config import get_settings
+
+        age = self.age_days
+        return age is not None and age > get_settings().max_launch_age_days
 
 
 # -----------------------------------------------------------------------------
@@ -236,6 +272,18 @@ def _maybe_track(wallet: str) -> None:
     )
 
 
+def _iso(value: Any) -> str | None:
+    """A datetime as text, or None. Tolerates already-a-string."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value or None
+    try:
+        return value.isoformat()
+    except AttributeError:
+        return None
+
+
 def record_price(
     *,
     mint: str,
@@ -243,6 +291,7 @@ def record_price(
     liquidity: float | Decimal | None = None,
     volume_24h: float | Decimal | None = None,
     tier: float | Decimal | None = None,
+    pair_created_at: Any = None,
 ) -> dict[str, Any]:
     """Fold one price observation into a sighting.
 
@@ -271,6 +320,7 @@ def record_price(
                tier            = CASE WHEN ? IS NOT NULL AND (tier IS NULL OR tier < ?) THEN ? ELSE tier END,
                qualified_at    = CASE WHEN ? THEN ? ELSE qualified_at END,
                status          = CASE WHEN ? THEN ? ELSE status END,
+               first_pair_at   = COALESCE(first_pair_at, ?),
                last_checked    = ?,
                checks          = checks + 1
          WHERE mint = ?
@@ -281,6 +331,7 @@ def record_price(
             tier_value, tier_value, tier_value,
             1 if newly_qualified else 0, now,
             1 if newly_qualified else 0, STATUS_QUALIFIED,
+            _iso(pair_created_at),
             now, mint,
         ),
     )
