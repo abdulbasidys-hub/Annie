@@ -111,8 +111,14 @@ async def helius_webhook(
 
     launches = []
     unparsed = 0
+    migrations = 0
     for event in events:
         if not isinstance(event, dict):
+            continue
+        if not _is_a_launch(event):
+            # A pool opening for a token that already existed. Counted, not
+            # stored: it is a real event, just not a launch.
+            migrations += 1
             continue
         launch = _parse_token_mint(event)
         if launch is None:
@@ -133,6 +139,7 @@ async def helius_webhook(
         created=result.new,
         repeats=result.repeats,
         unparsed=unparsed,
+        migrations=migrations,
         failed=result.failed,
     )
     return {
@@ -140,6 +147,7 @@ async def helius_webhook(
         "created": result.new,
         "repeats": result.repeats,
         "unparsed": unparsed,
+        "migrations": migrations,
         "failed": result.failed,
     }
 
@@ -164,6 +172,36 @@ _NON_MEMECOIN_MINTS = frozenset(
         "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",  # USDT
     }
 )
+
+
+#: Event sources that genuinely mean "a token was just created".
+#:
+#: `CREATE_POOL` on its own does not: Helius fires it whenever a *pool* is
+#: created, which includes an established token opening a new market. Left
+#: unfiltered, RAY (2022), Bonk (2022), WBTC, $WIF and TRUMP all arrived
+#: looking like brand-new launches, were priced at the market caps they
+#: reached years ago, and cleared a tier instantly — 7 of the 10 most recent
+#: qualifiers on production were tokens over 100 days old.
+#:
+#: `PUMP_AMM` is the one to notice: that is a Pump.fun token *migrating* off
+#: its bonding curve, an event about a token that already existed.
+LAUNCH_SOURCES = {"PUMP_FUN", "RAYDIUM_LAUNCHLAB"}
+
+
+def _is_a_launch(event: dict[str, Any]) -> bool:
+    """Whether this event is a token being created rather than a pool.
+
+    Unknown sources are accepted. A new launchpad appearing should show up as
+    unlabelled launches to investigate, not as silence — and the market-cap
+    age check in the watch loop catches anything old that slips through.
+    """
+    source = str(event.get("source") or "").upper()
+    if not source:
+        return True
+    if source in LAUNCH_SOURCES:
+        return True
+    # Explicitly known to be about an existing token.
+    return source not in {"PUMP_AMM", "RAYDIUM", "ORCA", "METEORA", "JUPITER"}
 
 
 def _parse_token_mint(event: dict[str, Any]) -> TokenLaunch | None:

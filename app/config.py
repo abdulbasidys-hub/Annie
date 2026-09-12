@@ -278,6 +278,16 @@ class Settings(BaseSettings):
     #: the deterministic daily log. It just does not get its own page.
     memory_tier_usd: float = 250_000.0
 
+    #: How old a token's market can be and still count as a new launch.
+    #:
+    #: Helius fires CREATE_POOL for any pool creation, including an
+    #: established token opening a new market, so without this RAY, Bonk,
+    #: WBTC and $WIF all arrive looking like fresh launches and qualify
+    #: instantly on market caps they reached years ago. Thirty days is
+    #: generous — a token that takes three weeks to run is still a launch —
+    #: while excluding anything with real history.
+    max_launch_age_days: float = 30.0
+
     #: Hard ceiling on token memory files written in one UTC day.
     #:
     #: The floor above adapts badly to a genuinely exceptional day — if a

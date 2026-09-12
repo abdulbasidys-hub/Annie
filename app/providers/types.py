@@ -97,6 +97,10 @@ class MarketQuote:
     liquidity_usd: Decimal | None = None
     volume_24h_usd: Decimal | None = None
     holder_count: int | None = None
+    #: When the trading pair was created, as the market data provider reports
+    #: it. This is the only cheap signal of a token's real age — the webhook
+    #: cannot tell a brand-new token from an old one opening a new pool.
+    pair_created_at: datetime | None = None
     dex_slug: str | None = None
     pair_address: str | None = None
 

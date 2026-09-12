@@ -193,7 +193,23 @@ class DexScreenerAdapter(HttpProvider):
             volume_24h_usd=_dec((pair.get("volume") or {}).get("h24")),
             dex_slug=pair.get("dexId"),
             pair_address=pair.get("pairAddress"),
+            pair_created_at=_pair_created(pair.get("pairCreatedAt")),
         )
+
+
+def _pair_created(value: Any) -> datetime | None:
+    """DexScreener's pairCreatedAt, which is epoch milliseconds.
+
+    Free — it rides the response already being fetched for the price — and it
+    is the one field that distinguishes a token launched this morning from
+    one that has traded for three years and merely opened a new pool today.
+    """
+    if not value:
+        return None
+    try:
+        return datetime.fromtimestamp(float(value) / 1000, tz=timezone.utc)
+    except (TypeError, ValueError, OSError):
+        return None
 
 
 def _best_pair(quotes: list[MarketQuote]) -> MarketQuote:

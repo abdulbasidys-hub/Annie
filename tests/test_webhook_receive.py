@@ -111,6 +111,68 @@ class TestADeliveryLands:
         assert counters.get("firestore_reads", 0) == 0
 
 
+
+class TestAPoolIsNotALaunch:
+    """The bug that put RAY, Bonk, WBTC, $WIF and TRUMP in a brief.
+
+    Helius fires CREATE_POOL whenever a *pool* is created, and that includes
+    an established token opening a new market. Those arrived as brand-new
+    launches, were priced at market caps they reached years ago, and cleared
+    a tier instantly — 7 of the 10 most recent qualifiers on production were
+    over 100 days old, several over three years.
+    """
+
+    def test_a_pump_fun_migration_is_not_stored(self, client):
+        """PUMP_AMM is a token moving off its bonding curve. It already
+        existed; that is the whole meaning of the event."""
+        event = _event(signature="mig-1")
+        event["type"] = "CREATE_POOL"
+        event["source"] = "PUMP_AMM"
+
+        body = _post(client, [event]).json()
+
+        assert body["created"] == 0
+        assert body["migrations"] == 1
+        assert ledger.get_sighting(MINT) is None
+
+    @pytest.mark.parametrize("source", ["RAYDIUM", "ORCA", "METEORA", "JUPITER"])
+    def test_a_pool_on_an_existing_dex_is_not_stored(self, client, source):
+        event = _event(signature=f"pool-{source}")
+        event["type"] = "CREATE_POOL"
+        event["source"] = source
+
+        assert _post(client, [event]).json()["created"] == 0
+
+    def test_a_real_launchlab_creation_still_lands(self, client):
+        """The filter must not cost us the launchpad it was written around."""
+        event = _event(program=LAUNCHLAB, signature="real-1")
+        event["type"] = "CREATE_POOL"
+        event["source"] = "RAYDIUM_LAUNCHLAB"
+
+        assert _post(client, [event]).json()["created"] == 1
+
+    def test_a_pump_fun_creation_still_lands(self, client):
+        assert _post(client, [_event()]).json()["created"] == 1
+
+    def test_an_unknown_source_is_accepted(self, client):
+        """A new launchpad should appear as launches to investigate, not as
+        silence. The age check downstream catches anything old."""
+        event = _event(signature="new-pad")
+        event["source"] = "SOME_NEW_LAUNCHPAD"
+
+        assert _post(client, [event]).json()["created"] == 1
+
+    def test_a_migration_does_not_cost_the_rest_of_the_batch(self, client):
+        migration = _event(signature="mig-2")
+        migration["source"] = "PUMP_AMM"
+        real = _event(mint=MINT, signature="real-2")
+
+        body = _post(client, [migration, real]).json()
+
+        assert body["migrations"] == 1
+        assert body["created"] == 1
+
+
 class TestTheSecret:
     def test_a_wrong_secret_is_rejected(self, client):
         assert _post(client, [_event()], secret="nope").status_code == 401

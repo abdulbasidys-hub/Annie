@@ -56,6 +56,9 @@ class WatchRun:
     #: number is the interesting one at real volume — it is the filtering.
     remembered: list[str] = field(default_factory=list)
     not_remembered: int = 0
+    #: Priced tokens that would have qualified but are not new launches —
+    #: established tokens that opened a new pool. See the age check below.
+    too_old: int = 0
     promoted_creators: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -68,6 +71,7 @@ class WatchRun:
             "qualified_count": len(self.newly_qualified),
             "remembered": len(self.remembered),
             "not_remembered": self.not_remembered,
+            "too_old": self.too_old,
             "new_peaks": self.new_peaks,
             "promoted_creators": self.promoted_creators[:10],
             "errors": self.errors[:5],
@@ -127,6 +131,40 @@ async def run_watch(
         if market_cap is not None and (liquidity or Decimal(0)) >= MIN_LIQUIDITY_USD:
             tier = tier_for(market_cap, DEFAULT_TIERS)
 
+        # …unless it is not a new launch at all. Helius fires CREATE_POOL
+        # whenever a *pool* is created, which includes an established token
+        # opening a new market — so RAY, Bonk, WBTC, $WIF and TRUMP all
+        # arrived looking like fresh launches and cleared a tier instantly on
+        # market caps they reached years ago. Measured on production: 7 of
+        # the 10 most recent qualifiers were tokens over 100 days old.
+        #
+        # The pair's creation date is the cheap discriminator and it rides
+        # the price response, so this costs nothing.
+        age_days = _pair_age_days(quote)
+        if tier is not None and age_days is not None and age_days > settings.max_launch_age_days:
+            log.info(
+                "not_a_new_launch",
+                mint=mint,
+                age_days=round(age_days),
+                market_cap=float(market_cap or 0),
+            )
+            tier = None
+            run.too_old += 1
+
+            # Retroactive, deliberately. The age check is a statement about
+            # what this token *is*, not about what it is currently worth, so
+            # one that qualified before the check existed was never a launch
+            # and should stop being listed as one. This is the only place
+            # qualification is ever withdrawn — a token falling below its
+            # tier keeps it, because that did happen.
+            from app.memory import db as _db
+
+            _db.execute(
+                "UPDATE sightings SET qualified_at = NULL, tier = NULL, status = ? "
+                " WHERE mint = ? AND qualified_at IS NOT NULL",
+                (ledger.STATUS_WATCHING, mint),
+            )
+
         outcome = ledger.record_price(
             mint=mint,
             market_cap=market_cap,
@@ -153,6 +191,22 @@ async def run_watch(
     run.finished_at = datetime.now(timezone.utc)
     log.info("watch_run_complete", **run.to_dict())
     return run
+
+
+def _pair_age_days(quote: Any) -> float | None:
+    """How long this token's market has existed, in days.
+
+    ``None`` when the provider did not say, which is treated as "cannot
+    tell" rather than "new" — refusing to qualify on missing data would
+    silently drop real launches whenever DexScreener omitted the field.
+    """
+    created = getattr(quote, "pair_created_at", None)
+    if created is None:
+        return None
+    try:
+        return (datetime.now(timezone.utc) - created).total_seconds() / 86400
+    except (TypeError, ValueError):
+        return None
 
 
 #: Counter name for the daily token-memory budget, in the local counters table.
