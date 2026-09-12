@@ -444,6 +444,149 @@ class TestMoneyIsReadable:
         assert text.index("Here is what happened.") < text.index("launches seen in 24h")
 
 
+
+class TestACoinIsReportedOnce:
+    """The daily brief covers the same day the six-hourly ones already did.
+
+    Without this it is mostly a re-list: the operator reads about a coin at
+    06:00 and again at midnight, and the handful that crossed in the last six
+    hours is buried among eighty they have already seen. The goal is to know
+    what is being launched *now*, so a coin is reported once, on the day it
+    crossed, in whichever brief comes first.
+    """
+
+    @staticmethod
+    def _qualify(i, peak=400_000):
+        from app.memory import db, ledger
+
+        mint = f"Mint{i:040d}"
+        ledger.record_launch(mint=mint, creator=f"W{i}", symbol=f"T{i}", name=f"Token {i}")
+        ledger.record_price(mint=mint, market_cap=peak, liquidity=90_000, tier=100_000)
+        db.execute("UPDATE sightings SET peak_market_cap = ? WHERE mint = ?", (peak, mint))
+        return mint
+
+    async def test_a_coin_named_once_is_not_named_again(self, seeded, monkeypatch):
+        from app.config import get_settings
+        from app.scheduling.jobs import _cycle
+
+        mint = self._qualify(901)
+        sent = _capture(monkeypatch)
+
+        await _cycle(FakeRegistry(EDITS), FakeRepo({"morning_brief": "111"}),
+                     get_settings(), slot=6)
+        await _cycle(FakeRegistry(EDITS), FakeRepo({"morning_brief": "111"}),
+                     get_settings(), slot=12)
+
+        first, second = [t for c, t in sent if c == "111"][:2]
+        assert mint in first
+        assert mint not in second, "the same coin was reported twice in one day"
+
+    async def test_the_second_brief_says_why_it_is_quiet(self, seeded, monkeypatch):
+        """Silence with no explanation reads as a fault. "These were all in
+        earlier briefs" reads as the system working."""
+        from app.config import get_settings
+        from app.scheduling.jobs import _cycle
+
+        self._qualify(902)
+        sent = _capture(monkeypatch)
+
+        await _cycle(FakeRegistry(EDITS), FakeRepo({"morning_brief": "111"}),
+                     get_settings(), slot=6)
+        await _cycle(FakeRegistry(EDITS), FakeRepo({"morning_brief": "111"}),
+                     get_settings(), slot=12)
+
+        second = [t for c, t in sent if c == "111"][1]
+        assert "earlier briefs" in second
+
+    async def test_a_new_coin_still_gets_through(self, seeded, monkeypatch):
+        from app.config import get_settings
+        from app.scheduling.jobs import _cycle
+
+        self._qualify(903)
+        sent = _capture(monkeypatch)
+        await _cycle(FakeRegistry(EDITS), FakeRepo({"morning_brief": "111"}),
+                     get_settings(), slot=6)
+
+        later = self._qualify(904)
+        await _cycle(FakeRegistry(EDITS), FakeRepo({"morning_brief": "111"}),
+                     get_settings(), slot=12)
+
+        second = [t for c, t in sent if c == "111"][1]
+        assert later in second
+
+    async def test_marking_is_idempotent(self, isolated_memory):
+        from app.memory import coins
+
+        coins.mark_briefed(["a", "b"], day="2026-09-12")
+        coins.mark_briefed(["a", "b"], day="2026-09-12")
+
+        class Fake:
+            def __init__(self, mint):
+                self.mint = mint
+
+        left = coins.unreported([Fake("a"), Fake("c")], day="2026-09-12")
+
+        assert [x.mint for x in left] == ["c"]
+
+    async def test_a_new_day_reports_afresh(self, isolated_memory):
+        """The rule is per-day. A coin still running tomorrow is not news
+        tomorrow either, but the ledger window already handles that — this
+        only stops double-reporting inside one day."""
+        from app.memory import coins
+
+        class Fake:
+            def __init__(self, mint):
+                self.mint = mint
+
+        coins.mark_briefed(["a"], day="2026-09-11")
+
+        assert [x.mint for x in coins.unreported([Fake("a")], day="2026-09-12")] == ["a"]
+
+
+class TestTheBriefIsAReport:
+    """The operator said they could not follow the messages. It is meant to
+    tell them what happened while they were away."""
+
+    async def test_each_coin_carries_its_reason(self, seeded, monkeypatch):
+        from app.config import get_settings
+        from app.memory import coins, db, ledger
+        from app.scheduling.jobs import _cycle
+
+        mint = f"Mint{905:040d}"
+        ledger.record_launch(mint=mint, creator="W", symbol="WWR", name="War")
+        ledger.record_price(mint=mint, market_cap=900_000, liquidity=90_000, tier=250_000)
+        db.execute("UPDATE sightings SET peak_market_cap = ? WHERE mint = ?", (900_000, mint))
+        coins.save(coins.CoinResearch(
+            mint=mint, symbol="WWR", why_it_moved="A courtroom clip did twelve million views.",
+            catalyst="viral_video", category="animal - cat", site_kind="one_page_meme",
+            repeatable=True, confidence="high", researched_at=db.utcnow_iso(),
+        ))
+
+        sent = _capture(monkeypatch)
+        await _cycle(FakeRegistry(EDITS), FakeRepo({"morning_brief": "111"}),
+                     get_settings(), slot=12)
+
+        text = next(t for c, t in sent if c == "111")
+        assert "twelve million views" in text, "a coin without its reason is just a row"
+        assert "viral video" in text
+        assert "repeatable" in text
+
+    async def test_an_unresearched_coin_says_so_rather_than_going_silent(
+        self, seeded, monkeypatch
+    ):
+        from app.config import get_settings
+        from app.scheduling.jobs import _cycle
+
+        TestACoinIsReportedOnce._qualify(906)
+        sent = _capture(monkeypatch)
+
+        await _cycle(FakeRegistry(EDITS), FakeRepo({"morning_brief": "111"}),
+                     get_settings(), slot=12)
+
+        text = next(t for c, t in sent if c == "111")
+        assert "Not researched yet" in text
+
+
 class TestTheCycleStillIngests:
     """The regression this class exists for.
 

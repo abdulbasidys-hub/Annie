@@ -25,6 +25,12 @@ IDEA = {
     "image_avoid": "no gold coins, no rocket, no laser eyes, not photoreal",
     "first_tweet": "your honour i object to my bags being down 94%",
     "tweet_angle": "It is a quotable one-liner that works without knowing the token.",
+    "site_concept": "One scroll. The cat mid-objection fills the screen with the "
+                    "ticker under it, and the only action is buy.",
+    "site_sections": ["hero — cat mid-objection, ticker, the one-line joke",
+                      "live chart embed", "how to buy, three steps"],
+    "site_build_notes": "Palette straight off the token art. No motion. The mistake "
+                        "to avoid is a roadmap section — it reads as a dead project.",
     "angle": "A cat in a courtroom filing motions on behalf of bag-holders.",
     "why_now": "Cat-adjacent is in its third week and the specific variants clear "
                "at roughly 3x the generic ones.",
@@ -159,6 +165,8 @@ class TestTheFormat:
             assert idea.get(field), f"{field} missing — the art cannot be briefed from this"
         for field in ("first_tweet", "tweet_angle"):
             assert idea.get(field), f"{field} missing — there is nothing to post"
+        for field in ("site_concept", "site_sections", "site_build_notes"):
+            assert idea.get(field), f"{field} missing — the site cannot be briefed"
         for field in ("why_now", "evidence", "grounding", "risk"):
             assert idea.get(field), f"{field} missing — the reasoning is not checkable"
 
@@ -170,6 +178,7 @@ class TestTheFormat:
             "name", "ticker", "description",
             "image_prompt", "image_style", "image_avoid",
             "first_tweet", "tweet_angle",
+            "site_concept", "site_sections", "site_build_notes",
         } <= set(required)
 
     async def test_grounding_is_constrained_to_three_honest_values(self, seeded):
@@ -184,6 +193,7 @@ class TestTheFormat:
         assert "objection your honour" in text, "the description is what gets pasted"
         assert "Image:" in text
         assert "your honour i object" in text, "the launch post is the point"
+        assert "Sections:" in text, "the site plan is what a build agent needs"
         assert "observed" in text
         assert "Avoiding:" in text
 

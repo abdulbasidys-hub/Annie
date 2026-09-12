@@ -492,6 +492,29 @@ async def _tool_why_it_moved(agent: AnnieAgent, args: dict[str, Any]) -> dict[st
     }
 
 
+async def _tool_site_patterns(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """What winners are actually shipping as websites.
+
+    The question right before launching is not "what theme is working" but
+    "what do I need built by tomorrow". Each researched coin's site is read
+    and classified, so this answers it from observation rather than opinion.
+    """
+    from app.memory import coins
+
+    hours = min(int(args.get("hours") or 168), 2160)
+    shapes = coins.site_patterns(since_hours=hours)
+    examples = [
+        {
+            "symbol": r.symbol, "mint": r.mint, "site_kind": r.site_kind,
+            "website": r.website, "site_notes": r.site_notes,
+            "peak_market_cap": r.peak_market_cap,
+        }
+        for r in coins.recent(limit=40)
+        if r.site_kind and r.site_kind not in ("none", "dead") and r.site_notes
+    ][:10]
+    return {"window_hours": hours, "shapes": shapes, "examples": examples}
+
+
 async def _tool_register_launch(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
     """Mark a contract address as one of ours.
 
@@ -1277,6 +1300,7 @@ _TOOL_HANDLERS = {
     "get_token": _tool_get_token,
     "why_it_moved": _tool_why_it_moved,
     "coin_categories": _tool_coin_categories,
+    "site_patterns": _tool_site_patterns,
     "register_launch": _tool_register_launch,
     "our_launches": _tool_our_launches,
     "live_token_lookup": _tool_live_token_lookup,
@@ -1524,6 +1548,20 @@ def _tool_specs(settings: Settings, platform_context: PlatformContext | None = N
                     "category": {"type": "string",
                                  "description": "Filter to a theme, e.g. 'ai agent'."},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                },
+            },
+        ),
+        _spec(
+            "site_patterns",
+            "What winners are actually shipping as websites — the shapes, how many of "
+            "each, and real examples with notes on what each page does. Reach for this "
+            "when the question is what to BUILD rather than what to name: the site is "
+            "the part an operator has to have ready by tomorrow.",
+            {
+                "type": "object", "additionalProperties": False,
+                "properties": {
+                    "hours": {"type": "integer", "minimum": 1, "maximum": 2160,
+                              "description": "Window. Default 168 (a week)."},
                 },
             },
         ),

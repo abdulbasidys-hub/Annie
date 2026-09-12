@@ -99,6 +99,12 @@ class Sighting:
     status: str = STATUS_WATCHING
     theme: str | None = None
     notes: str | None = None
+    #: Links from the token's own metadata, captured during enrichment. What
+    #: a launch shipped is evidence, and it is unavailable later — these
+    #: pages go dead within the week.
+    website: str | None = None
+    twitter: str | None = None
+    telegram: str | None = None
 
     @classmethod
     def from_row(cls, row: Any) -> "Sighting":

@@ -296,12 +296,26 @@ async def enrich_qualified(
     for mint in mints:
         metadata = found.get(mint)
         if metadata is not None and (metadata.name or metadata.symbol):
+            # The links come from the same call that gives us the name, so
+            # capturing them here is free. What a launch shipped — a site, an
+            # X account, neither — is evidence about what is working, and it
+            # is unavailable later: these pages go dead within the week.
+            links = metadata.other_links or {}
             db.execute(
                 "UPDATE sightings "
                 "   SET name = COALESCE(?, name), symbol = COALESCE(?, symbol), "
-                "       metadata_checked_at = ? "
+                "       website = COALESCE(?, website), twitter = COALESCE(?, twitter), "
+                "       telegram = COALESCE(?, telegram), metadata_checked_at = ? "
                 " WHERE mint = ?",
-                (metadata.name, metadata.symbol, stamp, mint),
+                (
+                    metadata.name,
+                    metadata.symbol,
+                    metadata.website or links.get("website"),
+                    metadata.twitter or links.get("twitter") or links.get("x"),
+                    metadata.telegram or links.get("telegram"),
+                    stamp,
+                    mint,
+                ),
             )
             enriched += 1
         else:

@@ -294,6 +294,12 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         # Same idea for the deployer walk, which is far more expensive and so
         # runs in much smaller batches.
         "deployer_checked_at": "TEXT",
+        # The links from the token's own metadata. Kept because what a
+        # launch *built* is evidence in its own right: the site a winner
+        # shipped says more about what is working than its ticker does.
+        "website": "TEXT",
+        "twitter": "TEXT",
+        "telegram": "TEXT",
     },
 }
 

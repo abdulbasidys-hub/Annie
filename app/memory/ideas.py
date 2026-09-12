@@ -67,6 +67,7 @@ IDEA_SCHEMA: dict[str, Any] = {
                     "name", "ticker", "description", "angle",
                     "image_prompt", "image_style", "image_avoid",
                     "first_tweet", "tweet_angle",
+                    "site_concept", "site_sections", "site_build_notes",
                     "why_now", "evidence", "grounding", "risk",
                 ],
                 "properties": {
@@ -88,12 +89,20 @@ IDEA_SCHEMA: dict[str, Any] = {
                     "image_prompt": {
                         "type": "string",
                         "description": (
-                            "A prompt ready to paste into an image model as-is. Describe the "
-                            "subject, the composition, the expression or action, and the "
-                            "background. Write it as an instruction to a generator, not as a "
-                            "description of a picture to a person. Memecoin art is read at "
-                            "32 pixels in a list, so say what makes it legible that small: "
-                            "one clear subject, strong silhouette, high contrast."
+                            "A complete prompt, pasted into an image model with no editing "
+                            "and no further questions asked. Write it as an instruction to a "
+                            "generator, never as a description of a picture to a person.\n\n"
+                            "It must cover, in this order and in one flowing prompt: the "
+                            "subject and exactly what it is doing; its expression or posture; "
+                            "what it is wearing or holding; the camera framing (close crop, "
+                            "centred bust, full body); the background and its colour; the "
+                            "lighting; the art style; and the aspect ratio (square, for a "
+                            "token avatar).\n\n"
+                            "Memecoin art is judged at 32 pixels in a list before it is ever "
+                            "seen large, so build for that: one subject, strong silhouette, "
+                            "high contrast against the background, no small text, nothing "
+                            "important near the edges. Aim for roughly 60-100 words — enough "
+                            "that the generator has no gaps to fill badly."
                         ),
                     },
                     "image_style": {
@@ -123,6 +132,43 @@ IDEA_SCHEMA: dict[str, Any] = {
                             "work as a post on its own merits to someone who has never heard of "
                             "the token — if it only makes sense to someone already holding, it "
                             "is not a launch post."
+                        ),
+                    },
+                    "site_concept": {
+                        "type": "string",
+                        "description": (
+                            "What the website is, in two or three sentences, written for the "
+                            "agent that will build it. State the one thing a visitor should "
+                            "understand within two seconds of landing, and what they should "
+                            "do next. Ground it in what winners are actually shipping right "
+                            "now rather than in what a project site 'should' have — you are "
+                            "shown the site shapes that recent movers used."
+                        ),
+                    },
+                    "site_sections": {
+                        "type": "array",
+                        "minItems": 2,
+                        "maxItems": 6,
+                        "items": {"type": "string"},
+                        "description": (
+                            "The sections of the page, top to bottom, one short phrase each, "
+                            "including what goes in it: 'hero — the cat mid-objection, ticker, "
+                            "one-line joke', 'live chart embed', 'how to buy, three steps', "
+                            "'the lore, four short paragraphs'. Most memecoin sites that work "
+                            "are one scroll. If the right answer is three sections, give "
+                            "three — padding a page is how it starts looking like every "
+                            "abandoned project site."
+                        ),
+                    },
+                    "site_build_notes": {
+                        "type": "string",
+                        "description": (
+                            "The handoff to whoever builds it: the tone of the copy, the "
+                            "palette and where it comes from (usually the token art), "
+                            "whether it needs motion, what to reuse from the image, and the "
+                            "single mistake most likely to make it look like a scam or a "
+                            "template. Be specific enough that an agent could start without "
+                            "asking a follow-up question."
                         ),
                     },
                     "tweet_angle": {
@@ -178,6 +224,11 @@ Rules:
   unclaimed corner of that space, not another generic cat.
 - Tickers should look like what actually wins in the data you are shown —
   match the observed shape, not a house style.
+- You are shown what recent winners shipped as websites. Use it. The
+  operator hands your site plan to an agent that builds it, so "what are
+  people actually building this week" is a live constraint, not background —
+  and a site shape that keeps appearing among winners is worth more than a
+  better one nobody is using.
 - The strongest grounding available to you is a *catalyst that repeated*.
   You are shown why recent winners actually moved — a viral clip, a post, a
   copycat wave — and which of those looked deliberately repeatable. An idea
@@ -235,12 +286,16 @@ async def generate(
         coins.recent(limit=25),
         key=lambda r: (not r.repeatable, {"high": 0, "medium": 1}.get(r.confidence, 2)),
     )
+    site_shapes = [
+        p for p in coins.site_patterns(since_hours=168)
+        if p["site_kind"] not in ("none", "dead")
+    ]
     instructions = _standing_instructions()
 
     context = _render_context(
         now=now, brief=brief, movers=movers, winning=winning, crowded=crowded,
         rolling_over=rolling_over, words=words, lessons=lessons, playbook=playbook,
-        reasons=reasons, instructions=instructions,
+        reasons=reasons, site_shapes=site_shapes, instructions=instructions,
     )
 
     client = await registry.reasoning.raw_client()
@@ -322,6 +377,7 @@ def _render_context(
     lessons: list[index.Hit],
     playbook: list[index.Hit],
     reasons: list[Any] | None = None,
+    site_shapes: list[dict[str, Any]] | None = None,
     instructions: str = "",
 ) -> str:
     def usd(value: float | None) -> str:
@@ -343,6 +399,17 @@ def _render_context(
                 f"{m.launchpad or 'unknown pad'}"
             )
 
+    if site_shapes:
+        lines += ["", "## What recent winners shipped as websites"]
+        for shape in site_shapes[:8]:
+            lines.append(
+                f"- {shape['site_kind'].replace('_', ' ')}: {shape['coins']} of them"
+            )
+        lines.append(
+            "  (This is what is being built right now. The operator hands your "
+            "site plan straight to a build agent.)"
+        )
+
     if reasons:
         # The most actionable block here. Everything above says what was
         # popular; this says what *caused* it, which is the only part that
@@ -357,6 +424,8 @@ def _render_context(
             )
             if r.why_now:
                 lines.append(f"  timing: {r.why_now}")
+            if getattr(r, "site_notes", ""):
+                lines.append(f"  their site: {r.site_notes}")
 
     if winning:
         lines += ["", "## Characteristics over-represented among tokens that cleared a tier"]
@@ -610,6 +679,11 @@ def format_for_delivery(payload: dict[str, Any], *, limit: int = 3) -> str:
             lines.append(f"· Style: {style}")
         if avoid:
             lines.append(f"· Avoid: {avoid}")
+        if idea.get("site_concept"):
+            lines.append(f"· Site: {idea['site_concept']}")
+        sections = idea.get("site_sections") or []
+        if sections:
+            lines.append("· Sections: " + " → ".join(str(x) for x in sections))
         lines += [
             f"· Why now: {idea.get('why_now')}",
             f"· Risk: {idea.get('risk')}",

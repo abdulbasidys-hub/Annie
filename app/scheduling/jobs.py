@@ -265,38 +265,67 @@ async def _deliver_brief(
     from app.bots.discord_bot import send_channel_message
     from app.memory import ledger
 
+    from app.memory import coins
+
     label = "Daily brief" if full_day else "6-hour brief"
     learning = cycle.get("learning") or {}
     stats = ledger.stats()
+    day = now.date().isoformat()
 
-    # No byline and no timestamp. She is the only thing posting in the
-    # channel, so the name is noise on every message; and Discord already
-    # stamps the time, so restating it only ever added a second clock to
-    # disagree with the first.
     lines = [f"**{label}**", ""]
 
-    # Her prose, not a status field. `brief` is written for this; `headline`
-    # is the one-liner for logs and the health page, and only stands in when
-    # an older cycle result predates the richer field.
     prose = (learning.get("brief") or learning.get("headline") or "").strip()
     if prose:
         lines += [prose, ""]
 
+    # Only what crossed since the last brief, and only once ever. The daily
+    # brief covers the same day the six-hourly ones already covered, so
+    # without this it is mostly a re-list — and the few that crossed in the
+    # last six hours get buried among eighty already read about.
     window_hours = 24 if full_day else 6
     qualified = ledger.qualified_in_window(now - timedelta(hours=window_hours), now)
-    if qualified:
-        lines.append("**Crossed a tier**")
-        for token in qualified[:5]:
-            name = token.symbol or token.name or token.mint[:8]
-            lines.append(f"- {name} — peaked {_usd(token.peak_market_cap)}")
-            lines.append(f"  `{token.mint}`")
-        if len(qualified) > 5:
-            lines.append(f"- …and {len(qualified) - 5} more")
-        lines.append("")
+    fresh = coins.unreported(qualified, day=day)
 
-    # The counts go last, as a footer. They are context for the prose above,
-    # not the report itself — leading with them was what made this read like
-    # a form rather than something she wrote.
+    if fresh:
+        lines.append(f"**New this window — {len(fresh)} crossed a tier**")
+        lines.append("")
+        for token in fresh[:8]:
+            lines += _token_block(token)
+        if len(fresh) > 8:
+            lines.append(
+                f"…and {len(fresh) - 8} more. Ask me for the full list — "
+                f"I have every one with its reason."
+            )
+        lines.append("")
+    elif qualified:
+        lines += [
+            f"Nothing new crossed a tier this window. The {len(qualified)} in the "
+            f"last {window_hours}h were all in earlier briefs.",
+            "",
+        ]
+    else:
+        lines += ["Nothing crossed a tier this window.", ""]
+
+    coins.mark_briefed([t.mint for t in fresh], day=day)
+
+    # What kind of thing is working, from the researched causes rather than
+    # from name-matching. This is the part that answers "what should I
+    # launch" without the operator having to ask.
+    patterns = coins.categories(since_hours=window_hours)
+    if patterns:
+        top = ", ".join(
+            f"{p['category']} ({p['coins']})" for p in patterns[:4]
+        )
+        lines += [f"**Themes carrying it:** {top}", ""]
+
+    builds = [p for p in coins.site_patterns(since_hours=window_hours)
+              if p["site_kind"] not in ("none", "dead")]
+    if builds:
+        shipped = ", ".join(
+            f"{p['site_kind'].replace('_', ' ')} ({p['coins']})" for p in builds[:3]
+        )
+        lines += [f"**What they shipped:** {shipped}", ""]
+
     lines.append(
         f"_{stats['sightings_24h']:,} launches seen in 24h · "
         f"{stats['qualified_24h']:,} reached a tier · "
@@ -304,9 +333,6 @@ async def _deliver_brief(
         f"{stats['creators_tracked']:,} creators tracked_"
     )
 
-    # Only when something went wrong. A successful notebook write is the
-    # normal case and does not need reporting — the operator asked not to be
-    # told about work that simply worked.
     trouble = _memory_trouble(learning)
     if trouble:
         lines += ["", trouble]
@@ -318,6 +344,38 @@ async def _deliver_brief(
     if full_day:
         outcome.update(await _deliver_ideas(repo, settings, cycle, fallback=channel))
     return outcome
+
+
+def _token_block(token: Any) -> list[str]:
+    """One coin, as a person would want to read it.
+
+    Name, what it reached, and *why* — the reason is the whole point, and the
+    contract address goes underneath so it can be copied without breaking the
+    line. A coin listed without its reason is a row, and the operator can
+    already read rows.
+    """
+    from app.memory import coins
+
+    name = token.symbol or token.name or token.mint[:8]
+    head = f"**{name}** — {_usd(token.peak_market_cap)}"
+
+    research = coins.get(token.mint)
+    out = [head]
+    if research and research.why_it_moved:
+        out.append(research.why_it_moved)
+        tags = [research.catalyst.replace("_", " ")]
+        if research.category:
+            tags.append(research.category)
+        if research.site_kind and research.site_kind not in ("none", "dead"):
+            tags.append(f"site: {research.site_kind.replace('_', ' ')}")
+        if research.repeatable:
+            tags.append("**repeatable**")
+        out.append("· " + " · ".join(tags))
+    else:
+        out.append("_Not researched yet — the next cycle will pick it up._")
+    out.append(f"`{token.mint}`")
+    out.append("")
+    return out
 
 
 def _usd(value: float | None) -> str:
@@ -447,9 +505,10 @@ async def _housekeeping(
     every day rather than being a thing someone remembers to do when storage
     gets tight.
     """
-    from app.memory import index, ledger
+    from app.memory import coins, index, ledger
 
     pruned = ledger.prune(ttl_hours=settings.watch_ttl_hours)
+    pruned["briefed_dropped"] = coins.prune_briefed()
     reindexed = index.sync_if_stale()
 
     # VACUUM rewrites the whole file, so it is worth doing only after a
