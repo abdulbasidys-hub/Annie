@@ -23,7 +23,10 @@ export default function Creators() {
     () =>
       api.creators({
         limit: 200,
-        winners_only: mode === 'winners' || undefined,
+        // Explicit either way. The API now defaults this on, so sending
+        // `undefined` for "everyone" would quietly filter the tab that
+        // promises not to.
+        winners_only: mode !== 'everyone',
         tracked_only: mode === 'tracked' || undefined,
         window_hours: window || undefined,
       }),
@@ -55,9 +58,15 @@ export default function Creators() {
           aria-label="Search creators"
         />
         <div className="segmented">
-          <button className={mode === 'all' ? 'is-active' : ''} onClick={() => setMode('all')}>All</button>
-          <button className={mode === 'winners' ? 'is-active' : ''} onClick={() => setMode('winners')}>
-            Had a winner
+          <button className={mode === 'all' ? 'is-active' : ''} onClick={() => setMode('all')}>
+            Produced a winner
+          </button>
+          <button
+            className={mode === 'everyone' ? 'is-active' : ''}
+            onClick={() => setMode('everyone')}
+            title="Includes the tens of thousands of wallets that have launched and never landed one."
+          >
+            Everyone
           </button>
           <button className={mode === 'tracked' ? 'is-active' : ''} onClick={() => setMode('tracked')}>
             Tracked

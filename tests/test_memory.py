@@ -191,10 +191,34 @@ class TestLedger:
         assert ledger.get_creator("Wa11etAAA")["launches"] == 1
         assert ledger.stats()["sightings_total"] == 1
 
-    def test_a_wallet_becomes_tracked_after_enough_launches(self, isolated_memory):
-        for i in range(ledger.TRACK_AFTER_LAUNCHES):
+    def test_volume_alone_does_not_make_a_wallet_worth_following(self, isolated_memory):
+        """It used to. Measured in production, of the 200 highest-volume
+        wallets every single one with zero winners had 25+ launches — so a
+        launch-count threshold selects almost perfectly for spam bots, and
+        six hundred of them were tracked with dossiers being written."""
+        for i in range(ledger.TRACK_AFTER_LAUNCHES + 20):
             self._launch(i)
-        assert ledger.get_creator("Wa11etAAA")["tracked"] == 1
+
+        creator = ledger.get_creator("Wa11etAAA")
+        assert creator["launches"] == ledger.TRACK_AFTER_LAUNCHES + 20
+        assert creator["tracked"] == 0, "a wallet that has produced nothing was tracked"
+
+    def test_a_prolific_wallet_is_tracked_the_moment_it_finally_lands_one(
+        self, isolated_memory
+    ):
+        """Nothing is lost by waiting. The launches and the movement history
+        were being recorded the whole time."""
+        for i in range(ledger.TRACK_AFTER_LAUNCHES + 5):
+            self._launch(i)
+        assert ledger.get_creator("Wa11etAAA")["tracked"] == 0
+
+        ledger.record_price(
+            mint="Mint" + "0" * 39 + "1", market_cap=500_000, liquidity=50_000, tier=250_000
+        )
+
+        creator = ledger.get_creator("Wa11etAAA")
+        assert creator["tracked"] == 1
+        assert creator["launches"] == ledger.TRACK_AFTER_LAUNCHES + 5, "history was lost"
 
     def test_a_single_winner_is_enough_to_track_a_wallet(self, isolated_memory):
         self._launch(1, creator="Wa11etLucky")
@@ -258,11 +282,15 @@ class TestForgetting:
 
     def test_a_tracked_creators_dead_tokens_are_pruned_too(self, isolated_memory):
         """Exempting them was the obvious-looking rule and it is wrong: a
-        wallet is tracked *because* it launches a lot, so the exemption
-        would spare the largest share of the junk."""
+        tracked wallet launches a lot, so the exemption would spare the
+        largest share of the junk."""
         old = datetime.now(timezone.utc) - timedelta(days=5)
         for i in range(ledger.TRACK_AFTER_LAUNCHES + 5):
             ledger.record_launch(mint=f"Mint{i:040d}", creator="Wa11etBusy", launched_at=old)
+        # Tracking is earned by a winner now, not by volume.
+        ledger.record_price(
+            mint=f"Mint{0:040d}", market_cap=500_000, liquidity=50_000, tier=250_000
+        )
         assert ledger.get_creator("Wa11etBusy")["tracked"] == 1
 
         from app.memory import db
@@ -270,7 +298,9 @@ class TestForgetting:
         db.execute("UPDATE sightings SET last_seen = ?", (old.isoformat(timespec="seconds"),))
         result = ledger.prune(ttl_hours=48)
 
-        assert result["sightings_dropped"] == ledger.TRACK_AFTER_LAUNCHES + 5
+        # Every dead one goes; the single winner stays, because it qualified.
+        assert result["sightings_dropped"] == ledger.TRACK_AFTER_LAUNCHES + 4
+        assert ledger.get_sighting(f"Mint{0:040d}") is not None
         assert ledger.get_creator("Wa11etBusy") is not None
 
     def test_something_that_traded_survives_even_without_qualifying(self, isolated_memory):

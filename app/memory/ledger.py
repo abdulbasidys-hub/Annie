@@ -48,15 +48,20 @@ WATCH_FLOOR_USD = 15_000.0
 #: dossier written — this is the "identify high token-creating creators and
 #: track them from then on" mechanism.
 #:
-#: Set high deliberately. On Pump.fun, launching a handful of tokens is
-#: unremarkable — bot wallets spray dozens a day — so a low threshold would
-#: mark most of the market as tracked and make the distinction meaningless.
-#: Twenty-five is "this wallet is running an operation", which is the thing
-#: actually worth following.
+#: Volume alone no longer earns tracking, and the measured reason is stark:
+#: of the 200 highest-volume wallets in production, every single one with
+#: zero winners had 25+ launches. "Runs an operation" and "sprays tokens
+#: into the void" are the same shape from the outside, so a launch-count
+#: threshold selects almost perfectly for spam bots. Six hundred wallets
+#: were tracked on this rule and dossiers were being written about them.
+#:
+#: Kept as the bar for *volume*, which still matters as a description of a
+#: wallet — it is simply no longer sufficient to make one a subject.
 TRACK_AFTER_LAUNCHES = 25
 
-#: …or once any one of its tokens has reached this. One real winner is a
-#: stronger signal than a dozen dead launches.
+#: What actually earns tracking now: one of its tokens reached this. A wallet
+#: that has produced a winner is worth following whether it launched twice or
+#: two hundred times.
 TRACK_AFTER_MARKET_CAP = 100_000.0
 
 STATUS_WATCHING = "watching"
@@ -225,9 +230,9 @@ def _maybe_track(wallet: str) -> None:
         """
         UPDATE creators SET tracked = 1
          WHERE wallet = ? AND tracked = 0
-           AND (launches >= ? OR COALESCE(best_market_cap, 0) >= ?)
+           AND COALESCE(best_market_cap, 0) >= ?
         """,
-        (wallet, TRACK_AFTER_LAUNCHES, TRACK_AFTER_MARKET_CAP),
+        (wallet, TRACK_AFTER_MARKET_CAP),
     )
 
 
@@ -427,12 +432,24 @@ def qualified_in_window(
     return [Sighting.from_row(r) for r in rows]
 
 
-def top_creators(*, limit: int = 25, tracked_only: bool = False, window_hours: int | None = None) -> list[dict[str, Any]]:
-    """Highest-volume / most successful launchers.
+def top_creators(
+    *,
+    limit: int = 25,
+    tracked_only: bool = False,
+    window_hours: int | None = None,
+    winners_only: bool = True,
+) -> list[dict[str, Any]]:
+    """Launchers worth looking at.
 
     ``window_hours`` switches from lifetime totals to "who is busy right
     now", counted from ``moves`` — the question that actually matters when
     deciding who to watch this week.
+
+    ``winners_only`` defaults to True. A wallet that has launched forty
+    tokens and never produced one that cleared a tier is a bot, and there
+    are tens of thousands of them; listing them by volume put the noisiest
+    wallets in the market at the top of the leaderboard. Pass False to see
+    the raw volume ranking.
     """
     if window_hours:
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()
@@ -443,12 +460,12 @@ def top_creators(*, limit: int = 25, tracked_only: bool = False, window_hours: i
                    COUNT(m.id) AS recent_launches
               FROM creators c
               JOIN moves m ON m.wallet = c.wallet AND m.kind = 'launch' AND m.at >= ?
-             WHERE (? = 0 OR c.tracked = 1)
+             WHERE (? = 0 OR c.tracked = 1) AND (? = 0 OR c.winners > 0)
              GROUP BY c.wallet
              ORDER BY recent_launches DESC, c.best_market_cap DESC
              LIMIT ?
             """,
-            (cutoff, 1 if tracked_only else 0, limit),
+            (cutoff, 1 if tracked_only else 0, 1 if winners_only else 0, limit),
         )
     else:
         rows = db.query(
@@ -456,11 +473,11 @@ def top_creators(*, limit: int = 25, tracked_only: bool = False, window_hours: i
             SELECT wallet, launches, winners, best_market_cap, best_mint, tracked,
                    first_seen, last_seen, dossier_path, launches AS recent_launches
               FROM creators
-             WHERE (? = 0 OR tracked = 1)
+             WHERE (? = 0 OR tracked = 1) AND (? = 0 OR winners > 0)
              ORDER BY winners DESC, best_market_cap DESC, launches DESC
              LIMIT ?
             """,
-            (1 if tracked_only else 0, limit),
+            (1 if tracked_only else 0, 1 if winners_only else 0, limit),
         )
     return [dict(r) for r in rows]
 
@@ -639,6 +656,17 @@ def prune(
         (STATUS_FADED, STATUS_WATCHING, cutoff, WATCH_FLOOR_USD, *ours),
     ).rowcount or 0
 
+    # Wallets tracked under the old launches-only rule, and wallets that have
+    # launched a lot and produced nothing. Both are the same population: bots
+    # spraying tokens. Untracking is enough — the row and its movement history
+    # stay, so if one ever does produce a winner it is tracked again the same
+    # instant, with its whole record intact.
+    untracked = db.execute(
+        "UPDATE creators SET tracked = 0 "
+        " WHERE tracked = 1 AND COALESCE(best_market_cap, 0) < ?",
+        (TRACK_AFTER_MARKET_CAP,),
+    ).rowcount or 0
+
     points = db.execute(
         "DELETE FROM signal_points WHERE day < date('now', '-120 days')"
     ).rowcount or 0
@@ -656,6 +684,7 @@ def prune(
     return {
         "sightings_dropped": dropped,
         "expired_qualifiers": expired,
+        "creators_untracked": untracked,
         "faded": faded,
         "moves_dropped": old_moves,
         "points_dropped": points,

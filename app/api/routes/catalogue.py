@@ -42,6 +42,12 @@ def _themes(name: str | None, symbol: str | None) -> list[str]:
     )
 
 
+#: Below this, a token that once moved is finished. Measured on production:
+#: two thirds of everything that had ever cleared a tier was sitting under
+#: it, so the page was mostly headstones.
+MIN_LIVE_MARKET_CAP = 3_000.0
+
+
 def _sighting_summary(sighting: Any) -> dict[str, Any]:
     return {
         "id": sighting.mint,
@@ -133,6 +139,11 @@ async def list_tokens(
     hours: int = Query(168, ge=1, le=2160, description="How far back to look."),
     qualified_only: bool = Query(False),
     launchpad_slug: str | None = Query(None),
+    # A token that moved and has come back under this is finished. It stays
+    # in the ledger — the brief that reported it and the research explaining
+    # why it ran are both still true — but it is not something to be looking
+    # at, and two thirds of the qualified list was these.
+    min_market_cap: float = Query(MIN_LIVE_MARKET_CAP, ge=0),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> dict[str, Any]:
@@ -145,7 +156,9 @@ async def list_tokens(
     """
     from app.memory import ledger
 
-    found = ledger.movers(since_hours=hours, min_market_cap=0.0, limit=limit + offset)
+    found = ledger.movers(since_hours=hours, min_market_cap=0.0, limit=(limit + offset) * 4)
+    if min_market_cap:
+        found = [t for t in found if (t.market_cap or 0) >= min_market_cap]
     if qualified_only:
         found = [t for t in found if t.qualified_at]
     if launchpad_slug:
@@ -187,7 +200,10 @@ async def list_creators(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     tracked_only: bool = Query(False),
-    winners_only: bool = Query(False),
+    # A wallet that has launched forty tokens and produced no winner is a
+    # bot, and there are tens of thousands of them. Default on: ranking by
+    # volume put the noisiest wallets in the market at the top of the page.
+    winners_only: bool = Query(True),
     window_hours: int | None = Query(None, ge=1, le=2160,
                                      description="Omit for lifetime totals."),
 ) -> dict[str, Any]:
@@ -200,11 +216,9 @@ async def list_creators(
     from app.memory import ledger
 
     found = ledger.top_creators(
-        limit=limit + offset, tracked_only=tracked_only, window_hours=window_hours
+        limit=limit + offset, tracked_only=tracked_only,
+        window_hours=window_hours, winners_only=winners_only,
     )
-    if winners_only:
-        found = [c for c in found if (c.get("winners") or 0) > 0]
-
     return {
         "items": [_creator_summary(c) for c in found[offset : offset + limit]],
         "total": len(found),
