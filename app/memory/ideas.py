@@ -520,6 +520,15 @@ async def record(
             path,
         ),
     )
+
+    # Keep the register current. It is the file the operator scans to find an
+    # idea from three weeks ago, so it is worth rebuilding on every write
+    # rather than on a schedule that could leave it stale.
+    try:
+        await update_log()
+    except Exception:
+        log.warning("idea_log_update_failed", exc_info=True)
+
     return path
 
 
@@ -544,6 +553,84 @@ def latest(origin: str | None = None) -> dict[str, Any] | None:
     return _row(row)
 
 
+LOG_PATH = "playbook/idea-log.md"
+
+
+async def update_log() -> str:
+    """Rewrite the register of every idea ever generated.
+
+    One file, newest first, so the operator can scan months of ideas in one
+    place and say "bring back the worm one". The per-day files hold the full
+    reasoning; this is the index into them, and it exists because a list
+    spread across forty dated files is not a list anybody reads.
+
+    Rewritten rather than appended: an append-only log would drift out of
+    step with the database the first time a set failed to record, and this
+    is cheap to rebuild from the rows that are the actual record.
+    """
+    entries = history(limit=300)
+    if not entries:
+        return LOG_PATH
+
+    lines = [
+        "Every idea generated, newest first. Ask for any of them by ticker "
+        "and they can be elaborated into a full launch kit — nothing here "
+        "expires.",
+        "",
+    ]
+    current_day = None
+    keys: list[str] = []
+    for entry in entries:
+        day = entry.get("day") or (entry.get("generated_at") or "")[:10]
+        if day != current_day:
+            current_day = day
+            origin = entry.get("origin") or "daily"
+            lines += ["", f"## {day}" + (" (requested)" if origin == "requested" else "")]
+            if entry.get("brief"):
+                lines.append(f"_Asked for: {entry['brief']}_")
+            lines.append("")
+        for idea in entry.get("ideas") or []:
+            ticker = str(idea.get("ticker") or "?").upper()
+            keys.append(ticker.lower())
+            grounding = idea.get("grounding") or "?"
+            summary = idea.get("angle") or idea.get("description") or ""
+            lines.append(f"- **${ticker}** — {idea.get('name')} _({grounding})_")
+            if summary:
+                lines.append(f"  {summary}")
+
+    await service.write(
+        LOG_PATH,
+        body="\n".join(lines),
+        title="Idea log — every idea, newest first",
+        kind="playbook",
+        tags=["ideas", "log"],
+        keys=keys[:200],
+        importance=0.7,
+        confidence="high",
+        source="deterministic",
+    )
+    return LOG_PATH
+
+
+def log_entries(limit: int = 50) -> list[dict[str, Any]]:
+    """The register as data, for the API and the bots."""
+    out: list[dict[str, Any]] = []
+    for entry in history(limit=100):
+        for idea in entry.get("ideas") or []:
+            out.append({
+                "ticker": idea.get("ticker"),
+                "name": idea.get("name"),
+                "angle": idea.get("angle") or idea.get("description"),
+                "grounding": idea.get("grounding"),
+                "day": entry.get("day"),
+                "origin": entry.get("origin"),
+                "set_id": entry.get("id"),
+            })
+            if len(out) >= limit:
+                return out
+    return out
+
+
 def find_idea(ticker: str = "", *, name: str = "") -> dict[str, Any] | None:
     """One idea from recent history, by ticker or name.
 
@@ -556,12 +643,25 @@ def find_idea(ticker: str = "", *, name: str = "") -> dict[str, Any] | None:
     if not want_t and not want_n:
         return None
 
-    for entry in history(limit=30):
+    # Exact first, across every set rather than only the latest — the
+    # operator may well come back to Tuesday's third idea.
+    entries = history(limit=200)
+    for entry in entries:
         for idea in entry.get("ideas") or []:
             if want_t and str(idea.get("ticker", "")).strip().upper() == want_t:
                 return {**idea, "set_id": entry.get("id"), "day": entry.get("day")}
             if want_n and str(idea.get("name", "")).strip().lower() == want_n:
                 return {**idea, "set_id": entry.get("id"), "day": entry.get("day")}
+
+    # Then partial, because people remember a coin as "the worm one" rather
+    # than by its exact registered name.
+    needle = want_n or want_t.lower()
+    if len(needle) >= 3:
+        for entry in entries:
+            for idea in entry.get("ideas") or []:
+                haystack = f"{idea.get('name', '')} {idea.get('ticker', '')}".lower()
+                if needle in haystack:
+                    return {**idea, "set_id": entry.get("id"), "day": entry.get("day")}
     return None
 
 

@@ -1263,18 +1263,43 @@ async def _tool_elaborate_idea(agent: AnnieAgent, args: dict[str, Any]) -> dict[
     name = str(args.get("name") or "").strip()
 
     idea = ideas.find_idea(ticker, name=name)
+    invented = False
+
     if idea is None:
-        latest = ideas.latest()
-        known = [
-            f"${i.get('ticker')} ({i.get('name')})"
-            for i in (latest or {}).get("ideas", [])
-        ]
-        return {
-            "found": False,
-            "error": f"No recent idea matching {ticker or name!r}.",
-            "recent_ideas": known,
-            "note": "Name one of these, or ask for fresh ideas first.",
-        }
+        # Do not dead-end. Asked to elaborate on something she never
+        # generated, she used to list what she *had* generated and stop —
+        # which makes the operator's own idea unusable and reads as the
+        # system being precious about its own output. If they name a concept,
+        # work it up first and then build the kit.
+        concept = str(args.get("concept") or "").strip() or name or ticker
+        if not concept:
+            return {
+                "found": False,
+                "error": "Nothing to work from — give a ticker, a name, or a concept.",
+                "recent_ideas": ideas.log_entries(limit=15),
+            }
+
+        fresh = await ideas.generate(
+            agent.registry, agent.settings,
+            brief=f"Work up this specific concept the operator asked for: {concept}",
+            count=1,
+        )
+        if fresh.get("error"):
+            return {"found": False, "built": False, **fresh}
+
+        candidates = fresh.get("ideas") or []
+        if not candidates:
+            return {
+                "found": False,
+                "error": f"I could not make anything of {concept!r}.",
+            }
+        idea = candidates[0]
+        invented = True
+        # Recorded, so it is in the register like any other and can be
+        # elaborated again tomorrow without being reinvented.
+        await ideas.record(
+            {**fresh, "ideas": [idea]}, origin="requested", brief=concept
+        )
 
     kit = await launch_kit.generate(
         idea, agent.registry, agent.settings,
@@ -1286,10 +1311,30 @@ async def _tool_elaborate_idea(agent: AnnieAgent, args: dict[str, Any]) -> dict[
     return {
         "found": True,
         "built": True,
+        "invented": invented,
+        "idea": idea,
         "kit": kit,
         "formatted": launch_kit.format_for_delivery(kit),
         "note": "Every prompt here is ready to paste into an image model "
                 "unedited. Give the operator the formatted version.",
+    }
+
+
+async def _tool_idea_log(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """Every idea ever generated, newest first, with the day it came from.
+
+    Nothing here expires: any of them can still be elaborated into a full
+    launch kit. The operator asked for this because an idea from three weeks
+    ago was effectively lost — it existed in a dated file nobody scans.
+    """
+    from app.memory import ideas
+
+    limit = min(int(args.get("limit") or 30), 100)
+    entries = ideas.log_entries(limit=limit)
+    return {
+        "count": len(entries),
+        "ideas": entries,
+        "note": "Ask to elaborate any of these by ticker — they do not expire.",
     }
 
 
@@ -1485,6 +1530,7 @@ _TOOL_HANDLERS = {
     "remember_person": _tool_remember_person,
     "manage_discord_channel": _tool_manage_discord_channel,
     "elaborate_idea": _tool_elaborate_idea,
+    "idea_log": _tool_idea_log,
     "read_skill": _tool_read_skill,
     "list_channels": _tool_list_channels,
     "send_to_channel": _tool_send_to_channel,
@@ -1928,17 +1974,36 @@ def _tool_specs(settings: Settings, platform_context: PlatformContext | None = N
             "visual identity, logo/PFP/banner/meme prompts ready to paste into an image "
             "model, website plan, X account, Telegram, the first day's posts, and what "
             "to do in the first hour. Use this when they say 'elaborate on $TICKER', "
-            "'let's launch that one', or ask for the art or the copy. Do NOT use it to "
-            "browse ideas — token_idea is for that, and this costs its own call.",
+            "'let's launch that one', or ask for the art or the copy. It also works for "
+            "an idea you have NEVER generated: pass `concept` with whatever they "
+            "described and it will work the idea up first, then build the kit — never "
+            "refuse because something is not in the record. Do NOT use it to browse "
+            "ideas; token_idea is for that, and this costs its own call.",
             {
                 "type": "object", "additionalProperties": False,
                 "properties": {
                     "ticker": {"type": "string", "description": "e.g. LAWCAT or $LAWCAT."},
                     "name": {"type": "string", "description": "If they named it instead."},
+                    "concept": {"type": "string",
+                                "description": "For something not in the record — the "
+                                               "idea they described, in their words."},
                     "context": {"type": "string",
                                 "description": "Anything they added — 'make it darker', "
                                                "'launching at 2am' — passed as a steer."},
                 },
+            },
+        )
+    )
+    specs.append(
+        _spec(
+            "idea_log",
+            "Every idea you have ever generated, newest first, with the day it came "
+            "from. Use it when the operator refers to an idea from a previous day, asks "
+            "what you have suggested before, or wants to revisit one. None of them "
+            "expire — any can still be elaborated into a launch kit.",
+            {
+                "type": "object", "additionalProperties": False,
+                "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 100}},
             },
         )
     )

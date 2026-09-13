@@ -122,7 +122,27 @@ async def elaborate_idea(
     name = str(body.get("name") or "").strip()
     idea = ideas_mod.find_idea(ticker, name=name)
     if idea is None:
-        raise HTTPException(status_code=404, detail="No recent idea matches that.")
+        # Same rule as the chat path: a concept the operator describes is a
+        # perfectly good starting point, and refusing because it is not in
+        # the record makes their own idea unusable.
+        concept = str(body.get("concept") or "").strip() or name or ticker
+        if not concept:
+            raise HTTPException(
+                status_code=404,
+                detail="No recent idea matches that, and no concept was given.",
+            )
+        fresh = await ideas_mod.generate(
+            registry, settings,
+            brief=f"Work up this specific concept the operator asked for: {concept}",
+            count=1,
+        )
+        if fresh.get("error") or not (fresh.get("ideas") or []):
+            raise HTTPException(
+                status_code=502,
+                detail=fresh.get("error") or f"Could not make anything of {concept!r}.",
+            )
+        idea = fresh["ideas"][0]
+        await ideas_mod.record({**fresh, "ideas": [idea]}, origin="requested", brief=concept)
 
     kit = await launch_kit.generate(
         idea, registry, settings, context=str(body.get("context") or "")
@@ -130,3 +150,16 @@ async def elaborate_idea(
     if kit.get("error"):
         raise HTTPException(status_code=502, detail=kit["error"])
     return {"idea": idea, "kit": kit, "formatted": launch_kit.format_for_delivery(kit)}
+
+
+@router.get("/ideas/log")
+async def idea_log(limit: int = Query(50, ge=1, le=200)) -> dict[str, Any]:
+    """Every idea ever generated, newest first, with the day it came from.
+
+    None of them expire — any can still be elaborated into a launch kit. The
+    per-day files hold the full reasoning; this is the index into them,
+    because a list spread across forty dated files is not a list anyone reads.
+    """
+    from app.memory import ideas as ideas_mod
+
+    return {"items": ideas_mod.log_entries(limit=limit), "memory_path": ideas_mod.LOG_PATH}

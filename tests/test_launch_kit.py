@@ -232,3 +232,99 @@ class TestFindingTheIdeaAgain:
 
     async def test_an_unknown_ticker_returns_nothing(self, isolated_memory):
         assert ideas.find_idea("NOPE") is None
+
+
+class TestTheRegister:
+    """An idea from three weeks ago was effectively lost — it existed in a
+    dated file nobody scans. One file, newest first, is what makes "bring
+    back the worm one" answerable."""
+
+    async def test_every_idea_lands_in_one_readable_file(self, isolated_memory):
+        from app.memory import service
+
+        await ideas.record(
+            {"read_of_the_market": "cats", "ideas": [IDEA], "avoid": []}, origin="daily"
+        )
+
+        memory = service.read(ideas.LOG_PATH)
+        assert memory is not None
+        assert "LAWCAT" in memory.body
+        assert "Cat Lawyer" in memory.body
+
+    async def test_the_file_is_grouped_by_day(self, isolated_memory):
+        from app.memory import service
+
+        await ideas.record(
+            {"read_of_the_market": "cats", "ideas": [IDEA], "avoid": []}, origin="daily"
+        )
+
+        body = service.read(ideas.LOG_PATH).body
+        assert "## 20" in body, "no date heading to scan by"
+
+    async def test_a_requested_set_says_what_was_asked_for(self, isolated_memory):
+        from app.memory import service
+
+        await ideas.record(
+            {"read_of_the_market": "x", "ideas": [IDEA], "avoid": []},
+            origin="requested",
+            brief="something about worms",
+        )
+
+        body = service.read(ideas.LOG_PATH).body
+        assert "something about worms" in body
+        assert "requested" in body
+
+    async def test_the_register_is_queryable_as_data(self, isolated_memory):
+        await ideas.record(
+            {"read_of_the_market": "cats", "ideas": [IDEA], "avoid": []}, origin="daily"
+        )
+
+        entries = ideas.log_entries(limit=10)
+
+        assert entries[0]["ticker"] == "LAWCAT"
+        assert entries[0]["day"]
+
+    async def test_it_is_findable_by_contract_of_memory_search(self, isolated_memory):
+        """The log carries every ticker as a key, so pasting one into chat
+        resolves rather than returning nothing."""
+        from app.memory import index
+
+        await ideas.record(
+            {"read_of_the_market": "cats", "ideas": [IDEA], "avoid": []}, origin="daily"
+        )
+
+        assert index.by_key("lawcat")
+
+
+class TestPartialRecall:
+    """People remember a coin as "the worm one", not by its registered name."""
+
+    async def test_a_partial_name_finds_it(self, isolated_memory):
+        await ideas.record(
+            {"read_of_the_market": "x",
+             "ideas": [{**IDEA, "name": "Worm On A String", "ticker": "WORM"}],
+             "avoid": []},
+            origin="daily",
+        )
+
+        assert ideas.find_idea("", name="worm") is not None
+
+    async def test_a_partial_ticker_finds_it(self, isolated_memory):
+        await ideas.record(
+            {"read_of_the_market": "x",
+             "ideas": [{**IDEA, "name": "World War Rug", "ticker": "WWR2"}],
+             "avoid": []},
+            origin="daily",
+        )
+
+        assert ideas.find_idea("WWR") is not None
+
+    async def test_a_two_character_fragment_does_not_match_everything(
+        self, isolated_memory
+    ):
+        """Partial matching must not turn into "returns the first idea"."""
+        await ideas.record(
+            {"read_of_the_market": "x", "ideas": [IDEA], "avoid": []}, origin="daily"
+        )
+
+        assert ideas.find_idea("zz") is None
