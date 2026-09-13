@@ -318,6 +318,87 @@ class TestTheWatchQueuePrioritisesTheYoung:
         assert ledger.due_for_check(2)[0].mint == f"Mint{1:040d}"
 
 
+class TestTokensWithNoMarketStopBeingPolled:
+    """The reason a coin could run and die between two checks of it.
+
+    Measured on production: 195-249 of every 300 the watch loop checked had
+    no tradeable pair at all, and the queue had grown to 69,094 while only a
+    few thousand of those could ever be priced. Three quarters of every batch
+    went on tokens that do not trade, so the ones that do waited hours.
+
+    Dormant is not forgotten — a pool appearing later wakes it. A token
+    cannot cross a tier without a pool, and a pool cannot be created without
+    an event, so nothing can be silently lost this way.
+    """
+
+    @staticmethod
+    def _old_unpriced(mint: str, *, checks: int):
+        from app.memory import db
+
+        old = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
+        ledger.record_launch(mint=mint, creator="W")
+        db.execute(
+            "UPDATE sightings SET first_seen = ?, checks = ? WHERE mint = ?",
+            (old, checks, mint),
+        )
+
+    def test_a_token_that_never_traded_goes_dormant(self, isolated_memory):
+        mint = f"Mint{1:040d}"
+        self._old_unpriced(mint, checks=ledger.DORMANT_AFTER_CHECKS)
+
+        ledger.mark_checked([mint])
+
+        assert ledger.get_sighting(mint).status == ledger.STATUS_DORMANT
+
+    def test_a_dormant_token_leaves_the_queue(self, isolated_memory):
+        mint = f"Mint{1:040d}"
+        self._old_unpriced(mint, checks=ledger.DORMANT_AFTER_CHECKS)
+        ledger.mark_checked([mint])
+
+        assert [s.mint for s in ledger.due_for_check(10)] == []
+
+    def test_a_young_token_is_given_time(self, isolated_memory):
+        """A pair appears within minutes when it appears at all, but not
+        instantly — retiring one on its first miss would drop real launches."""
+        mint = f"Mint{2:040d}"
+        ledger.record_launch(mint=mint, creator="W")
+
+        for _ in range(ledger.DORMANT_AFTER_CHECKS + 2):
+            ledger.mark_checked([mint])
+
+        assert ledger.get_sighting(mint).status == ledger.STATUS_WATCHING
+
+    def test_one_that_traded_is_never_retired(self, isolated_memory):
+        mint = f"Mint{3:040d}"
+        self._old_unpriced(mint, checks=20)
+        ledger.record_price(mint=mint, market_cap=40_000, liquidity=20_000)
+
+        ledger.mark_checked([mint])
+
+        assert ledger.get_sighting(mint).status == ledger.STATUS_WATCHING
+
+    def test_a_pool_appearing_later_wakes_it(self, isolated_memory):
+        """The property that makes this safe rather than lossy."""
+        mint = f"Mint{4:040d}"
+        self._old_unpriced(mint, checks=ledger.DORMANT_AFTER_CHECKS)
+        ledger.mark_checked([mint])
+        assert ledger.get_sighting(mint).status == ledger.STATUS_DORMANT
+
+        ledger.record_launch(mint=mint, creator="W")
+
+        assert ledger.get_sighting(mint).status == ledger.STATUS_WATCHING
+        assert [s.mint for s in ledger.due_for_check(10)] == [mint]
+
+    def test_waking_a_token_that_was_never_asleep_changes_nothing(
+        self, isolated_memory
+    ):
+        mint = f"Mint{5:040d}"
+        ledger.record_launch(mint=mint, creator="W")
+
+        assert ledger.wake(mint) is False
+        assert ledger.get_sighting(mint).status == ledger.STATUS_WATCHING
+
+
 class TestForgetting:
     def test_prune_deletes_the_dead_and_keeps_the_evidence(self, isolated_memory):
         old = datetime.now(timezone.utc) - timedelta(days=5)

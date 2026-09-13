@@ -73,6 +73,27 @@ YOUNG_HOURS = 6
 STATUS_WATCHING = "watching"
 STATUS_QUALIFIED = "qualified"
 STATUS_FADED = "faded"
+
+#: Sighted, repeatedly checked, and never had a tradeable pair at all.
+#:
+#: This is the majority of everything that launches — measured on production,
+#: 195 to 249 of every 300 the watch loop checks have no pair, and the queue
+#: had grown to 69,094 while only a few thousand of those could ever be
+#: priced. Every wasted slot is one a coin that *is* trading did not get, and
+#: that is how a coin ran and died inside the gap between two checks of it.
+#:
+#: Dormant is not forgotten. The row stays, and a pool appearing for it later
+#: fires a webhook that wakes it — which is what makes this lossless rather
+#: than a filter that quietly drops things. A token cannot cross a tier
+#: without a pool, and a pool cannot be created without an event.
+STATUS_DORMANT = "dormant"
+
+#: How many times to look for a pair before giving up on a mint, and how long
+#: to keep looking. A pair appears within minutes when it appears at all; a
+#: token with nothing after this many checks across this long is not pending,
+#: it is inert.
+DORMANT_AFTER_CHECKS = 4
+DORMANT_AFTER_HOURS = 2
 STATUS_DEAD = "dead"
 
 
@@ -214,6 +235,11 @@ def record_launch(
 
     if creator and is_new:
         record_creator_move(wallet=creator, mint=mint, kind="launch", at=now)
+    # A second event for a mint we had given up on means something is
+    # happening to it — in practice a pool being created, which is the only
+    # route to it ever trading. Put it back in the queue.
+    wake(mint)
+
     return is_new
 
 
@@ -353,6 +379,22 @@ def record_price(
     return {"newly_qualified": newly_qualified, "new_peak": new_peak}
 
 
+def wake(mint: str) -> bool:
+    """Put a dormant mint back in the queue. Returns True if it was asleep.
+
+    Called when an event arrives for a token we had given up on — in
+    practice a pool being created, which is the only way it could start
+    trading. This is what makes going dormant safe: nothing is dropped, it
+    is only stopped from being polled until there is a reason to look.
+    """
+    cursor = db.execute(
+        "UPDATE sightings SET status = ?, last_checked = NULL "
+        " WHERE mint = ? AND status = ?",
+        (STATUS_WATCHING, mint, STATUS_DORMANT),
+    )
+    return bool(cursor.rowcount)
+
+
 def mark_checked(mints: Sequence[str]) -> None:
     """Stamp mints the price provider returned nothing for.
 
@@ -367,6 +409,23 @@ def mark_checked(mints: Sequence[str]) -> None:
     db.executemany(
         "UPDATE sightings SET last_checked = ?, checks = checks + 1 WHERE mint = ?",
         [(now, m) for m in mints],
+    )
+
+    # Retire the ones that have had long enough. Keeping them in rotation was
+    # costing roughly three quarters of every batch, which is the reason a
+    # coin that actually traded could wait half a day to be re-priced.
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=DORMANT_AFTER_HOURS)).isoformat()
+    placeholders = ", ".join("?" for _ in mints)
+    db.execute(
+        f"""
+        UPDATE sightings SET status = ?
+         WHERE mint IN ({placeholders})
+           AND status = ?
+           AND market_cap IS NULL
+           AND checks >= ?
+           AND first_seen < ?
+        """,
+        (STATUS_DORMANT, *mints, STATUS_WATCHING, DORMANT_AFTER_CHECKS, cutoff),
     )
 
 
