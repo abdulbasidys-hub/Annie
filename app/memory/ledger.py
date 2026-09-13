@@ -64,6 +64,12 @@ TRACK_AFTER_LAUNCHES = 25
 #: two hundred times.
 TRACK_AFTER_MARKET_CAP = 100_000.0
 
+#: How long a token counts as young enough to re-price ahead of the general
+#: sweep. A Pump.fun token's whole run usually happens inside an hour, and
+#: almost always inside a day; six hours covers the window where a check
+#: changes what we know, without the young bucket becoming the whole queue.
+YOUNG_HOURS = 6
+
 STATUS_WATCHING = "watching"
 STATUS_QUALIFIED = "qualified"
 STATUS_FADED = "faded"
@@ -402,6 +408,16 @@ def due_for_check(limit: int, *, tracked_first: bool = True) -> list[Sighting]:
             {ours_clause}
             CASE WHEN ? AND COALESCE(c.tracked, 0) = 1 THEN 0 ELSE 1 END,
             CASE WHEN COALESCE(s.market_cap, 0) >= ? THEN 0 ELSE 1 END,
+            -- Young tokens, before the general sweep. This is the bucket
+            -- that was missing and it cost real winners: a token is checked
+            -- once at minute zero, has no trading pair yet, gets stamped,
+            -- and then sorts by `last_checked ASC` into a queue sixty
+            -- thousand deep — roughly eleven hours at 900 every ten minutes.
+            -- A Pump.fun token's entire run happens inside an hour, so by
+            -- the time it came round again it had already round-tripped to
+            -- nothing. The first hours are exactly when a launch is worth
+            -- watching and were exactly when it was not being watched.
+            CASE WHEN s.first_seen >= ? THEN 0 ELSE 1 END,
             CASE WHEN s.last_checked IS NULL THEN 0 ELSE 1 END,
             s.last_checked ASC,
             s.last_seen DESC
@@ -413,6 +429,7 @@ def due_for_check(limit: int, *, tracked_first: bool = True) -> list[Sighting]:
             *ours,
             1 if tracked_first else 0,
             WATCH_FLOOR_USD,
+            (datetime.now(timezone.utc) - timedelta(hours=YOUNG_HOURS)).isoformat(),
             limit,
         ),
     )

@@ -257,6 +257,67 @@ class TestLedger:
         assert ledger.get_sighting(mint).checks == 1
 
 
+class TestTheWatchQueuePrioritisesTheYoung:
+    """The bucket that was missing, and what it cost.
+
+    A token is checked once at minute zero, has no trading pair yet, gets
+    stamped, and then sorts by `last_checked ASC` into a queue sixty thousand
+    deep — about eleven hours at 900 every ten minutes. A Pump.fun token's
+    whole run happens inside an hour, so it had already round-tripped by the
+    time it came round again. The first hours are exactly when a launch is
+    worth watching and were exactly when it was not.
+    """
+
+    def test_a_young_token_outranks_an_old_one_checked_longer_ago(
+        self, isolated_memory
+    ):
+        from app.memory import db
+
+        old_stamp = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+        ledger.record_launch(mint=f"Mint{1:040d}", creator="W1")
+        db.execute(
+            "UPDATE sightings SET first_seen = ?, last_checked = ? WHERE mint = ?",
+            (old_stamp, old_stamp, f"Mint{1:040d}"),
+        )
+
+        ledger.record_launch(mint=f"Mint{2:040d}", creator="W2")
+        ledger.mark_checked([f"Mint{2:040d}"])
+
+        queue = [s.mint for s in ledger.due_for_check(5)]
+
+        assert queue[0] == f"Mint{2:040d}", (
+            "the token launched minutes ago sorted behind one from three days "
+            "back — this is the starvation that lost real winners"
+        )
+
+    def test_a_stamped_young_token_still_comes_back_quickly(self, isolated_memory):
+        """Being checked once, before it had a pair, must not exile it."""
+        for i in range(40):
+            ledger.record_launch(mint=f"Old{i:041d}", creator=f"W{i}")
+        from app.memory import db
+
+        old_stamp = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        db.execute("UPDATE sightings SET first_seen = ?, last_checked = ?", (old_stamp, old_stamp))
+
+        ledger.record_launch(mint=f"Mint{9:040d}", creator="Wnew")
+        ledger.mark_checked([f"Mint{9:040d}"])
+
+        assert f"Mint{9:040d}" in [s.mint for s in ledger.due_for_check(3)]
+
+    def test_something_already_moving_still_outranks_a_young_token(
+        self, isolated_memory
+    ):
+        """Priority order is unchanged above the new bucket: a token actually
+        trading is worth more than a fresh one that may never trade."""
+        ledger.record_launch(mint=f"Mint{1:040d}", creator="W1")
+        ledger.record_price(
+            mint=f"Mint{1:040d}", market_cap=80_000, liquidity=30_000
+        )
+        ledger.record_launch(mint=f"Mint{2:040d}", creator="W2")
+
+        assert ledger.due_for_check(2)[0].mint == f"Mint{1:040d}"
+
+
 class TestForgetting:
     def test_prune_deletes_the_dead_and_keeps_the_evidence(self, isolated_memory):
         old = datetime.now(timezone.utc) - timedelta(days=5)

@@ -235,6 +235,20 @@ async def register(
         memory_path=existing.memory_path if existing else launch_path(mint),
     )
     save(launch)
+
+    # Close the loop on the register: this idea is now a coin. Themes cycle,
+    # so the ones still unlaunched stay available for when their week comes
+    # back round — the distinction only means anything if launching marks
+    # one off.
+    if launch.ticker:
+        try:
+            from app.memory import ideas
+
+            ideas.mark_launched(launch.ticker, mint)
+            await ideas.update_log()
+        except Exception:
+            log.info("idea_mark_launched_failed", ticker=launch.ticker, exc_info=True)
+
     await _write_memory(launch, opening=existing is None)
     await mirror(launch)
     log.info("launch_registered", mint=mint, ticker=launch.ticker, new=existing is None)

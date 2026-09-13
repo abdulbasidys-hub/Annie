@@ -553,6 +553,43 @@ def latest(origin: str | None = None) -> dict[str, Any] | None:
     return _row(row)
 
 
+LAUNCHED_SCHEMA = """
+CREATE TABLE IF NOT EXISTS launched_ideas (
+    ticker      TEXT PRIMARY KEY,
+    mint        TEXT NOT NULL,
+    launched_at TEXT NOT NULL
+)
+"""
+
+
+def mark_launched(ticker: str, mint: str) -> None:
+    """Attach an idea to the coin it became.
+
+    Themes cycle: AI one week, politics the next, then something else. An
+    idea that was right and untimely is not spent — it comes back when its
+    week does. So the register distinguishes three states rather than two:
+    launched (this became a coin, here is the contract), and everything else,
+    which is still available.
+    """
+    from app.memory import db
+
+    db.execute(LAUNCHED_SCHEMA)
+    db.execute(
+        "INSERT INTO launched_ideas(ticker, mint, launched_at) VALUES(?, ?, ?) "
+        "ON CONFLICT(ticker) DO UPDATE SET mint = excluded.mint, "
+        "launched_at = excluded.launched_at",
+        ((ticker or "").strip().lstrip("$").upper(), mint, db.utcnow_iso()),
+    )
+
+
+def launched_map() -> dict[str, dict[str, str]]:
+    from app.memory import db
+
+    db.execute(LAUNCHED_SCHEMA)
+    rows = db.query("SELECT ticker, mint, launched_at FROM launched_ideas", ())
+    return {r["ticker"]: {"mint": r["mint"], "launched_at": r["launched_at"]} for r in rows}
+
+
 LOG_PATH = "playbook/idea-log.md"
 
 
@@ -573,11 +610,13 @@ async def update_log() -> str:
         return LOG_PATH
 
     lines = [
-        "Every idea generated, newest first. Ask for any of them by ticker "
-        "and they can be elaborated into a full launch kit — nothing here "
-        "expires.",
+        "Every idea generated, newest first. Nothing here expires — themes "
+        "cycle, and an idea that was right but untimely comes back when its "
+        "week does. Ask for any of them by ticker to elaborate it into a "
+        "full launch kit. Ones marked LAUNCHED became coins.",
         "",
     ]
+    launched = launched_map()
     current_day = None
     keys: list[str] = []
     for entry in entries:
@@ -594,7 +633,9 @@ async def update_log() -> str:
             keys.append(ticker.lower())
             grounding = idea.get("grounding") or "?"
             summary = idea.get("angle") or idea.get("description") or ""
-            lines.append(f"- **${ticker}** — {idea.get('name')} _({grounding})_")
+            state = launched.get(ticker)
+            mark = f" · **LAUNCHED** `{state['mint'][:12]}…`" if state else ""
+            lines.append(f"- **${ticker}** — {idea.get('name')} _({grounding})_{mark}")
             if summary:
                 lines.append(f"  {summary}")
 
@@ -615,6 +656,7 @@ async def update_log() -> str:
 def log_entries(limit: int = 50) -> list[dict[str, Any]]:
     """The register as data, for the API and the bots."""
     out: list[dict[str, Any]] = []
+    launched = launched_map()
     for entry in history(limit=100):
         for idea in entry.get("ideas") or []:
             out.append({
@@ -625,6 +667,7 @@ def log_entries(limit: int = 50) -> list[dict[str, Any]]:
                 "day": entry.get("day"),
                 "origin": entry.get("origin"),
                 "set_id": entry.get("id"),
+                "launched": launched.get(str(idea.get("ticker") or "").upper()),
             })
             if len(out) >= limit:
                 return out

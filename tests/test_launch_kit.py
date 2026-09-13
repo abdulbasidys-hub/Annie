@@ -328,3 +328,57 @@ class TestPartialRecall:
         )
 
         assert ideas.find_idea("zz") is None
+
+
+class TestIdeasHaveALifecycle:
+    """Themes cycle — AI one week, politics the next. An idea that was right
+    and untimely is not spent; it comes back when its week does. That only
+    means anything if launching one marks it off."""
+
+    async def test_launching_marks_the_idea(self, isolated_memory):
+        from app.memory import launches, service
+
+        await ideas.record(
+            {"read_of_the_market": "cats", "ideas": [IDEA], "avoid": []}, origin="daily"
+        )
+        await launches.register("Mint" + "4" * 40, ticker="LAWCAT", name="Cat Lawyer")
+
+        body = service.read(ideas.LOG_PATH).body
+        assert "LAUNCHED" in body
+
+    async def test_an_unlaunched_idea_stays_available(self, isolated_memory):
+        await ideas.record(
+            {"read_of_the_market": "x",
+             "ideas": [IDEA, {**IDEA, "ticker": "WORM", "name": "Worm"}],
+             "avoid": []},
+            origin="daily",
+        )
+        from app.memory import launches
+
+        await launches.register("Mint" + "5" * 40, ticker="LAWCAT")
+
+        entries = {e["ticker"]: e for e in ideas.log_entries(limit=20)}
+        assert entries["LAWCAT"]["launched"] is not None
+        assert entries["WORM"]["launched"] is None
+
+    async def test_a_launched_idea_still_carries_its_contract(self, isolated_memory):
+        from app.memory import launches
+
+        mint = "Mint" + "6" * 40
+        await ideas.record(
+            {"read_of_the_market": "x", "ideas": [IDEA], "avoid": []}, origin="daily"
+        )
+        await launches.register(mint, ticker="LAWCAT")
+
+        assert ideas.launched_map()["LAWCAT"]["mint"] == mint
+
+    async def test_it_can_still_be_elaborated_after_launching(self, isolated_memory):
+        """Relaunching a theme later is the point, so nothing is closed off."""
+        from app.memory import launches
+
+        await ideas.record(
+            {"read_of_the_market": "x", "ideas": [IDEA], "avoid": []}, origin="daily"
+        )
+        await launches.register("Mint" + "7" * 40, ticker="LAWCAT")
+
+        assert ideas.find_idea("LAWCAT") is not None
