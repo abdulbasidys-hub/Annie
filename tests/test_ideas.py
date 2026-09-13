@@ -17,6 +17,7 @@ from app.memory import bootstrap, ideas, index, ledger, service
 IDEA = {
     "name": "Cat Lawyer",
     "ticker": "LAWCAT",
+    "kind": "meme",
     "angle": "A cat in a courtroom filing motions for bag-holders.",
     "hook": "The indignation is the joke — it reads as a reaction image.",
     "image_prompt": "A tabby cat in an ill-fitting grey suit standing behind a "

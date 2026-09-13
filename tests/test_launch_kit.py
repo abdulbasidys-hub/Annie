@@ -18,6 +18,7 @@ from app.memory import ideas, launch_kit
 IDEA = {
     "name": "Cat Lawyer",
     "ticker": "LAWCAT",
+    "kind": "meme",
     "angle": "A cat in a courtroom filing motions for bag-holders.",
     "hook": "The indignation is the joke — it reads as a reaction image.",
     "why_now": "Third week of cat-adjacent; the specific variants clear at 3x.",
@@ -99,7 +100,7 @@ class TestTheIdeaStaysADecision:
         required = set(ideas.IDEA_SCHEMA["properties"]["ideas"]["items"]["required"])
 
         assert required == {
-            "name", "ticker", "angle", "hook",
+            "name", "ticker", "kind", "angle", "hook",
             "why_now", "evidence", "grounding", "risk",
         }
 
@@ -382,3 +383,36 @@ class TestIdeasHaveALifecycle:
         await launches.register("Mint" + "7" * 40, ticker="LAWCAT")
 
         assert ideas.find_idea("LAWCAT") is not None
+
+
+class TestOneIdeaIsAlwaysAMeme:
+    """The operator launches meme coins, and a set of three narrative plays
+    is not what they asked for. A meme is a specific thing — recognition,
+    contrast, timing, remixability — and a joke or an advert is not one."""
+
+    def test_the_schema_requires_a_kind(self):
+        item = ideas.IDEA_SCHEMA["properties"]["ideas"]["items"]
+
+        assert "kind" in item["required"]
+        assert item["properties"]["kind"]["enum"] == ["meme", "narrative", "event"]
+
+    def test_the_prompt_demands_one_and_forbids_faking_it(self):
+        """A mislabelled meme is worse than an honest gap: it hides that the
+        market had nothing that day."""
+        assert "must be a real meme" in ideas.SYSTEM_PROMPT
+        assert "mislabelled" in ideas.SYSTEM_PROMPT
+
+    def test_the_meme_method_is_loaded_for_a_launch(self, isolated_memory):
+        from app.memory import skills
+
+        skills.seed()
+
+        assert "meme-theory" in skills.ROUTES["launch"]
+        assert "What Is a Meme?" in skills.for_task("launch")
+
+    def test_delivery_shows_which_kind_each_idea_is(self):
+        text = ideas.format_for_delivery(
+            {"ideas": [IDEA], "read_of_the_market": "cats", "avoid": []}
+        )
+
+        assert "meme" in text

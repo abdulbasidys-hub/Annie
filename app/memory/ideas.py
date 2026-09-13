@@ -64,7 +64,7 @@ IDEA_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "additionalProperties": False,
                 "required": [
-                    "name", "ticker", "angle", "hook",
+                    "name", "ticker", "kind", "angle", "hook",
                     "why_now", "evidence", "grounding", "risk",
                 ],
                 "properties": {
@@ -80,6 +80,21 @@ IDEA_SCHEMA: dict[str, Any] = {
                         "description": "Uppercase, 3-8 characters, no $ prefix. Name and "
                         "ticker are one system — the ticker should carry the identity the "
                         "name does not, rather than repeat it.",
+                    },
+                    "kind": {
+                        "type": "string",
+                        "enum": ["meme", "narrative", "event"],
+                        "description": (
+                            "What kind of idea this is. `meme` means it rests on an "
+                            "actual meme — a recognisable image or format with a "
+                            "punchline, that someone would send to a friend without "
+                            "being asked to. `narrative` rides a theme that is "
+                            "running. `event` is tied to something that just "
+                            "happened. Exactly one of your ideas must be `meme`, and "
+                            "it has to satisfy the meme method: recognition, "
+                            "contrast, timing, remixability. A joke is not a meme "
+                            "and an advert is certainly not."
+                        ),
                     },
                     "angle": {
                         "type": "string",
@@ -158,6 +173,14 @@ Rules:
   built on a repeatable catalyst is worth more than one built on a theme
   that merely appears often, because the second tells you what was popular
   and the first tells you what can be caused.
+- **One of your ideas must be a real meme.** Not a joke, not a branded
+  reference, not an advert with a character on it — a meme as the meme
+  method defines one: a recognisable image or format, a punchline that lands
+  without explanation, and something a person would send to a friend
+  unprompted. Mark it `kind: "meme"`. If the day genuinely offers no meme
+  worth building on, say so in the risk field of your weakest idea rather
+  than labelling a narrative play as a meme — a mislabelled one is worse
+  than an honest gap, because it hides that the market had nothing.
 - An idea here is a *decision*, not a brief. The operator is choosing which
   one to launch, so give exactly what picks a winner: what it is, why anyone
   would share it, why now, what it rests on, what kills it. They will ask you
@@ -811,7 +834,8 @@ def format_for_delivery(payload: dict[str, Any], *, limit: int = 3) -> str:
 
     for idea in ideas:
         lines += [
-            f"**{idea.get('name')}**  `${idea.get('ticker')}`  _{idea.get('grounding')}_",
+            f"**{idea.get('name')}**  `${idea.get('ticker')}`  "
+            f"_{idea.get('kind') or 'idea'} · {idea.get('grounding')}_",
             str(idea.get("angle") or idea.get("description") or ""),
         ]
         if idea.get("hook"):

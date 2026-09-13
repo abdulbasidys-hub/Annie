@@ -62,18 +62,26 @@ SKILLS: dict[str, tuple[str, str]] = {
         "06_trading_crypto_market_culture.md",
         "How traders actually talk and what reads as a scam to them.",
     ),
+    "meme-theory": (
+        "meme.md",
+        "What a meme actually is — recognition, contrast, timing, "
+        "remixability — and why most attempts are jokes or adverts instead.",
+    ),
 }
 
 #: Which skills a task loads, from the pack's own README.
 ROUTES: dict[str, tuple[str, ...]] = {
     # A meme launch. The operator's main use.
-    "launch": ("web3-branding", "meme-naming", "social-copy", "market-culture"),
+    "launch": (
+        "meme-theory", "web3-branding", "meme-naming", "social-copy",
+        "market-culture",
+    ),
     # Naming alone, when she is asked to iterate on a name or ticker.
-    "naming": ("meme-naming", "market-culture"),
+    "naming": ("meme-theory", "meme-naming", "market-culture"),
     # Art direction — briefing an image model or critiquing what came back.
     "visual": ("visual-design", "web3-branding"),
     # Writing the post.
-    "copy": ("social-copy", "market-culture"),
+    "copy": ("meme-theory", "social-copy", "market-culture"),
     # A serious protocol rather than a meme.
     "protocol": ("visual-design", "web3-branding", "social-copy", "market-culture"),
 }
