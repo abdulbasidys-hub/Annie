@@ -34,7 +34,7 @@ been to move the bill from Firestore to OpenAI.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 import structlog
@@ -283,7 +283,14 @@ async def _deliver_brief(
     # without this it is mostly a re-list — and the few that crossed in the
     # last six hours get buried among eighty already read about.
     window_hours = 24 if full_day else 6
-    qualified = ledger.qualified_in_window(now - timedelta(hours=window_hours), now)
+
+    # Everything launched recently that ever cleared a tier, whatever it is
+    # worth now. A coin that ran to $2M and round-tripped to nothing is
+    # exactly as much of an answer to "what was launched that went
+    # somewhere" — more often than not it is the normal shape. The
+    # once-a-day guard below is what keeps the generous window from
+    # repeating anything.
+    qualified = ledger.qualified_launches(since_hours=48)
     fresh = coins.unreported(qualified, day=day)
 
     # Split, because they answer different questions. A launch tells you what
@@ -319,8 +326,8 @@ async def _deliver_brief(
 
     if not fresh and qualified:
         lines += [
-            f"Nothing new crossed a tier this window. The {len(qualified)} in the "
-            f"last {window_hours}h were all in earlier briefs.",
+            f"Nothing new crossed a tier since the last brief. The "
+            f"{len(qualified)} recent ones were all reported earlier today.",
             "",
         ]
     elif not fresh:

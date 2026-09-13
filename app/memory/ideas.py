@@ -610,10 +610,11 @@ async def update_log() -> str:
         return LOG_PATH
 
     lines = [
-        "Every idea generated, newest first. Nothing here expires — themes "
-        "cycle, and an idea that was right but untimely comes back when its "
-        "week does. Ask for any of them by ticker to elaborate it into a "
-        "full launch kit. Ones marked LAUNCHED became coins.",
+        "Ideas still available, newest first. Nothing here expires — themes "
+        "cycle, and one that was right but untimely comes back when its week "
+        "does. Ask for any by ticker to elaborate it into a full launch kit. "
+        "Anything we launched has left this list and lives in Our Launches "
+        "with its contract address.",
         "",
     ]
     launched = launched_map()
@@ -633,9 +634,13 @@ async def update_log() -> str:
             keys.append(ticker.lower())
             grounding = idea.get("grounding") or "?"
             summary = idea.get("angle") or idea.get("description") or ""
-            state = launched.get(ticker)
-            mark = f" · **LAUNCHED** `{state['mint'][:12]}…`" if state else ""
-            lines.append(f"- **${ticker}** — {idea.get('name')} _({grounding})_{mark}")
+            if ticker in launched:
+                # It became a coin. It lives in Our Launches now, with its
+                # contract address and its check-ins — leaving it here too
+                # would make this a list of things to consider that is
+                # partly things already done.
+                continue
+            lines.append(f"- **${ticker}** — {idea.get('name')} _({grounding})_")
             if summary:
                 lines.append(f"  {summary}")
 
@@ -659,6 +664,8 @@ def log_entries(limit: int = 50) -> list[dict[str, Any]]:
     launched = launched_map()
     for entry in history(limit=100):
         for idea in entry.get("ideas") or []:
+            if str(idea.get("ticker") or "").upper() in launched:
+                continue
             out.append({
                 "ticker": idea.get("ticker"),
                 "name": idea.get("name"),
@@ -667,7 +674,6 @@ def log_entries(limit: int = 50) -> list[dict[str, Any]]:
                 "day": entry.get("day"),
                 "origin": entry.get("origin"),
                 "set_id": entry.get("id"),
-                "launched": launched.get(str(idea.get("ticker") or "").upper()),
             })
             if len(out) >= limit:
                 return out
@@ -686,8 +692,9 @@ def find_idea(ticker: str = "", *, name: str = "") -> dict[str, Any] | None:
     if not want_t and not want_n:
         return None
 
-    # Exact first, across every set rather than only the latest — the
-    # operator may well come back to Tuesday's third idea.
+    # Searches launched ideas too, unlike the register. Relaunching a
+    # theme when its week comes back round is the point, and "elaborate on
+    # $LAWCAT" should still work for one we shipped in August.
     entries = history(limit=200)
     for entry in entries:
         for idea in entry.get("ideas") or []:

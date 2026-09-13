@@ -344,7 +344,7 @@ class TestIdeasHaveALifecycle:
         await launches.register("Mint" + "4" * 40, ticker="LAWCAT", name="Cat Lawyer")
 
         body = service.read(ideas.LOG_PATH).body
-        assert "LAUNCHED" in body
+        assert "LAWCAT" not in body, "a launched idea is still in the ideas list"
 
     async def test_an_unlaunched_idea_stays_available(self, isolated_memory):
         await ideas.record(
@@ -357,9 +357,9 @@ class TestIdeasHaveALifecycle:
 
         await launches.register("Mint" + "5" * 40, ticker="LAWCAT")
 
-        entries = {e["ticker"]: e for e in ideas.log_entries(limit=20)}
-        assert entries["LAWCAT"]["launched"] is not None
-        assert entries["WORM"]["launched"] is None
+        tickers = {e["ticker"] for e in ideas.log_entries(limit=20)}
+        assert "LAWCAT" not in tickers, "launched ideas belong in Our Launches"
+        assert "WORM" in tickers, "the unlaunched one must stay available"
 
     async def test_a_launched_idea_still_carries_its_contract(self, isolated_memory):
         from app.memory import launches

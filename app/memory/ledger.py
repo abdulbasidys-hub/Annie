@@ -500,6 +500,36 @@ def qualified_in_window(
     return [Sighting.from_row(r) for r in rows]
 
 
+def qualified_launches(*, since_hours: int = 48) -> list[Sighting]:
+    """Coins launched recently that have ever cleared a tier.
+
+    Keyed on when the coin *launched*, not on when it crossed, and with no
+    condition at all on what it is worth now. Both of those are deliberate.
+
+    The operator's question is "what was launched in that window that went
+    somewhere", and a coin that ran to $2M and round-tripped to nothing
+    answers it exactly as well as one still holding — better, often, since
+    the round trip is the normal shape and the thing to learn from. Filtering
+    on current price was hiding two thirds of them.
+
+    The window is generous rather than exact because a coin launched at 11:55
+    may not cross until 12:30, and keying strictly on a six-hour slice would
+    drop it from the brief covering its launch and from every brief after.
+    The once-per-day report guard in :mod:`app.memory.coins` is what stops
+    the wider window repeating anything.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=since_hours)).isoformat()
+    rows = db.query(
+        """
+        SELECT * FROM sightings
+         WHERE qualified_at IS NOT NULL AND first_seen >= ?
+         ORDER BY COALESCE(peak_market_cap, 0) DESC
+        """,
+        (cutoff,),
+    )
+    return [Sighting.from_row(r) for r in rows]
+
+
 def top_creators(
     *,
     limit: int = 25,

@@ -516,7 +516,7 @@ class TestACoinIsReportedOnce:
                      get_settings(), slot=12)
 
         second = [t for c, t in sent if c == "111"][1]
-        assert "earlier briefs" in second
+        assert "reported earlier today" in second
 
     async def test_a_new_coin_still_gets_through(self, seeded, monkeypatch):
         from app.config import get_settings
