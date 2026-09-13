@@ -102,3 +102,31 @@ async def idea_context(brief: str = Query("")) -> dict[str, Any]:
         "saturated": [s for s in winning if (s.get("recent_freq") or 0) >= 0.30],
         "memories_that_would_be_used": [h.to_dict() for h in index.recall(topics=topics, budget=8)],
     }
+
+
+@router.post("/ideas/elaborate")
+async def elaborate_idea(
+    body: dict[str, Any] = Body(...),
+    registry: ProviderRegistry = Depends(get_registry),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """The full launch kit for one idea — art prompts, site, X, Telegram, posts.
+
+    Separate from generating ideas, and charged separately, because it is
+    only worth producing for the one the operator actually picked.
+    """
+    from app.memory import ideas as ideas_mod
+    from app.memory import launch_kit
+
+    ticker = str(body.get("ticker") or "").strip()
+    name = str(body.get("name") or "").strip()
+    idea = ideas_mod.find_idea(ticker, name=name)
+    if idea is None:
+        raise HTTPException(status_code=404, detail="No recent idea matches that.")
+
+    kit = await launch_kit.generate(
+        idea, registry, settings, context=str(body.get("context") or "")
+    )
+    if kit.get("error"):
+        raise HTTPException(status_code=502, detail=kit["error"])
+    return {"idea": idea, "kit": kit, "formatted": launch_kit.format_for_delivery(kit)}

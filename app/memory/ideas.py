@@ -64,124 +64,40 @@ IDEA_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "additionalProperties": False,
                 "required": [
-                    "name", "ticker", "description", "angle",
-                    "image_prompt", "image_style", "image_avoid",
-                    "first_tweet", "tweet_angle",
-                    "site_concept", "site_sections", "site_build_notes",
+                    "name", "ticker", "angle", "hook",
                     "why_now", "evidence", "grounding", "risk",
                 ],
                 "properties": {
                     "name": {
                         "type": "string",
                         "description": "The token name exactly as it should appear on the "
-                        "launchpad. Not a description of a name — the name itself.",
+                        "launchpad. Not a description of a name — the name itself. Apply "
+                        "the naming method: name the event, find the canonical subject, "
+                        "and ask what Know Your Meme would have titled it tomorrow.",
                     },
                     "ticker": {
                         "type": "string",
-                        "description": "Uppercase, 3-8 characters, no $ prefix.",
+                        "description": "Uppercase, 3-8 characters, no $ prefix. Name and "
+                        "ticker are one system — the ticker should carry the identity the "
+                        "name does not, rather than repeat it.",
                     },
-                    "description": {
+                    "angle": {
                         "type": "string",
-                        "description": "The launchpad description field, written to be pasted "
-                        "in as-is. One or two lines in the register the token is aiming at — "
-                        "not an explanation of the strategy, the actual copy.",
+                        "description": "What the coin is, in one or two sentences. The "
+                        "event or subject behind it, plainly, no marketing language.",
                     },
-                    "image_prompt": {
+                    "hook": {
                         "type": "string",
-                        "description": (
-                            "A complete prompt, pasted into an image model with no editing "
-                            "and no further questions asked. Write it as an instruction to a "
-                            "generator, never as a description of a picture to a person.\n\n"
-                            "It must cover, in this order and in one flowing prompt: the "
-                            "subject and exactly what it is doing; its expression or posture; "
-                            "what it is wearing or holding; the camera framing (close crop, "
-                            "centred bust, full body); the background and its colour; the "
-                            "lighting; the art style; and the aspect ratio (square, for a "
-                            "token avatar).\n\n"
-                            "Memecoin art is judged at 32 pixels in a list before it is ever "
-                            "seen large, so build for that: one subject, strong silhouette, "
-                            "high contrast against the background, no small text, nothing "
-                            "important near the edges. Aim for roughly 60-100 words — enough "
-                            "that the generator has no gaps to fill badly."
-                        ),
+                        "description": "Why anyone would share it. One sentence — the "
+                        "contradiction, the absurdity, the resemblance, whatever makes "
+                        "somebody send it to a friend. If you cannot name the hook, the "
+                        "idea is weak and saying so is more useful than dressing it up.",
                     },
-                    "image_style": {
+                    "why_now": {
                         "type": "string",
-                        "description": (
-                            "The visual register, named specifically enough to be reproducible: "
-                            "'flat vector, thick outlines, four-colour palette', '2003 digital "
-                            "camera photo with flash', 'MS Paint, deliberately crude', "
-                            "'3D render, Pixar lighting'. The style carries as much of the "
-                            "signal as the subject does — a crude drawing and a polished render "
-                            "of the same joke are different tokens."
-                        ),
+                        "description": "What in the current market makes this the moment. "
+                        "Timing is most of the decision.",
                     },
-                    "image_avoid": {
-                        "type": "string",
-                        "description": (
-                            "What would make it look generic or like a scam. Be concrete: "
-                            "'no gold coins, no rocket, no laser eyes, not photoreal'."
-                        ),
-                    },
-                    "first_tweet": {
-                        "type": "string",
-                        "description": (
-                            "The launch post, written to be posted verbatim. Under 240 "
-                            "characters. No hashtags unless the joke needs one, no 'excited to "
-                            "announce', no contract address (that goes in a reply). It has to "
-                            "work as a post on its own merits to someone who has never heard of "
-                            "the token — if it only makes sense to someone already holding, it "
-                            "is not a launch post."
-                        ),
-                    },
-                    "site_concept": {
-                        "type": "string",
-                        "description": (
-                            "What the website is, in two or three sentences, written for the "
-                            "agent that will build it. State the one thing a visitor should "
-                            "understand within two seconds of landing, and what they should "
-                            "do next. Ground it in what winners are actually shipping right "
-                            "now rather than in what a project site 'should' have — you are "
-                            "shown the site shapes that recent movers used."
-                        ),
-                    },
-                    "site_sections": {
-                        "type": "array",
-                        "minItems": 2,
-                        "maxItems": 6,
-                        "items": {"type": "string"},
-                        "description": (
-                            "The sections of the page, top to bottom, one short phrase each, "
-                            "including what goes in it: 'hero — the cat mid-objection, ticker, "
-                            "one-line joke', 'live chart embed', 'how to buy, three steps', "
-                            "'the lore, four short paragraphs'. Most memecoin sites that work "
-                            "are one scroll. If the right answer is three sections, give "
-                            "three — padding a page is how it starts looking like every "
-                            "abandoned project site."
-                        ),
-                    },
-                    "site_build_notes": {
-                        "type": "string",
-                        "description": (
-                            "The handoff to whoever builds it: the tone of the copy, the "
-                            "palette and where it comes from (usually the token art), "
-                            "whether it needs motion, what to reuse from the image, and the "
-                            "single mistake most likely to make it look like a scam or a "
-                            "template. Be specific enough that an agent could start without "
-                            "asking a follow-up question."
-                        ),
-                    },
-                    "tweet_angle": {
-                        "type": "string",
-                        "description": (
-                            "Why that post works, in one sentence: what makes it shareable, "
-                            "quotable, or worth replying to. If the honest answer is that it "
-                            "does not have a hook, say so — that is a reason to reconsider the "
-                            "whole idea, not a copywriting problem."
-                        ),
-                    },
-                    "angle": {"type": "string", "description": "The concept, in one or two sentences."},
-                    "why_now": {"type": "string", "description": "What in the current market makes this timely."},
                     "evidence": {
                         "type": "string",
                         "description": "The specific signal, token or memory this rests on. "
@@ -193,7 +109,10 @@ IDEA_SCHEMA: dict[str, Any] = {
                         "description": "observed = directly supported by the data shown; "
                         "inferred = a reasonable step from it; speculative = a hunch.",
                     },
-                    "risk": {"type": "string", "description": "The strongest reason this fails."},
+                    "risk": {
+                        "type": "string",
+                        "description": "The strongest reason this fails.",
+                    },
                 },
             },
         },
@@ -239,6 +158,11 @@ Rules:
   built on a repeatable catalyst is worth more than one built on a theme
   that merely appears often, because the second tells you what was popular
   and the first tells you what can be caused.
+- An idea here is a *decision*, not a brief. The operator is choosing which
+  one to launch, so give exactly what picks a winner: what it is, why anyone
+  would share it, why now, what it rests on, what kills it. They will ask you
+  to elaborate on the one they pick, and that is when art direction, the
+  website, the X account and the posts get written. Do not produce those here.
 - Be concrete. "Animal theme with a twist" is not an idea. Give a name, a
   ticker, the description copy and the image, all ready to use — someone
   should be able to open a launchpad and fill the form from your answer
@@ -620,6 +544,27 @@ def latest(origin: str | None = None) -> dict[str, Any] | None:
     return _row(row)
 
 
+def find_idea(ticker: str = "", *, name: str = "") -> dict[str, Any] | None:
+    """One idea from recent history, by ticker or name.
+
+    Searched across recent sets rather than only the latest, because the
+    operator may well come back to yesterday's third idea — and because
+    "elaborate on $LAWCAT" should not depend on which set it came from.
+    """
+    want_t = (ticker or "").strip().lstrip("$").upper()
+    want_n = (name or "").strip().lower()
+    if not want_t and not want_n:
+        return None
+
+    for entry in history(limit=30):
+        for idea in entry.get("ideas") or []:
+            if want_t and str(idea.get("ticker", "")).strip().upper() == want_t:
+                return {**idea, "set_id": entry.get("id"), "day": entry.get("day")}
+            if want_n and str(idea.get("name", "")).strip().lower() == want_n:
+                return {**idea, "set_id": entry.get("id"), "day": entry.get("day")}
+    return None
+
+
 def history(*, limit: int = 20) -> list[dict[str, Any]]:
     from app.memory import db
 
@@ -704,35 +649,23 @@ def format_for_delivery(payload: dict[str, Any], *, limit: int = 3) -> str:
         lines += [payload["read_of_the_market"], ""]
 
     for idea in ideas:
-        image = idea.get("image_prompt") or idea.get("image") or ""
-        style = idea.get("image_style") or ""
-        avoid = idea.get("image_avoid") or ""
-        tweet = idea.get("first_tweet") or ""
-
         lines += [
             f"**{idea.get('name')}**  `${idea.get('ticker')}`  _{idea.get('grounding')}_",
-            f"{idea.get('description') or idea.get('angle')}",
+            str(idea.get("angle") or idea.get("description") or ""),
         ]
-        if tweet:
-            # Quoted so it is obvious what is meant to be posted verbatim and
-            # what is Annie talking about it.
-            lines.append(f"> {tweet}")
-        if image:
-            lines.append(f"· Image: {image}")
-        if style:
-            lines.append(f"· Style: {style}")
-        if avoid:
-            lines.append(f"· Avoid: {avoid}")
-        if idea.get("site_concept"):
-            lines.append(f"· Site: {idea['site_concept']}")
-        sections = idea.get("site_sections") or []
-        if sections:
-            lines.append("· Sections: " + " → ".join(str(x) for x in sections))
+        if idea.get("hook"):
+            lines.append(f"· Hook: {idea['hook']}")
         lines += [
             f"· Why now: {idea.get('why_now')}",
             f"· Risk: {idea.get('risk')}",
             "",
         ]
+
+    lines += [
+        '_Say "elaborate on $TICKER" for the full launch kit — art prompts, '
+        "site, X, Telegram and the posts._",
+        "",
+    ]
 
     if payload.get("avoid"):
         lines.append(f"_Avoiding: {', '.join(payload['avoid'][:4])}_")

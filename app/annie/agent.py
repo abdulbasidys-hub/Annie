@@ -1247,6 +1247,52 @@ async def _tool_manage_discord_channel(agent: AnnieAgent, args: dict[str, Any]) 
     return result
 
 
+async def _tool_elaborate_idea(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """Everything needed to launch one idea the operator picked.
+
+    Deliberately separate from `token_idea`. An idea is short because the
+    operator is scanning three of them to choose; a kit is long because they
+    have chosen and now have to ship. Producing kits for all three would bury
+    the decision under material for two launches that will never happen.
+
+    Costs a model call of its own, so only when they have actually picked one.
+    """
+    from app.memory import ideas, launch_kit
+
+    ticker = str(args.get("ticker") or "").strip()
+    name = str(args.get("name") or "").strip()
+
+    idea = ideas.find_idea(ticker, name=name)
+    if idea is None:
+        latest = ideas.latest()
+        known = [
+            f"${i.get('ticker')} ({i.get('name')})"
+            for i in (latest or {}).get("ideas", [])
+        ]
+        return {
+            "found": False,
+            "error": f"No recent idea matching {ticker or name!r}.",
+            "recent_ideas": known,
+            "note": "Name one of these, or ask for fresh ideas first.",
+        }
+
+    kit = await launch_kit.generate(
+        idea, agent.registry, agent.settings,
+        context=str(args.get("context") or ""),
+    )
+    if kit.get("error"):
+        return {"found": True, "built": False, **kit}
+
+    return {
+        "found": True,
+        "built": True,
+        "kit": kit,
+        "formatted": launch_kit.format_for_delivery(kit),
+        "note": "Every prompt here is ready to paste into an image model "
+                "unedited. Give the operator the formatted version.",
+    }
+
+
 async def _tool_read_skill(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
     """The operator's own craft — naming, art direction, launch copy.
 
@@ -1438,6 +1484,7 @@ _TOOL_HANDLERS = {
     "create_research_task": _tool_create_research_task,
     "remember_person": _tool_remember_person,
     "manage_discord_channel": _tool_manage_discord_channel,
+    "elaborate_idea": _tool_elaborate_idea,
     "read_skill": _tool_read_skill,
     "list_channels": _tool_list_channels,
     "send_to_channel": _tool_send_to_channel,
@@ -1874,6 +1921,27 @@ def _tool_specs(settings: Settings, platform_context: PlatformContext | None = N
     # Not gated on platform_context. The channels belong to the deployment,
     # not to the conversation — asked from Telegram "send it to the right
     # channel", she had no view of Discord at all and invented one.
+    specs.append(
+        _spec(
+            "elaborate_idea",
+            "The FULL launch kit for one idea the operator has chosen: description, "
+            "visual identity, logo/PFP/banner/meme prompts ready to paste into an image "
+            "model, website plan, X account, Telegram, the first day's posts, and what "
+            "to do in the first hour. Use this when they say 'elaborate on $TICKER', "
+            "'let's launch that one', or ask for the art or the copy. Do NOT use it to "
+            "browse ideas — token_idea is for that, and this costs its own call.",
+            {
+                "type": "object", "additionalProperties": False,
+                "properties": {
+                    "ticker": {"type": "string", "description": "e.g. LAWCAT or $LAWCAT."},
+                    "name": {"type": "string", "description": "If they named it instead."},
+                    "context": {"type": "string",
+                                "description": "Anything they added — 'make it darker', "
+                                               "'launching at 2am' — passed as a steer."},
+                },
+            },
+        )
+    )
     specs.append(
         _spec(
             "read_skill",

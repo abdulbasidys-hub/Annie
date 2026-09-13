@@ -17,7 +17,8 @@ from app.memory import bootstrap, ideas, index, ledger, service
 IDEA = {
     "name": "Cat Lawyer",
     "ticker": "LAWCAT",
-    "description": "objection your honour my bags are down bad",
+    "angle": "A cat in a courtroom filing motions for bag-holders.",
+    "hook": "The indignation is the joke — it reads as a reaction image.",
     "image_prompt": "A tabby cat in an ill-fitting grey suit standing behind a "
                     "courtroom bench, one paw raised mid-objection, flat plain "
                     "background, single clear subject, strong silhouette.",
@@ -129,7 +130,7 @@ class TestTheDailySet:
         written = service.read(stored["memory_path"])
         assert written is not None
         assert "Cat Lawyer" in written.body
-        assert "objection your honour" in written.body, "the description copy was not kept"
+        assert "bag-holders" in written.body, "the angle was not kept"
 
     async def test_a_requested_set_stays_distinguishable(self, seeded):
         from app.config import get_settings
@@ -159,43 +160,35 @@ class TestTheFormat:
         result = await ideas.generate(registry, get_settings(), count=2)
 
         idea = result["ideas"][0]
-        for field in ("name", "ticker", "description"):
-            assert idea.get(field), f"{field} missing — the form cannot be filled from this"
-        for field in ("image_prompt", "image_style", "image_avoid"):
-            assert idea.get(field), f"{field} missing — the art cannot be briefed from this"
-        for field in ("first_tweet", "tweet_angle"):
-            assert idea.get(field), f"{field} missing — there is nothing to post"
-        for field in ("site_concept", "site_sections", "site_build_notes"):
-            assert idea.get(field), f"{field} missing — the site cannot be briefed"
+        for field in ("name", "ticker", "angle", "hook"):
+            assert idea.get(field), f"{field} missing — this cannot be chosen from"
         for field in ("why_now", "evidence", "grounding", "risk"):
             assert idea.get(field), f"{field} missing — the reasoning is not checkable"
 
-    async def test_the_schema_requires_the_launch_fields(self, seeded):
-        """A model that omits the description would produce an idea nobody can
-        act on, so the schema refuses it rather than leaving it blank."""
-        required = ideas.IDEA_SCHEMA["properties"]["ideas"]["items"]["required"]
-        assert {
-            "name", "ticker", "description",
-            "image_prompt", "image_style", "image_avoid",
-            "first_tweet", "tweet_angle",
-            "site_concept", "site_sections", "site_build_notes",
-        } <= set(required)
+    async def test_the_schema_requires_what_a_decision_needs(self, seeded):
+        """An idea is for choosing, not for shipping. The art, the site and
+        the posts moved to the launch kit — carrying them here made three
+        ideas too large for one response, which cost a day's ideas."""
+        required = set(ideas.IDEA_SCHEMA["properties"]["ideas"]["items"]["required"])
+
+        assert {"name", "ticker", "angle", "hook", "why_now", "risk"} <= required
+        assert "image_prompt" not in required
+        assert "site_sections" not in required
 
     async def test_grounding_is_constrained_to_three_honest_values(self, seeded):
         enum = ideas.IDEA_SCHEMA["properties"]["ideas"]["items"]["properties"]["grounding"]["enum"]
         assert enum == ["observed", "inferred", "speculative"]
 
-    def test_delivery_format_leads_with_the_usable_fields(self):
+    def test_delivery_leads_with_what_picks_a_winner(self):
         text = ideas.format_for_delivery(PAYLOAD, limit=3)
 
         assert "Cat Lawyer" in text
         assert "$LAWCAT" in text
-        assert "objection your honour" in text, "the description is what gets pasted"
-        assert "Image:" in text
-        assert "your honour i object" in text, "the launch post is the point"
-        assert "Sections:" in text, "the site plan is what a build agent needs"
         assert "observed" in text
         assert "Avoiding:" in text
+        # And points at the next step rather than doing it.
+        assert "elaborate" in text.lower()
+        assert "Sections:" not in text
 
     def test_delivery_of_an_empty_set_is_empty_not_a_header(self):
         assert ideas.format_for_delivery({"ideas": []}) == ""
@@ -224,7 +217,7 @@ class TestApiSurface:
         body = client.get("/api/ideas/latest", params={"origin": "daily"}).json()
         assert body["found"] is True
         assert body["ideas"]["ideas"][0]["ticker"] == "LAWCAT"
-        assert body["ideas"]["ideas"][0]["description"]
+        assert body["ideas"]["ideas"][0]["angle"]
 
     async def test_history_is_free_and_local(self, client, seeded):
         from app.memory import db
