@@ -173,21 +173,34 @@ async def run_signals_now(repo: FirestoreRepo = Depends(get_repo)) -> dict[str, 
 
 @router.post("/run/cycle")
 async def run_cycle_now(
+    full_day: bool = Query(
+        False,
+        description="Run it as the midnight cycle: daily log and launch ideas too.",
+    ),
     repo: FirestoreRepo = Depends(get_repo),
     registry: ProviderRegistry = Depends(get_registry),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     """Run a full thinking cycle immediately: signals, digest, learn, tidy, snapshot.
 
-    This is the only manual action here that spends money — one bounded
-    model call, unless the window was quiet, in which case it skips the call
-    entirely. Everything else on this page is free.
+    ``full_day`` forces the midnight path — the deterministic daily log and
+    the three launch ideas — which otherwise only happens at slot 0. Without
+    it there was no way to rehearse the day-boundary work, so the only way to
+    find out whether the ideas would generate was to wait until midnight and
+    see whether anything arrived.
+
+    The paid actions here are one bounded model call for the cycle, plus a
+    second for ideas when ``full_day`` is set. Everything else is free.
     """
     from app.scheduling.jobs import _cycle
 
     run = await repo.create_pipeline_run("cycle", trigger="manual")
-    asyncio.create_task(fire_and_forget(repo, run.id, _cycle(registry, repo, settings)))
-    return {"run_id": run.id}
+    asyncio.create_task(
+        fire_and_forget(
+            repo, run.id, _cycle(registry, repo, settings, slot=0 if full_day else None)
+        )
+    )
+    return {"run_id": run.id, "full_day": full_day}
 
 
 @router.post("/run/narratives")
