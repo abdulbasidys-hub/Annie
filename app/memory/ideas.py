@@ -313,7 +313,12 @@ async def generate(
                 "type": "json_schema",
                 "json_schema": {"name": "launch_ideas", "strict": True, "schema": IDEA_SCHEMA},
             },
-            max_completion_tokens=1800,
+            # Three ideas at sixteen fields each, one of which is a 60-100
+            # word image prompt, does not fit in 1800 — the response was
+            # being truncated mid-JSON and arriving as "unparseable", which
+            # is how a day's launch ideas silently failed to send. Raised
+            # when the schema grew; it must be raised again if it grows.
+            max_completion_tokens=4500,
             temperature=0.8,  # higher than the learning call — this one is meant to reach
             reasoning_effort="none",
         )
@@ -324,7 +329,27 @@ async def generate(
     try:
         payload = json.loads(response.choices[0].message.content or "{}")
     except json.JSONDecodeError:
-        return {"error": "The model returned something unparseable."}
+        # Almost always truncation rather than malformed output: the response
+        # hit max_completion_tokens mid-JSON. Saying which matters, because
+        # the fix is a number in this file and the symptom is a day with no
+        # launch ideas and no explanation.
+        finish = getattr(response.choices[0], "finish_reason", None)
+        truncated = finish == "length"
+        log.error(
+            "idea_generation_unparseable",
+            finish_reason=finish,
+            truncated=truncated,
+            chars=len(response.choices[0].message.content or ""),
+        )
+        return {
+            "error": (
+                "The response was cut off before it finished — the token ceiling "
+                "is too low for the current schema."
+                if truncated
+                else "The model returned something unparseable."
+            ),
+            "truncated": truncated,
+        }
 
     usage = getattr(response, "usage", None)
     payload["generated_at"] = now.isoformat(timespec="seconds")

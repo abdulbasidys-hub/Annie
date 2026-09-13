@@ -1219,14 +1219,109 @@ async def _tool_manage_discord_channel(agent: AnnieAgent, args: dict[str, Any]) 
     if agent.platform_context is None or agent.platform_context.create_channel is None:
         return {"created": False, "error": "Not available in this context — Discord channel creation only."}
 
-    name = str(args.get("name") or "").strip()
+    name = str(args.get("name") or "").strip().lstrip("#")
     purpose = str(args.get("purpose") or "").strip()
     if not name or not purpose:
         return {"created": False, "error": "Both name and purpose are required."}
-    category = args.get("category")
 
+    # Look before creating. Asked to "send today's ideas to the right
+    # channel", she created a second one — from Telegram she had no view of
+    # Discord at all, and even in Discord this tool went straight to create.
+    # A duplicate channel is worse than an error: the operator now has two
+    # and messages land in whichever one a later call happens to pick.
+    known = await agent.repo.list_discord_channels()
+    for channel in known:
+        if channel.name.lstrip("#").lower() == name.lower():
+            return {
+                "created": False,
+                "already_exists": True,
+                "channel_id": channel.channel_id,
+                "name": channel.name,
+                "purpose": channel.purpose,
+                "note": f"#{channel.name} already exists — use it rather than "
+                        f"making another. Post to it with send_to_channel.",
+            }
+
+    category = args.get("category")
     result = await agent.platform_context.create_channel(name=name, purpose=purpose, category=category)
     return result
+
+
+async def _tool_list_channels(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """What Discord channels exist and what each is for.
+
+    Works from Telegram too, which is the point: the channels are a property
+    of the deployment, not of the conversation she happens to be in. Without
+    this she was answering "send it to the right channel" by inventing one.
+    """
+    channels = await agent.repo.list_discord_channels()
+    return {
+        "count": len(channels),
+        "channels": [
+            {
+                "channel_id": c.channel_id,
+                "name": c.name,
+                "purpose": c.purpose,
+                "enabled": getattr(c, "enabled", True),
+            }
+            for c in channels
+        ],
+        "note": "Post to one with send_to_channel. Do not create a channel "
+                "that is already in this list.",
+    }
+
+
+async def _tool_send_to_channel(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """Post a message into a Discord channel, by name or by purpose.
+
+    She could create a channel and could not write to it, which is how a
+    request to send the day's ideas ended with an empty channel and an
+    apology. Resolving by purpose matters as much as by name: "the launch
+    ideas channel" is a role, and the operator should not have to remember
+    which name it was given.
+    """
+    from app.bots.discord_bot import send_channel_message
+
+    text = str(args.get("text") or "").strip()
+    if not text:
+        return {"sent": False, "error": "Nothing to send."}
+    if not agent.settings.is_available("discord"):
+        return {"sent": False, "error": "Discord is not configured in this deployment."}
+
+    wanted_name = str(args.get("channel_name") or "").strip().lstrip("#").lower()
+    wanted_purpose = str(args.get("purpose") or "").strip().lower()
+    channels = await agent.repo.list_discord_channels()
+
+    target = None
+    if wanted_name:
+        target = next(
+            (c for c in channels if c.name.lstrip("#").lower() == wanted_name), None
+        )
+    if target is None and wanted_purpose:
+        target = next(
+            (c for c in channels if (c.purpose or "").lower() == wanted_purpose), None
+        )
+    if target is None:
+        return {
+            "sent": False,
+            "error": "No channel matches that.",
+            "known_channels": [
+                {"name": c.name, "purpose": c.purpose} for c in channels
+            ],
+            "note": "Say which of these to use, or ask to create one.",
+        }
+
+    delivered = await send_channel_message(
+        agent.settings.discord_bot_token, target.channel_id, text
+    )
+    return {
+        "sent": bool(delivered),
+        "channel": target.name,
+        "channel_id": target.channel_id,
+        "error": None if delivered else
+                 "Discord refused the post — check the bot can see and write to "
+                 f"#{target.name}.",
+    }
 
 
 async def _tool_create_research_task(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
@@ -1314,6 +1409,8 @@ _TOOL_HANDLERS = {
     "create_research_task": _tool_create_research_task,
     "remember_person": _tool_remember_person,
     "manage_discord_channel": _tool_manage_discord_channel,
+    "list_channels": _tool_list_channels,
+    "send_to_channel": _tool_send_to_channel,
     "web_research": _tool_web_research,
 }
 
@@ -1744,13 +1841,46 @@ def _tool_specs(settings: Settings, platform_context: PlatformContext | None = N
                  "properties": {"name": {"type": "string"}}},
             )
         )
+    # Not gated on platform_context. The channels belong to the deployment,
+    # not to the conversation — asked from Telegram "send it to the right
+    # channel", she had no view of Discord at all and invented one.
+    specs.append(
+        _spec(
+            "list_channels",
+            "The Discord channels that exist and what each is for. Call this BEFORE "
+            "creating a channel or claiming one does not exist — you can see them from "
+            "any platform, including Telegram. Creating a duplicate is worse than "
+            "asking, because messages then land in whichever one happens to be picked.",
+            {"type": "object", "properties": {}, "additionalProperties": False},
+        )
+    )
+    specs.append(
+        _spec(
+            "send_to_channel",
+            "Post a message into a Discord channel, by name or by purpose. This is how "
+            "you actually deliver something the operator asked you to send — briefs, "
+            "launch ideas, a finding. If no channel matches, it returns the ones that "
+            "exist rather than guessing.",
+            {
+                "type": "object", "required": ["text"], "additionalProperties": False,
+                "properties": {
+                    "text": {"type": "string", "description": "The message, ready to post."},
+                    "channel_name": {"type": "string", "description": "e.g. 'launch-ideas'."},
+                    "purpose": {"type": "string",
+                                "description": "e.g. 'morning_brief' — use when the "
+                                               "operator names a role rather than a channel."},
+                },
+            },
+        )
+    )
     if platform_context is not None and platform_context.create_channel is not None:
         specs.append(
             _spec(
                 "manage_discord_channel",
-                "Create a new Discord channel in THIS server for a specific purpose (e.g. "
-                "'morning briefs', 'research findings for AI narrative investigations'). Only use "
-                "when explicitly asked to create/set up a channel — never on your own initiative.",
+                "Create a new Discord channel in THIS server. Call list_channels first — "
+                "if one already exists for the job, use it instead. Only create when "
+                "explicitly asked, never on your own initiative, and never a second one "
+                "for a purpose that is already covered.",
                 {
                     "type": "object", "required": ["name", "purpose"], "additionalProperties": False,
                     "properties": {

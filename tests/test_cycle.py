@@ -831,6 +831,29 @@ class TestTheDayBoundary:
         assert result["ideas_delivered"] is True
         assert [channel for channel, _ in sent] == ["222"]
 
+    async def test_a_generation_failure_is_not_reported_as_a_quiet_market(
+        self, seeded, monkeypatch
+    ):
+        """These looked identical and are not the same thing. A day's ideas
+        failed to send because the response was truncated mid-JSON, and the
+        only trace was a reason that read like nothing had moved."""
+        from app.config import get_settings
+        from app.memory import ideas as ideas_mod
+        from app.scheduling.jobs import _cycle
+
+        async def broken(registry, settings, **kwargs):
+            return {"generated": 0, "error": "The response was cut off before it finished"}
+
+        monkeypatch.setattr(ideas_mod, "generate_daily", broken)
+        sent = _capture(monkeypatch)
+
+        result = await _cycle(FakeRegistry(EDITS), FakeRepo({"morning_brief": "111"}),
+                              get_settings(), slot=0)
+
+        assert result["ideas_delivered"] is False
+        assert "generation failed" in result["ideas_reason"]
+        assert "cut off" in result["ideas_reason"]
+
     async def test_a_six_hourly_slot_sends_no_ideas(self, seeded, monkeypatch):
         """Ideas are a judgement about what to do next, and one that changes
         every six hours is noise."""
@@ -862,7 +885,10 @@ class TestTheDayBoundary:
         result = await _cycle(FakeRegistry(EDITS), repo, get_settings(), slot=0)
 
         assert result["ideas_delivered"] is False
-        assert result["ideas_reason"] == "none were generated"
+        # An honest abstention, named as one — distinct from a generation
+        # failure, which reads "generation failed — …" and needs fixing.
+        assert "nothing moved" in result["ideas_reason"]
+        assert "failed" not in result["ideas_reason"]
         assert not any("Launch ideas" in text for _, text in sent)
 
     async def test_the_diagnosis_surfaces_an_undelivered_brief(self, seeded):

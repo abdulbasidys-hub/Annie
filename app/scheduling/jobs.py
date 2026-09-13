@@ -460,12 +460,22 @@ async def _deliver_ideas(
     from app.bots.discord_bot import send_channel_message
     from app.memory import ideas
 
-    generated = (cycle.get("ideas") or {}).get("generated")
+    stage = cycle.get("ideas") or {}
+    generated = stage.get("generated")
     if not generated:
-        # Not a failure. `generate_daily` skips itself when nothing moved,
-        # which is the honest output — three speculative ideas from no data
-        # would arrive looking exactly like grounded ones.
-        return {"ideas_delivered": False, "ideas_reason": "none were generated"}
+        # A real failure and an honest abstention look identical from here,
+        # and they are not the same thing: one needs fixing, the other is
+        # the system working. `generate_daily` skips itself when nothing
+        # moved, because three speculative ideas from no data would arrive
+        # looking exactly like grounded ones.
+        failure = stage.get("error")
+        if failure:
+            log.warning("ideas_generation_failed", error=failure)
+            return {"ideas_delivered": False, "ideas_reason": f"generation failed — {failure}"}
+        return {
+            "ideas_delivered": False,
+            "ideas_reason": stage.get("skipped") or "none were generated",
+        }
 
     latest = ideas.latest(origin="daily")
     text = ideas.format_for_delivery(latest, limit=3) if latest else ""
