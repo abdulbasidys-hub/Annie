@@ -313,16 +313,20 @@ async def _deliver_brief(
         lines.append("")
 
     if revivals:
-        lines.append(f"**Older coins running again — {len(revivals)}**")
-        lines.append(
-            "_Not launches. Something brought people back to these._"
+        # A sentence, not a list. These are not things to launch, and giving
+        # them the same shape as the launches made a brief about what is
+        # being created read as a brief about old coins — which is what it
+        # became when every listed row was years old.
+        named = ", ".join(
+            f"{t.symbol or t.mint[:6]} ({_age(t)}, {_usd(t.peak_market_cap)})"
+            for t in revivals[:5]
         )
-        lines.append("")
-        for token in revivals[:4]:
-            lines += _token_block(token)
-        if len(revivals) > 4:
-            lines.append(f"…and {len(revivals) - 4} more.")
-            lines.append("")
+        more = f" and {len(revivals) - 5} others" if len(revivals) > 5 else ""
+        lines += [
+            f"_Also moving, but not launches: {named}{more}. "
+            f"Established coins running again — worth knowing, nothing to copy._",
+            "",
+        ]
 
     if not fresh and qualified:
         lines += [
@@ -380,6 +384,26 @@ async def _deliver_brief(
     return outcome
 
 
+def _age(token: Any) -> str:
+    """How old the coin is, on every line rather than only for revivals.
+
+    The operator reads this list to see what is being launched, so age is
+    part of the row and not an annotation on the exceptions — "4h old" and
+    "3.7y old" are different propositions and the difference should never
+    need working out from context.
+    """
+    days = token.age_days
+    if days is None:
+        return "age unknown"
+    if days < 1:
+        hours = max(1, round(days * 24))
+        return f"{hours}h old"
+    if days < 60:
+        return f"{days:.0f}d old"
+    years = days / 365
+    return f"{years:.1f}y old" if years >= 1 else f"{days / 30:.0f}mo old"
+
+
 def _token_block(token: Any) -> list[str]:
     """One coin, as a person would want to read it.
 
@@ -391,11 +415,7 @@ def _token_block(token: Any) -> list[str]:
     from app.memory import coins
 
     name = token.symbol or token.name or token.mint[:8]
-    head = f"**{name}** — {_usd(token.peak_market_cap)}"
-    if token.is_revival and token.age_days:
-        years = token.age_days / 365
-        age = f"{years:.1f}y old" if years >= 1 else f"{token.age_days:.0f}d old"
-        head += f" · {age}"
+    head = f"**{name}** — {_usd(token.peak_market_cap)} · {_age(token)}"
 
     research = coins.get(token.mint)
     out = [head]

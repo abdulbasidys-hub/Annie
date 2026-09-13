@@ -607,6 +607,77 @@ class TestTheBriefIsAReport:
         assert "Not researched yet" in text
 
 
+
+class TestAgeAndRevivalsInTheBrief:
+    """The brief is about what is being launched.
+
+    Every listed coin in one real brief was years old — established tokens
+    arriving as pool-creation events. They are worth a sentence, never a list
+    that looks like a launch you could copy.
+    """
+
+    @staticmethod
+    def _seed(i, *, age_days, peak=400_000, symbol=None):
+        from datetime import timedelta
+
+        from app.memory import db, ledger
+
+        mint = f"Mint{i:040d}"
+        ledger.record_launch(mint=mint, creator=f"W{i}", symbol=symbol or f"T{i}")
+        ledger.record_price(
+            mint=mint, market_cap=peak, liquidity=90_000, tier=100_000,
+            pair_created_at=datetime.now(timezone.utc) - timedelta(days=age_days),
+        )
+        db.execute("UPDATE sightings SET peak_market_cap = ? WHERE mint = ?", (peak, mint))
+        return mint
+
+    async def test_new_coins_are_listed_and_old_ones_are_a_sentence(
+        self, seeded, monkeypatch
+    ):
+        from app.config import get_settings
+        from app.scheduling.jobs import _cycle
+
+        new_mint = self._seed(801, age_days=0.2, symbol="FRESH")
+        old_mint = self._seed(802, age_days=1300, peak=900_000, symbol="BONK")
+        sent = _capture(monkeypatch)
+
+        await _cycle(FakeRegistry(EDITS), FakeRepo({"morning_brief": "111"}),
+                     get_settings(), slot=12)
+
+        text = next(t for c, t in sent if c == "111")
+        assert new_mint in text, "the new coin should be listed with its CA"
+        assert old_mint not in text, "an old coin was given a full listing row"
+        assert "not launches" in text.lower()
+        assert "BONK" in text, "it should still be named in the sentence"
+
+    async def test_every_listed_coin_carries_its_age(self, seeded, monkeypatch):
+        """"4h old" and "3.7y old" are different propositions and the reader
+        should never have to work out which from context."""
+        from app.config import get_settings
+        from app.scheduling.jobs import _cycle
+
+        self._seed(803, age_days=0.2, symbol="FRESH")
+        sent = _capture(monkeypatch)
+
+        await _cycle(FakeRegistry(EDITS), FakeRepo({"morning_brief": "111"}),
+                     get_settings(), slot=12)
+
+        text = next(t for c, t in sent if c == "111")
+        assert "h old" in text or "d old" in text
+
+    def test_age_reads_in_the_right_unit(self):
+        from app.scheduling.jobs import _age
+
+        class T:
+            def __init__(self, d):
+                self.age_days = d
+
+        assert _age(T(0.2)) == "5h old"
+        assert _age(T(3)) == "3d old"
+        assert _age(T(1300)) == "3.6y old"
+        assert _age(T(None)) == "age unknown"
+
+
 class TestTheCycleStillIngests:
     """The regression this class exists for.
 

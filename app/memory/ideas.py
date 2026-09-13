@@ -190,7 +190,12 @@ async def generate(
     if not settings.is_available("ai"):
         return {"error": "OpenAI is not configured in this deployment (OPENAI_API_KEY)."}
 
-    movers = ledger.movers(since_hours=72, limit=20)
+    # New coins only. An established token opening a new pool arrives looking
+    # like a mover, and grounding ideas on those produced a read of the
+    # market that "familiar tickers win" — which is a description of a
+    # logging artefact, not of anything happening. The operator launches new
+    # coins, so the evidence has to be new coins.
+    movers = [m for m in ledger.movers(since_hours=72, limit=60) if not m.is_revival][:20]
     winning = signals.meaningful(limit=12)
     crowded = [s for s in winning if (s.get("recent_freq") or 0) >= 0.30]
     rolling_over = signals.listing(status="declining", limit=5)
@@ -210,8 +215,14 @@ async def generate(
     # popular.
     from app.memory import coins
 
+    # Same filter on the researched causes. A revival's catalyst is real and
+    # worth knowing, but it is the wrong evidence for "what should I launch":
+    # an exchange listing moving a three-year-old coin is not a thing anyone
+    # can reproduce with a new token.
+    fresh_mints = {m.mint for m in ledger.movers(since_hours=336, limit=500)
+                   if not m.is_revival}
     reasons = sorted(
-        coins.recent(limit=25),
+        [r for r in coins.recent(limit=60) if r.mint in fresh_mints][:25],
         key=lambda r: (not r.repeatable, {"high": 0, "medium": 1}.get(r.confidence, 2)),
     )
     site_shapes = [
@@ -360,7 +371,7 @@ def _render_context(
         lines += ["", f"**Operator's steer:** {brief}"]
 
     if movers:
-        lines += ["", "## What has moved in the last 72h"]
+        lines += ["", "## New coins that moved in the last 72h"]
         for m in movers[:15]:
             lines.append(
                 f"- {m.symbol or m.name or m.mint[:8]} — peak {usd(m.peak_market_cap)}, "
@@ -382,7 +393,7 @@ def _render_context(
         # The most actionable block here. Everything above says what was
         # popular; this says what *caused* it, which is the only part that
         # can be deliberately reproduced.
-        lines += ["", "## Why recent winners actually moved"]
+        lines += ["", "## Why recent new coins actually moved"]
         for r in reasons[:12]:
             flag = "REPEATABLE" if r.repeatable else "one-off"
             detail = f" — {r.catalyst_detail}" if r.catalyst_detail else ""
