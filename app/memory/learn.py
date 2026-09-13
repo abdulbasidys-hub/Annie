@@ -212,13 +212,25 @@ async def learn_from_window(
 
     digest = digest_module.build(window_hours=window_hours, now=now)
     if digest.is_empty:
-        # Nothing moved. Costing a model call to be told so is exactly the
-        # kind of spend this rewrite exists to remove.
-        log.info("learn_skipped_quiet_window", window_hours=window_hours)
+        # Not a quiet market — there is no such thing here. At measured
+        # volume Solana produces ~27,000 launches a day and ~90 tokens
+        # clearing a tier, so a window with nothing in it means the webhook
+        # has stopped, the ledger is empty, or a filter is too aggressive.
+        #
+        # This used to be reported as "quiet window — nothing moved", which
+        # is a sentence that reads like normal operation and hid an outage
+        # behind it for eleven days. Still no model call: there is nothing
+        # to reason about. But it is now stated as the fault it is.
+        log.warning("learn_empty_window", window_hours=window_hours)
         return LearnResult(
-            headline="Quiet window — nothing moved.",
-            brief="Nothing moved in this window worth reporting.",
-            skipped="quiet window",
+            headline=f"Empty window over {window_hours}h — nothing reached me.",
+            brief=(
+                "Nothing came through in this window. On Solana that is not a "
+                "quiet market, it is a broken pipe — something upstream has "
+                "stopped. Check the webhook and the ledger before reading "
+                "anything into it."
+            ),
+            skipped="empty window — see system health",
         )
 
     client = await registry.reasoning.raw_client()

@@ -1247,6 +1247,35 @@ async def _tool_manage_discord_channel(agent: AnnieAgent, args: dict[str, Any]) 
     return result
 
 
+async def _tool_read_skill(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
+    """The operator's own craft — naming, art direction, launch copy.
+
+    Distinct from `search_memory`, which holds what Annie concluded from the
+    market. This is what she was *taught*, and it is the thing to reach for
+    when asked to go deeper on a name, a ticker, an image brief or a post:
+    the ideas she generates already apply it, so elaborating means quoting
+    the actual rule rather than improvising a justification.
+    """
+    from app.memory import skills
+
+    slug = str(args.get("skill") or "").strip().lower()
+    if not slug:
+        return {
+            "available": skills.available(),
+            "note": "Pass one of these slugs to read the full method.",
+        }
+
+    body = skills.load(slug)
+    if not body:
+        return {
+            "found": False,
+            "available": skills.available(),
+            "error": f"No skill called {slug!r}.",
+        }
+    topic = str(args.get("topic") or "").strip()
+    return {"found": True, "skill": slug, "topic": topic, "method": body[:12000]}
+
+
 async def _tool_list_channels(agent: AnnieAgent, args: dict[str, Any]) -> dict[str, Any]:
     """What Discord channels exist and what each is for.
 
@@ -1409,6 +1438,7 @@ _TOOL_HANDLERS = {
     "create_research_task": _tool_create_research_task,
     "remember_person": _tool_remember_person,
     "manage_discord_channel": _tool_manage_discord_channel,
+    "read_skill": _tool_read_skill,
     "list_channels": _tool_list_channels,
     "send_to_channel": _tool_send_to_channel,
     "web_research": _tool_web_research,
@@ -1844,6 +1874,31 @@ def _tool_specs(settings: Settings, platform_context: PlatformContext | None = N
     # Not gated on platform_context. The channels belong to the deployment,
     # not to the conversation — asked from Telegram "send it to the right
     # channel", she had no view of Discord at all and invented one.
+    specs.append(
+        _spec(
+            "read_skill",
+            "The operator's own method for naming meme coins, briefing art, writing "
+            "launch copy, and reading market culture. Reach for this whenever asked to "
+            "go deeper on a name, a ticker, an image or a post — the ideas you generate "
+            "already follow it, so elaborating means quoting the actual rule rather "
+            "than improvising a reason. Call with no arguments to see what is "
+            "installed. Different from search_memory, which is what you concluded "
+            "yourself; this is what you were taught.",
+            {
+                "type": "object", "additionalProperties": False,
+                "properties": {
+                    "skill": {
+                        "type": "string",
+                        "enum": ["visual-design", "web3-branding", "meme-naming",
+                                 "social-copy", "community", "market-culture"],
+                    },
+                    "topic": {"type": "string",
+                              "description": "What you are trying to answer, for your "
+                                             "own focus."},
+                },
+            },
+        )
+    )
     specs.append(
         _spec(
             "list_channels",

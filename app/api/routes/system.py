@@ -458,7 +458,7 @@ async def cost_report() -> dict[str, Any]:
             {"name": j.name, "mode": j.mode, **job_status(j.settings_key)} for j in JOBS
         ],
         "model_calls_per_day": {
-            "scheduled": "4 cycle calls (skipped on a quiet window), "
+            "scheduled": "4 cycle calls (skipped only if nothing arrived at all), "
                          "plus 1 weekly and 1 monthly rollup",
             "on_demand": "chat turns, and token_idea only when asked",
             "note": "Counting, ranking, filtering, statistics and every file "

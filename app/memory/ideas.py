@@ -224,6 +224,10 @@ Rules:
   unclaimed corner of that space, not another generic cat.
 - Tickers should look like what actually wins in the data you are shown —
   match the observed shape, not a house style.
+- The craft section below is a method the operator actually uses, not
+  background reading. Work it: name the event before you name the coin, find
+  the canonical subject, apply the naming and ticker rules as written. An
+  idea that ignores it is a worse idea even if it sounds good.
 - You are shown what recent winners shipped as websites. Use it. The
   operator hands your site plan to an agent that builds it, so "what are
   people actually building this week" is a live constraint, not background —
@@ -303,7 +307,7 @@ async def generate(
         response = await client.chat.completions.create(
             model=settings.openai_reasoning_model,
             messages=[
-                {"role": "system", "content": voice.prefix(SYSTEM_PROMPT)},
+                {"role": "system", "content": _system_prompt()},
                 {
                     "role": "user",
                     "content": f"{context}\n\nGive me {max(1, min(count, 4))} idea(s).",
@@ -367,6 +371,21 @@ async def generate(
         input_tokens=payload["input_tokens"],
     )
     return payload
+
+
+def _system_prompt() -> str:
+    """Voice, then the job, then the craft.
+
+    The skills pack goes last so it is the most recent thing read before the
+    market data — it is the part most likely to be ignored, because it asks
+    the model to work differently from how it would by default.
+    """
+    from app.memory import skills
+
+    base = voice.prefix(SYSTEM_PROMPT)
+    craft = skills.for_task("launch")
+    sep = chr(10) * 2 + "---" + chr(10) * 2
+    return f"{base}{sep}{craft}" if craft else base
 
 
 def _standing_instructions() -> str:

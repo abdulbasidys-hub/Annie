@@ -324,7 +324,14 @@ async def _deliver_brief(
             "",
         ]
     elif not fresh:
-        lines += ["Nothing crossed a tier this window.", ""]
+        # Something is always moving on Solana. Nothing arriving is a fault
+        # report, not a market observation.
+        lines += [
+            "**Nothing crossed a tier this window — which should not happen.**",
+            "Solana does not go quiet. Something upstream has stopped: check "
+            "the webhook and the ledger on System Health.",
+            "",
+        ]
 
     coins.mark_briefed([t.mint for t in fresh], day=day)
 

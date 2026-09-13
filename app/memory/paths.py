@@ -50,6 +50,12 @@ SECTIONS: dict[str, str] = {
         "One file per notable token: the ones that actually moved. Holds the "
         "CA and the creator wallet so they can be looked up by either."
     ),
+    "skills": (
+        "Craft the operator taught her, rather than anything she worked out "
+        "from data: how to name a meme coin, how to brief art, how to write "
+        "a launch post. Editable — these are the operator's own method and "
+        "they own them, so a redeploy never overwrites an edit."
+    ),
     "launches": (
         "One file per token we launched ourselves. Unlike everything else "
         "here these are not filtered by whether they did well — ours matter "

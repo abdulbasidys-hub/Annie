@@ -83,7 +83,7 @@ class CycleDigest:
     def is_empty(self) -> bool:
         """Nothing happened worth a model call.
 
-        Checked before spending anything: a quiet window (an outage, a dead
+        Checked before spending anything: an empty window (an outage, a dead
         night, a fresh deployment with no history) should cost zero, not a
         call that produces a memory saying "nothing happened".
         """

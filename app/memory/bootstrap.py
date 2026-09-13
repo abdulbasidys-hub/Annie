@@ -178,6 +178,14 @@ async def ensure_memory_ready(*, restore_from_snapshot: bool = True) -> dict[str
         restored = await snapshot.restore()
 
     seeded = _seed_files()
+
+    # The operator's craft pack. Copied in once and then theirs — never
+    # overwritten, because a redeploy silently reverting their edits to
+    # their own method would be the worst possible behaviour here.
+    from app.memory import skills
+
+    seeded += skills.seed()
+
     indexed = index.sync_if_stale()
 
     report = {

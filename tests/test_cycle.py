@@ -233,15 +233,35 @@ class TestLearningStep:
         assert len(prompt) // 4 < 4000, f"cycle prompt is ~{len(prompt) // 4} tokens"
         assert call["response_format"]["type"] == "json_schema"
 
-    async def test_a_quiet_window_costs_nothing(self, isolated_memory):
+    async def test_an_empty_window_costs_nothing_but_is_reported_as_a_fault(
+        self, isolated_memory
+    ):
+        """There is no quiet market on Solana — ~27,000 launches a day and
+        ~90 clearing a tier. Nothing arriving means the webhook stopped or
+        the ledger is empty, and calling that "quiet — nothing moved" is a
+        sentence that reads like normal operation. It hid a dead webhook for
+        eleven days.
+
+        Still no model call: there is nothing to reason about either way.
+        """
         from app.config import get_settings
+        from app.memory import bootstrap
         from app.memory.learn import learn_from_window
 
+        bootstrap._seed_files()
         registry = FakeRegistry(EDITS)
+
         result = await learn_from_window(registry, get_settings(), window_hours=6)
 
-        assert result.skipped == "quiet window"
-        assert registry.reasoning.client.chat.completions.calls == []
+        calls = registry.reasoning.client.chat.completions.calls
+        assert calls == [], "it spent a call on an empty window"
+        # The word appears only to deny it, so ban the old framing rather
+        # than the word: it must not report an empty window as a market
+        # state the operator should accept.
+        assert "nothing moved" not in result.brief.lower()
+        assert "not a quiet market" in result.brief
+        assert "broken pipe" in result.brief
+        assert "system health" in result.skipped.lower()
 
     async def test_a_model_failure_does_not_lose_the_cycle(self, seeded):
         from app.config import get_settings
