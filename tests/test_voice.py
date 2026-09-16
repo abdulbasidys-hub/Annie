@@ -46,7 +46,7 @@ class TestWhatTravels:
         scheduled call for nothing."""
         section = persona.voice_section()
 
-        assert "SPECULATION" not in section
+        assert "Knowing what you know" not in section
         assert "# Format" not in section
 
 
@@ -99,8 +99,55 @@ class TestChatAgreesWithTheRest:
     def test_the_chat_prompt_still_carries_the_rules(self):
         prompt = persona.system_prompt()
 
-        assert "SPECULATION" in prompt
+        assert "Knowing what you know" in prompt
         assert "# Voice" in prompt
 
     def test_the_personality_section_is_not_duplicated(self):
         assert persona.system_prompt().count("# Voice") == 1
+
+
+class TestSheDoesNotWriteLikeAComplianceForm:
+    """A real Telegram answer opened "FACT:" four times, tagged two more
+    paragraphs "INFERENCE:", bolded roughly twenty fragments, and closed with
+    a confidence rating and a "what would change my mind" paragraph nobody
+    asked for.
+
+    The discipline behind it is right and stays. The labelling was the
+    mistake: when every claim carries a tag, the tags carry no information,
+    and the reader stops being able to tell anything apart.
+    """
+
+    def test_it_does_not_ask_for_claim_tags(self):
+        prompt = persona.system_prompt()
+
+        assert "FACT:" not in prompt
+        assert "INFERENCE:" not in prompt
+
+    def test_it_says_outright_not_to_label(self):
+        assert "Do not label your sentences" in persona.CLAIM_DISCIPLINE
+        assert "how you think, not how you write" in persona.CLAIM_DISCIPLINE
+
+    def test_the_four_grades_survive_as_thinking(self):
+        """Dropping the tags must not drop the discipline — speculation in
+        the voice of measurement is still the worst thing she can do."""
+        text = persona.CLAIM_DISCIPLINE
+
+        assert "Association is not causation" in text
+        assert "have not tested that" in text, "no worked example of hedging a guess"
+
+    def test_bolding_is_restrained(self):
+        assert "Bold almost nothing" in persona.FORMATTING
+
+    def test_hedging_paragraphs_are_not_mandatory(self):
+        """The old rule demanded confidence and a what-would-change-my-mind
+        on every claim that mattered, which is what produced the closing
+        paragraph on a routine question."""
+        text = persona.EVIDENCE_STANDARD
+
+        assert "to every answer" in text
+        assert "load-bearing" in text
+
+    def test_denominators_are_still_required(self):
+        """The one formatting rule that was doing real work."""
+        assert "denominator" in persona.EVIDENCE_STANDARD
+        assert '"14 of 61"' in persona.FORMATTING
