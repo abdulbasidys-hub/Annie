@@ -1,0 +1,46 @@
+{
+  "name": "Annie — Solana memecoin intelligence",
+  "short_name": "Annie",
+  "description": "What is being launched, what is working, and what to build next.",
+  "start_url": "/today",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0d10",
+  "theme_color": "#0b0d10",
+  "categories": ["finance", "productivity"],
+  "icons": [
+    {
+      "src": "/Annie.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any"
+    },
+    {
+      "src": "/Annie.jpg",
+      "sizes": "192x192",
+      "type": "image/jpeg",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Today",
+      "short_name": "Today",
+      "description": "What is being launched and what is working",
+      "url": "/today"
+    },
+    {
+      "name": "Ideas",
+      "short_name": "Ideas",
+      "description": "Today's launch ideas",
+      "url": "/ideas"
+    },
+    {
+      "name": "Ask Annie",
+      "short_name": "Ask",
+      "description": "Chat",
+      "url": "/annie"
+    }
+  ]
+}

@@ -18,6 +18,8 @@ IDEA = {
     "name": "Cat Lawyer",
     "ticker": "LAWCAT",
     "kind": "meme",
+    "derived_from": "DoiDmTARKwqsxdDVngWe2NEevBUAGz1h3k9F9iApump",
+    "differs_by": "The original was a generic cat; this one is specifically a lawyer.",
     "angle": "A cat in a courtroom filing motions for bag-holders.",
     "hook": "The indignation is the joke — it reads as a reaction image.",
     "image_prompt": "A tabby cat in an ill-fitting grey suit standing behind a "

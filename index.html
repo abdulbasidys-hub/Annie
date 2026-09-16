@@ -6,6 +6,13 @@
     <meta name="color-scheme" content="dark light" />
     <meta name="description" content="Solana memecoin intelligence and research system." />
     <link rel="icon" type="image/jpeg" href="/Annie.jpg" />
+    <link rel="apple-touch-icon" href="/Annie.jpg" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#0b0d10" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Annie" />
     <title>Annie</title>
     <script>
       // Applied before first paint so the shell never flashes the wrong theme.
@@ -24,5 +31,15 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    <script>
+      // Registered after load so it never competes with the first paint.
+      // The worker caches the shell only — never API responses, because a
+      // stale brief reads exactly like a current one.
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function () {
+          navigator.serviceWorker.register('/sw.js').catch(function () {})
+        })
+      }
+    </script>
   </body>
 </html>

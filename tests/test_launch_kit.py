@@ -19,6 +19,8 @@ IDEA = {
     "name": "Cat Lawyer",
     "ticker": "LAWCAT",
     "kind": "meme",
+    "derived_from": "DoiDmTARKwqsxdDVngWe2NEevBUAGz1h3k9F9iApump",
+    "differs_by": "The original was a generic cat; this one is specifically a lawyer.",
     "angle": "A cat in a courtroom filing motions for bag-holders.",
     "hook": "The indignation is the joke — it reads as a reaction image.",
     "why_now": "Third week of cat-adjacent; the specific variants clear at 3x.",
@@ -101,6 +103,7 @@ class TestTheIdeaStaysADecision:
 
         assert required == {
             "name", "ticker", "kind", "angle", "hook",
+            "derived_from", "differs_by",
             "why_now", "evidence", "grounding", "risk",
         }
 
@@ -416,3 +419,34 @@ class TestOneIdeaIsAlwaysAMeme:
         )
 
         assert "meme" in text
+
+
+class TestIdeasPointAtWhatTheyCameFrom:
+    """The operator checks the original before acting on a derivative, which
+    is the right instinct — so the contract address has to be there, and the
+    idea has to be a step away from it rather than the same token again."""
+
+    def test_the_schema_asks_where_it_came_from(self):
+        props = ideas.IDEA_SCHEMA["properties"]["ideas"]["items"]["properties"]
+
+        assert "contract address" in props["derived_from"]["description"]
+        assert "never from memory" in props["derived_from"]["description"]
+
+    def test_a_derivative_must_say_how_it_differs(self):
+        props = ideas.IDEA_SCHEMA["properties"]["ideas"]["items"]["properties"]
+
+        assert "how this is NOT that coin" in props["differs_by"]["description"]
+
+    def test_proposing_an_existing_coin_is_forbidden(self):
+        """The original has the holders, the chart and the head start."""
+        assert "Never propose a coin that already exists" in ideas.SYSTEM_PROMPT
+        assert "head start" in ideas.SYSTEM_PROMPT
+
+    def test_delivery_shows_the_contract_to_check(self):
+        text = ideas.format_for_delivery(
+            {"ideas": [IDEA], "read_of_the_market": "x", "avoid": []}
+        )
+
+        assert "Next to:" in text
+        assert "DoiDmTARKwqsxdDVngWe2NEevBUAGz1h3k9F9iApump" in text
+        assert "Differs:" in text

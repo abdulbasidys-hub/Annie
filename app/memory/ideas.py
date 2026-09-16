@@ -65,6 +65,7 @@ IDEA_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
                 "required": [
                     "name", "ticker", "kind", "angle", "hook",
+                    "derived_from", "differs_by",
                     "why_now", "evidence", "grounding", "risk",
                 ],
                 "properties": {
@@ -107,6 +108,27 @@ IDEA_SCHEMA: dict[str, Any] = {
                         "contradiction, the absurdity, the resemblance, whatever makes "
                         "somebody send it to a friend. If you cannot name the hook, the "
                         "idea is weak and saying so is more useful than dressing it up.",
+                    },
+                    "derived_from": {
+                        "type": "string",
+                        "description": (
+                            "The contract address of the existing coin this is "
+                            "adjacent to, when there is one — copy it exactly from the "
+                            "data you were shown, never from memory. The operator "
+                            "checks the original before acting, so a wrong or invented "
+                            "address is worse than an empty one. Empty string if the "
+                            "idea is not derived from any specific coin."
+                        ),
+                    },
+                    "differs_by": {
+                        "type": "string",
+                        "description": (
+                            "One sentence on how this is NOT that coin. Required "
+                            "whenever derived_from is set. If you cannot name a real "
+                            "difference then you are proposing the same token again, "
+                            "which is worthless — the original already has the "
+                            "holders, the chart and the head start."
+                        ),
                     },
                     "why_now": {
                         "type": "string",
@@ -173,6 +195,14 @@ Rules:
   built on a repeatable catalyst is worth more than one built on a theme
   that merely appears often, because the second tells you what was popular
   and the first tells you what can be caused.
+- **Never propose a coin that already exists.** You are shown what launched
+  and what ran; proposing that same token back is worthless, because the
+  original has the holders, the chart and the head start. Work adjacent to
+  it: the next thing in that direction, the unclaimed corner of the same
+  joke, the format applied to a different subject. When an idea sits next to
+  a real coin, put that coin's contract address in `derived_from` and say in
+  `differs_by` how yours is not it — the operator will go and look at the
+  original before deciding, and that is exactly what they should do.
 - **One of your ideas must be a real meme.** Not a joke, not a branded
   reference, not an advert with a character on it — a meme as the meme
   method defines one: a recognisable image or format, a punchline that lands
@@ -840,6 +870,10 @@ def format_for_delivery(payload: dict[str, Any], *, limit: int = 3) -> str:
         ]
         if idea.get("hook"):
             lines.append(f"· Hook: {idea['hook']}")
+        if idea.get("derived_from"):
+            lines.append(f"· Next to: `{idea['derived_from']}`")
+            if idea.get("differs_by"):
+                lines.append(f"  Differs: {idea['differs_by']}")
         lines += [
             f"· Why now: {idea.get('why_now')}",
             f"· Risk: {idea.get('risk')}",
