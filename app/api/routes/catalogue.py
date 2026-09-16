@@ -23,7 +23,7 @@ from app.db.repo import FirestoreRepo, get_repo
 router = APIRouter()
 
 
-def _themes(name: str | None, symbol: str | None) -> list[str]:
+def _themes(name: str | None, symbol: str | None, description: str | None = None) -> list[str]:
     """Derived on read, never stored.
 
     Themes used to be rows in a per-token ``features`` subcollection — 13 to
@@ -36,7 +36,7 @@ def _themes(name: str | None, symbol: str | None) -> list[str]:
     return sorted(
         {
             f.value
-            for f in extract_all(name, symbol, None)
+            for f in extract_all(name, symbol, description)
             if f.namespace == "token" and f.key == "theme" and f.value
         }
     )
@@ -69,7 +69,7 @@ def _sighting_summary(sighting: Any) -> dict[str, Any]:
             and sighting.market_cap
             and sighting.market_cap < sighting.peak_market_cap * 0.5
         ),
-        "themes": _themes(sighting.name, sighting.symbol),
+        "themes": _themes(sighting.name, sighting.symbol, sighting.description),
         # The researched half. `themes` above are seeded-vocabulary matches
         # against the name; this is what the coin actually was and why anyone
         # bought it. None until the next cycle's research pass reaches it.

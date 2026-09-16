@@ -273,7 +273,17 @@ async def _escalate(mint: str, run: WatchRun, settings) -> None:
 async def enrich_qualified(
     registry: ProviderRegistry, settings: Settings, *, limit: int = 300
 ) -> dict[str, Any]:
-    """Fill in names for qualified tokens that are missing them.
+    """Fill in on-chain metadata — name, description, links.
+
+    No longer restricted to winners. A breakdown of *what is being launched*
+    needs the losers too, and the description is where a token says what it
+    is: categorising from a three-to-eight character ticker returned
+    "uncategorised" for 86 of 96 tokens in the $1M cohort.
+
+    Affordable because the DAS call batches a hundred mints at a time, so the
+    whole day's ~30,000 launches is roughly three hundred requests. Winners
+    are still ordered first, so a backlog costs the long tail rather than the
+    tokens that matter.
 
     Only qualified tokens. Names matter because the signals engine derives
     themes from them, so a winner with no name is a winner that teaches
@@ -335,12 +345,14 @@ async def enrich_qualified(
             db.execute(
                 "UPDATE sightings "
                 "   SET name = COALESCE(?, name), symbol = COALESCE(?, symbol), "
+                "       description = COALESCE(?, description), "
                 "       website = COALESCE(?, website), twitter = COALESCE(?, twitter), "
                 "       telegram = COALESCE(?, telegram), metadata_checked_at = ? "
                 " WHERE mint = ?",
                 (
                     metadata.name,
                     metadata.symbol,
+                    (metadata.description or "")[:2000] or None,
                     metadata.website or links.get("website"),
                     metadata.twitter or links.get("twitter") or links.get("x"),
                     metadata.telegram or links.get("telegram"),

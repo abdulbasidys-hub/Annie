@@ -119,7 +119,7 @@ def _subjects_of(sighting: Sighting) -> set[Subject]:
     rather than anything derivable from the token's text.
     """
     subjects: set[Subject] = set()
-    for feature in extract_all(sighting.name, sighting.symbol, None):
+    for feature in extract_all(sighting.name, sighting.symbol, sighting.description):
         if (feature.namespace, feature.key) in TRACKED:
             subjects.add((feature.namespace, feature.key, feature.value))
     if sighting.launchpad:

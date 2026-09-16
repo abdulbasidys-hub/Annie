@@ -847,7 +847,7 @@ class TestTheDayBoundary:
                      get_settings(), slot=0)
 
         brief = next(text for channel, text in sent if channel == "111")
-        assert brief.startswith("**Daily brief**")
+        assert brief.startswith("**MARKET MEME REPORT | 24H**")
         assert "Annie" not in brief.splitlines()[0]
         assert "UTC" not in brief.splitlines()[0]
 
@@ -865,7 +865,7 @@ class TestTheDayBoundary:
                      get_settings(), slot=12)
 
         brief = next(text for channel, text in sent if channel == "111")
-        assert brief.startswith("**6-hour brief**")
+        assert brief.startswith("**MARKET MEME REPORT | 6H**")
 
     async def test_the_days_ideas_are_actually_sent(self, seeded, monkeypatch):
         """They were generated, written to a memory file, and then posted
@@ -903,7 +903,7 @@ class TestTheDayBoundary:
         ideas_post = next(text for channel, text in sent if channel == "222")
         assert "Launch ideas" in ideas_post
         brief_post = next(text for channel, text in sent if channel == "111")
-        assert "brief" in brief_post.lower()
+        assert "MARKET MEME REPORT" in brief_post
 
     async def test_ideas_still_arrive_when_only_their_own_channel_is_set(
         self, seeded, monkeypatch

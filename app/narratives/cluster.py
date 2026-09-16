@@ -91,7 +91,7 @@ async def run_narrative_clustering(
     # -- Seeded themes: derived in memory, one pass over the cohort. --
     by_theme: dict[str, list[str]] = {}
     for token in tokens:
-        for feature in extract_all(token.name, token.symbol, None):
+        for feature in extract_all(token.name, token.symbol, token.description):
             if feature.namespace == "token" and feature.key == "theme" and feature.value:
                 by_theme.setdefault(feature.value, []).append(token.mint)
 

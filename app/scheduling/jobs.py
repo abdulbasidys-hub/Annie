@@ -272,7 +272,16 @@ async def _deliver_brief(
     stats = ledger.stats()
     day = now.date().isoformat()
 
-    lines = [f"**{label}**", ""]
+    # What is being launched, before what crossed. The launch mix is the
+    # market; the tier-crossers are its tail. A thousand AI coins launching
+    # with two winners and two hundred launching with six look identical in
+    # a winner list and mean opposite things.
+    from app.memory import market_report
+
+    report = market_report.build(window_hours=24 if full_day else 6, now=now)
+    lines = market_report.render(report, label="24H" if full_day else "6H")
+    if not lines:
+        lines = [f"**{label}**", ""]
 
     prose = (learning.get("brief") or learning.get("headline") or "").strip()
     if prose:
@@ -363,6 +372,12 @@ async def _deliver_brief(
             f"{p['site_kind'].replace('_', ' ')} ({p['coins']})" for p in builds[:3]
         )
         lines += [f"**What they shipped:** {shipped}", ""]
+
+    angles = market_report.look_toward(report)
+    if angles:
+        lines.append("**LOOK TOWARD**")
+        lines += [f"· {a}" for a in angles]
+        lines.append("")
 
     lines.append(
         f"_{stats['sightings_24h']:,} launches seen in 24h · "

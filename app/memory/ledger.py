@@ -140,6 +140,9 @@ class Sighting:
     #: When this token's market first existed. Older than the launch window
     #: means it is a revival rather than a launch — see :meth:`is_revival`.
     first_pair_at: str | None = None
+    #: What the launch says it is. The single most useful field for working
+    #: out what kind of coin this is, and it was not being stored.
+    description: str | None = None
 
     @classmethod
     def from_row(cls, row: Any) -> "Sighting":

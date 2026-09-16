@@ -302,6 +302,12 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         # cannot, because a pool opening for a three-year-old coin and a
         # brand-new token look identical to it.
         "first_pair_at": "TEXT",
+        # The token's own description, from its metadata. Categorisation was
+        # reading name and ticker only — a three-to-eight character ticker
+        # and a two-word name — and returning "uncategorised" for 86 of 96
+        # tokens in the $1M cohort. The description is where a launch says
+        # what it actually is, and it was being fetched and discarded.
+        "description": "TEXT",
         "website": "TEXT",
         "twitter": "TEXT",
         "telegram": "TEXT",
