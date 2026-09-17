@@ -592,6 +592,9 @@ async def _housekeeping(
 
     pruned = ledger.prune(ttl_hours=settings.watch_ttl_hours)
     pruned["briefed_dropped"] = coins.prune_briefed()
+    pruned["implausible_scrubbed"] = ledger.scrub_implausible(
+        settings.max_believable_market_cap
+    )
     reindexed = index.sync_if_stale()
 
     # VACUUM rewrites the whole file, so it is worth doing only after a

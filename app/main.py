@@ -337,5 +337,21 @@ async def liveness() -> dict[str, str]:
     A readiness probe that fails during a transient database blip would restart
     a process that is fine. Capability and dependency status live at
     /api/system/health, which is what the UI reads.
+
+    It also reports which commit is serving. That is not decoration: several
+    debugging sessions here were spent reasoning about behaviour from a build
+    that had not deployed yet, and reaching a confident wrong conclusion
+    because there was no way to ask.
     """
-    return {"status": "ok"}
+    import os
+
+    sha = (
+        os.environ.get("RAILWAY_GIT_COMMIT_SHA")
+        or os.environ.get("GIT_COMMIT_SHA")
+        or ""
+    )
+    return {
+        "status": "ok",
+        "commit": sha[:12] or "unknown",
+        "deployed_at": os.environ.get("RAILWAY_DEPLOYMENT_ID", "")[:12] or "unknown",
+    }

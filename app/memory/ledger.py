@@ -732,6 +732,34 @@ def _not_in_clause(mints: list[str]) -> str:
     return f"AND mint NOT IN ({placeholders})"
 
 
+def scrub_implausible(ceiling: float) -> int:
+    """Clear stored market caps that were never real.
+
+    The live guard stops new ones arriving; it cannot undo what is already
+    written, and `peak_market_cap` is a high-water mark that never falls on
+    its own. So MET at $601,898,315,696, ORE at $491bn and HYPE at $350bn
+    stayed at the top of every list, every digest and every idea's evidence
+    long after the reading that produced them was rejected.
+
+    Peak and current are cleared rather than the row deleted: the token
+    exists and its launch is real, only the valuation was arithmetic on an
+    absurd supply. The next honest price re-establishes both.
+    """
+    cursor = db.execute(
+        """
+        UPDATE sightings
+           SET peak_market_cap = NULL,
+               market_cap = CASE WHEN market_cap > ? THEN NULL ELSE market_cap END
+         WHERE peak_market_cap > ?
+        """,
+        (ceiling, ceiling),
+    )
+    cleared = cursor.rowcount or 0
+    if cleared:
+        log.warning("implausible_caps_scrubbed", rows=cleared, ceiling=ceiling)
+    return cleared
+
+
 def prune(
     *, ttl_hours: int = 48, keep_moves_days: int = 400, keep_qualified_days: int = 150
 ) -> dict[str, int]:

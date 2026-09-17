@@ -140,7 +140,11 @@ async def run_discovery_now(
 
 @router.post("/run/watch")
 async def run_watch_now(
-    batch_size: int = Query(300, ge=1, le=1000),
+    # Ceiling raised to match what the scheduled pass actually does. At 1000
+    # this button could not reproduce a real run, so a manual test of the
+    # watch loop silently measured something else — which is how a batch-size
+    # problem stayed invisible while being investigated directly.
+    batch_size: int = Query(900, ge=1, le=20000),
     repo: FirestoreRepo = Depends(get_repo),
     registry: ProviderRegistry = Depends(get_registry),
     settings: Settings = Depends(get_settings),

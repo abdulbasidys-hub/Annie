@@ -261,6 +261,59 @@ class TestImplausibleMarketCaps:
         assert run.newly_qualified == [mint]
 
 
+class TestScrubbingWhatWasAlreadyStored:
+    """The live guard cannot undo history, and peak never falls on its own.
+
+    MET at $601,898,315,696 stayed at the top of every list long after the
+    reading that produced it would have been rejected — which meant the
+    ideas engine was still citing it as evidence.
+    """
+
+    def test_an_impossible_peak_is_cleared(self, isolated_memory):
+        from app.memory import db
+
+        mint = f"Mint{1:040d}"
+        ledger.record_launch(mint=mint, creator="W")
+        db.execute(
+            "UPDATE sightings SET peak_market_cap = ?, market_cap = ? WHERE mint = ?",
+            (601_898_315_696, 601_898_315_696, mint),
+        )
+
+        cleared = ledger.scrub_implausible(10_000_000_000.0)
+
+        assert cleared == 1
+        assert ledger.get_sighting(mint).peak_market_cap is None
+
+    def test_a_real_peak_is_untouched(self, isolated_memory):
+        from app.memory import db
+
+        mint = f"Mint{2:040d}"
+        ledger.record_launch(mint=mint, creator="W")
+        db.execute(
+            "UPDATE sightings SET peak_market_cap = ? WHERE mint = ?", (40_000_000, mint)
+        )
+
+        ledger.scrub_implausible(10_000_000_000.0)
+
+        assert ledger.get_sighting(mint).peak_market_cap == 40_000_000
+
+    def test_the_token_itself_survives(self, isolated_memory):
+        """Only the valuation was wrong. The launch happened."""
+        from app.memory import db
+
+        mint = f"Mint{3:040d}"
+        ledger.record_launch(mint=mint, creator="W", symbol="MET")
+        db.execute(
+            "UPDATE sightings SET peak_market_cap = ? WHERE mint = ?",
+            (601_898_315_696, mint),
+        )
+
+        ledger.scrub_implausible(10_000_000_000.0)
+
+        assert ledger.get_sighting(mint) is not None
+        assert ledger.get_sighting(mint).symbol == "MET"
+
+
 class TestALaunchIsNotARevival:
     """An old coin running again is real, and it is not a launch.
 
