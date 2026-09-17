@@ -202,6 +202,65 @@ class TestWatchLoop:
 
 
 
+class TestImplausibleMarketCaps:
+    """The top of the qualified list read $601,898,315,696.
+
+    Market cap falls back to fully-diluted valuation when the provider omits
+    it, and FDV on a token with an absurd supply is arithmetic rather than
+    value. Those sorted above everything real in every list and every digest,
+    so they were shaping what she believed the market was doing.
+    """
+
+    @staticmethod
+    def _market(mint: str, cap: str):
+        from app.providers.types import MarketQuote, Provenance as P
+
+        class FakeMarket:
+            async def get_quotes(self, mints):
+                return {mint: MarketQuote(
+                    mint=mint,
+                    provenance=P(provider="dexscreener", operation="pair",
+                                 observed_at=datetime.now(timezone.utc)),
+                    market_cap=Decimal(cap), liquidity_usd=Decimal("400000"),
+                    pair_created_at=datetime.now(timezone.utc),
+                )}
+
+        class FakeRegistry:
+            market_primary = FakeMarket()
+
+        return FakeRegistry()
+
+    async def test_a_six_hundred_billion_dollar_memecoin_is_rejected(
+        self, isolated_memory
+    ):
+        from app.config import get_settings
+        from app.pipeline import watch
+
+        stream.ingest_many([_launch(1)])
+        mint = f"Mint{1:040d}"
+
+        run = await watch.run_watch(
+            self._market(mint, "601898315696"), get_settings(), batch_size=5
+        )
+
+        assert run.newly_qualified == []
+        assert ledger.get_sighting(mint).peak_market_cap in (None, 0)
+
+    async def test_a_large_but_real_cap_still_counts(self, isolated_memory):
+        """The ceiling must not quietly delete genuine winners."""
+        from app.config import get_settings
+        from app.pipeline import watch
+
+        stream.ingest_many([_launch(1)])
+        mint = f"Mint{1:040d}"
+
+        run = await watch.run_watch(
+            self._market(mint, "40000000"), get_settings(), batch_size=5
+        )
+
+        assert run.newly_qualified == [mint]
+
+
 class TestALaunchIsNotARevival:
     """An old coin running again is real, and it is not a launch.
 

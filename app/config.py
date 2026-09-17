@@ -254,7 +254,20 @@ class Settings(BaseSettings):
     #: each pass. These go out as batched DexScreener lookups (30 mints per
     #: HTTP request), so 900 is 30 requests, not 900 — see
     #: app/pipeline/watch.py.
-    watch_batch_size: int = 900
+    #: Mints re-priced per watch pass.
+    #:
+    #: 900 was sized when the watchlist was small and it quietly became the
+    #: reason Annie missed most of what crossed a tier. The arithmetic, at
+    #: measured volume: 36,697 launches a day is 1,529 an hour, so ~9,200
+    #: tokens are under six hours old at any moment. At 900 every ten minutes
+    #: each of those is re-checked about every 102 minutes — and a Pump.fun
+    #: coin's entire run is closer to 30. She was sampling the market on a
+    #: cycle longer than the events she was trying to catch.
+    #:
+    #: 9,000 brings that to roughly every 10 minutes. It costs 300 requests
+    #: of the adapter's 4/s budget — about 75 seconds of a 600-second window,
+    #: against the 8 seconds 900 was using. The capacity was always there.
+    watch_batch_size: int = 9000
 
     #: Start the HTTP API only — no bots, no scheduler, no background tasks.
     #: Set by the test suite, and useful in production for running a second
@@ -262,6 +275,15 @@ class Settings(BaseSettings):
     #: each other (Discord in particular tolerates two simultaneous Gateway
     #: connections per token and will deliver the same event to both).
     annie_api_only: bool = False
+
+    #: Above this, a reported market cap is a provider error rather than a
+    #: measurement. Nothing launched on Pump.fun is worth $601 billion, but
+    #: that is what the top of the qualified list said — market cap falls
+    #: back to fully-diluted valuation when the provider omits it, and FDV on
+    #: a token with a quadrillion supply is arithmetic, not value. These sat
+    #: at the top of every list and every digest, so they shaped what she
+    #: thought the market was doing.
+    max_believable_market_cap: float = 10_000_000_000.0
 
     #: The market-cap bar a token must clear to earn its own memory file.
     #:

@@ -123,6 +123,16 @@ async def run_watch(
         market_cap = quote.market_cap or quote.fully_diluted_valuation
         liquidity = quote.liquidity_usd
 
+        # Reject the impossible. A $601bn Pump.fun token is a provider
+        # artefact — market cap falls back to FDV when the provider omits
+        # it, and FDV on an absurd supply is arithmetic rather than value.
+        # Left in, these sorted to the top of every list and every digest,
+        # so they were also shaping what she believed about the market.
+        if market_cap is not None and float(market_cap) > settings.max_believable_market_cap:
+            log.info("implausible_market_cap", mint=mint, reported=float(market_cap))
+            market_cap = None
+            liquidity = None
+
         # The same guard qualification has always applied: a market cap
         # computed from a pool nobody could exit is not a measurement of
         # value. Thin-pool spikes routinely imply eight-figure caps on $400
