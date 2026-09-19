@@ -136,6 +136,9 @@ class TokenMetadata:
     twitter: str | None = None
     telegram: str | None = None
     other_links: dict[str, str] = field(default_factory=dict)
+    #: The off-chain metadata document, where launchpads put the fields the
+    #: indexer does not surface. Fetched separately when it matters.
+    json_uri: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -211,8 +211,12 @@ How to weigh what you are given:
 someone could deliberately build the same setup. A format that can be
 re-used is worth far more than a lucky accident.
 
-The X account is usually the best evidence for *what kind of coin this
-is*. A ticker is three letters and a description is often one line, but what
+The launch post is the best evidence for *what kind of coin this is*. It
+is the sentence the creator chose to announce it with, so read it before
+anything else and let it drive `category`. A description and a ticker often
+say nothing; the post usually places the coin immediately.
+
+Where there is no post, an X account is the next best thing. A ticker is three letters and a description is often one line, but what
 an account is being discussed alongside tends to place it. Use it for
 `category` before falling back to guessing from the name. Remember what you
 are being shown though: search results about the account, not its posts, so
@@ -518,7 +522,11 @@ async def _gather_evidence(
 
 
 def _brief(
-    sighting: Any, evidence: str, site_block: str = "", x_block: str = ""
+    sighting: Any,
+    evidence: str,
+    site_block: str = "",
+    x_block: str = "",
+    post_block: str = "",
 ) -> str:
     from app.memory.rollup import _usd
 
@@ -564,9 +572,20 @@ async def research_one(
     # What the account is being talked about for. This is the best signal
     # available for *what kind of coin this is* — a ticker and a one-line
     # description often do not say, and the account usually does.
-    x_block, x_sources = await sites.read_x(
-        registry, getattr(sighting, "twitter", None)
-    )
+    handle_or_post = getattr(sighting, "twitter", None)
+
+    # The launch post itself, when the metadata linked one rather than a
+    # profile — which on Pump.fun it usually does. This is the single best
+    # signal for what kind of coin this is: it is the sentence the creator
+    # chose to announce it with, and it is readable without paid access
+    # where a profile is not.
+    post = await sites.read_post(handle_or_post)
+    post_block = sites.render_post(post)
+
+    if post.ok:
+        x_block, x_sources = "", []
+    else:
+        x_block, x_sources = await sites.read_x(registry, handle_or_post)
     sources = sources + x_sources
 
     client = await registry.reasoning.raw_client()
@@ -577,7 +596,9 @@ async def research_one(
                 {"role": "system", "content": voice.prefix(SYSTEM_PROMPT)},
                 {
                     "role": "user",
-                    "content": _brief(sighting, evidence, site_block, x_block),
+                    "content": _brief(
+                        sighting, evidence, site_block, x_block, post_block
+                    ),
                 },
             ],
             response_format={

@@ -476,6 +476,13 @@ class HeliusAdapter(HttpProvider):
         links = content.get("links") or {}
         token_info = asset.get("token_info") or {}
 
+        # The indexer surfaces only what it recognises. On a real Pump.fun
+        # token measured 2026-09-19, `links` held nothing but `image`, while
+        # the off-chain document had the description, the website and a link
+        # to the actual launch post. Carrying the URI lets a caller go and
+        # read it rather than concluding the token has no metadata.
+        json_uri = content.get("json_uri")
+
         image_url = links.get("image")
         if not image_url:
             for file in content.get("files") or []:
@@ -515,6 +522,7 @@ class HeliusAdapter(HttpProvider):
             creator_wallet=metaplex_creator,
             website=links.get("external_url"),
             other_links={k: v for k, v in links.items() if isinstance(v, str)},
+            json_uri=json_uri,
         )
 
 

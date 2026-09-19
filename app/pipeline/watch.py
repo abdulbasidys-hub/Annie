@@ -357,6 +357,17 @@ async def enrich_qualified(
             # is not evidence — it was a column that could only ever hold a
             # string nothing would look at.
             links = metadata.other_links or {}
+
+            # The indexer returns only what it recognises, which on a real
+            # Pump.fun token was the image and nothing else. Everything worth
+            # having — the description, the site, the launch post — lives in
+            # the launchpad's own document, so go and read it when the
+            # indexer came back thin.
+            offchain: dict[str, str] = {}
+            if metadata.json_uri and not (metadata.description and metadata.website):
+                from app.memory import sites
+
+                offchain = await sites.read_offchain(metadata.json_uri)
             db.execute(
                 "UPDATE sightings "
                 "   SET name = COALESCE(?, name), symbol = COALESCE(?, symbol), "
@@ -367,9 +378,13 @@ async def enrich_qualified(
                 (
                     metadata.name,
                     metadata.symbol,
-                    (metadata.description or "")[:2000] or None,
-                    metadata.website or links.get("website"),
-                    metadata.twitter or links.get("twitter") or links.get("x"),
+                    (metadata.description or offchain.get("description") or "")[:2000]
+                    or None,
+                    metadata.website or links.get("website") or offchain.get("website"),
+                    metadata.twitter
+                    or links.get("twitter")
+                    or links.get("x")
+                    or offchain.get("twitter"),
                     stamp,
                     mint,
                 ),
