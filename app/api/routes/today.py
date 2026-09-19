@@ -156,3 +156,42 @@ async def today(
         },
         "window_hours": window_hours,
     }
+
+
+@router.get("/market-report")
+async def market_report_endpoint(
+    hours: int = Query(24, ge=1, le=168),
+) -> dict[str, Any]:
+    """What is being launched, and how much of it she can actually read.
+
+    Coverage is the number to watch and the reason this is exposed at all.
+    Themes come from matching words against a seeded vocabulary, so a coin
+    whose theme nobody thought to seed — and a coin with no description at
+    all — both land in the same bucket, and the share that lands there is
+    the honest measure of how much the breakdown is worth.
+    """
+    from app.memory import market_report
+
+    report = market_report.build(window_hours=hours)
+    return {
+        "window_hours": hours,
+        "total_launches": report.total_launches,
+        "categorised": report.categorised,
+        "uncategorised": report.total_launches - report.categorised,
+        "coverage": round(report.coverage, 4),
+        "total_qualified": report.total_qualified,
+        "categories": [
+            {
+                "name": c.name,
+                "launches": c.launches,
+                "qualified": c.qualified,
+                "share": round(c.launches / report.categorised, 4) if report.categorised else 0,
+            }
+            for c in report.categories
+        ],
+        "rising": [
+            {"category": n, "was": round(w, 4), "now": round(x, 4)}
+            for n, w, x in report.rising
+        ],
+        "look_toward": market_report.look_toward(report),
+    }
