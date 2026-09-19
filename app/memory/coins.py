@@ -211,6 +211,14 @@ How to weigh what you are given:
 someone could deliberately build the same setup. A format that can be
 re-used is worth far more than a lucky accident.
 
+The X account is usually the best evidence for *what kind of coin this
+is*. A ticker is three letters and a description is often one line, but what
+an account is being discussed alongside tends to place it. Use it for
+`category` before falling back to guessing from the name. Remember what you
+are being shown though: search results about the account, not its posts, so
+thin results mean the account is new or unremarked rather than that nobody
+cares. Do not read silence as a finding.
+
 You may also be shown the token's own website. Read it as evidence of what
 people are *building* right now, which is a different question from why the
 coin moved and often more useful: the operator is deciding what to ship
@@ -509,7 +517,9 @@ async def _gather_evidence(
     return "\n".join(blocks[: MAX_RESULTS * 2]), sources[: MAX_RESULTS * 2]
 
 
-def _brief(sighting: Any, evidence: str, site_block: str = "") -> str:
+def _brief(
+    sighting: Any, evidence: str, site_block: str = "", x_block: str = ""
+) -> str:
     from app.memory.rollup import _usd
 
     lines = [
@@ -551,13 +561,24 @@ async def research_one(
     site = await sites.read(getattr(sighting, "website", None) or "")
     site_block = sites.render_for_prompt(site)
 
+    # What the account is being talked about for. This is the best signal
+    # available for *what kind of coin this is* — a ticker and a one-line
+    # description often do not say, and the account usually does.
+    x_block, x_sources = await sites.read_x(
+        registry, getattr(sighting, "twitter", None)
+    )
+    sources = sources + x_sources
+
     client = await registry.reasoning.raw_client()
     try:
         response = await client.chat.completions.create(
             model=settings.openai_reasoning_model,
             messages=[
                 {"role": "system", "content": voice.prefix(SYSTEM_PROMPT)},
-                {"role": "user", "content": _brief(sighting, evidence, site_block)},
+                {
+                    "role": "user",
+                    "content": _brief(sighting, evidence, site_block, x_block),
+                },
             ],
             response_format={
                 "type": "json_schema",

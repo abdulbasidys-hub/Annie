@@ -38,6 +38,7 @@ from __future__ import annotations
 import ipaddress
 import re
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -216,3 +217,109 @@ def render_for_prompt(site: SiteRead) -> str:
         f"{site.text}\n"
         "--- end page text ---"
     )
+
+
+# -----------------------------------------------------------------------------
+# X / Twitter
+# -----------------------------------------------------------------------------
+
+_HANDLE = re.compile(
+    r"(?:twitter\.com|x\.com)/(?:#!/)?@?([A-Za-z0-9_]{1,15})(?:[/?#]|$)", re.I
+)
+
+#: Path segments that look like handles and are not.
+_NOT_HANDLES = {
+    "i", "home", "search", "intent", "share", "hashtag", "explore",
+    "messages", "notifications", "settings", "status", "compose",
+}
+
+#: Results per account lookup.
+X_RESULTS = 5
+
+
+def x_handle(url_or_handle: str | None) -> str | None:
+    """The account name from whatever the token's metadata put in that field.
+
+    It arrives as a full URL, a bare @name, or a link to one specific post,
+    so all three are normalised rather than one being assumed.
+    """
+    raw = (url_or_handle or "").strip()
+    if not raw:
+        return None
+
+    if raw.startswith("@"):
+        candidate = raw[1:]
+    else:
+        match = _HANDLE.search(raw)
+        if match:
+            candidate = match.group(1)
+        elif re.fullmatch(r"[A-Za-z0-9_]{1,15}", raw):
+            candidate = raw
+        else:
+            candidate = ""
+
+    candidate = candidate.strip()
+    if not candidate or candidate.lower() in _NOT_HANDLES:
+        return None
+    return candidate
+
+
+async def read_x(registry: Any, url_or_handle: str | None) -> tuple[str, list[str]]:
+    """What the web knows about this token's X account.
+
+    **Not the account itself, and the difference matters.** X serves a
+    JavaScript shell to an unauthenticated fetch: ``x.com/solana`` comes back
+    with meta tags reading "Solana (@solana) on X" and no posts, no bio,
+    nothing. The syndication endpoint that embedded timelines used answers
+    429 to everything. Reading posts directly requires paid API access —
+    measured, not assumed, on 2026-09-19.
+
+    So this searches for the handle and returns what has been indexed:
+    people quoting it, aggregators listing it, the account appearing in a
+    thread. That is weaker than the posts, and it is weakest exactly where it
+    would help most — a launch three hours old that nobody has written about
+    yet looks identical to a launch with no account at all.
+
+    Which is why the two are reported separately rather than collapsed into
+    silence. "Nobody is talking about this" is a finding about the token;
+    "I cannot see X" is a finding about this deployment, and a model handed
+    an empty result will otherwise reach for the first one.
+    """
+    handle = x_handle(url_or_handle)
+    if not handle:
+        return "", []
+
+    try:
+        results = await registry.web_research.search(
+            f'"@{handle}" OR "x.com/{handle}" solana token',
+            max_results=X_RESULTS,
+            recency_days=14,
+        )
+    except Exception:
+        log.info("x_search_failed", handle=handle, exc_info=True)
+        return f"X account @{handle} — the search failed, so this says nothing.", []
+
+    if not results:
+        return (
+            f"X account @{handle} is listed in the token's metadata and "
+            f"nothing about it is indexed. For a launch this recent that is "
+            f"expected, and is not evidence either way."
+        ), []
+
+    blocks: list[str] = []
+    sources: list[str] = []
+    for item in results:
+        url = getattr(item, "url", "") or ""
+        title = getattr(item, "title", "") or ""
+        snippet = (getattr(item, "snippet", "") or "")[:300]
+        published = getattr(item, "published_at", None) or "undated"
+        blocks.append(f"- [{published}] {title} | {url} | {snippet}")
+        if url:
+            sources.append(url)
+
+    header = (
+        f"X account @{handle}. What follows are search results *about* the "
+        f"account rather than its posts — reading posts needs paid API "
+        f"access — so treat thin results as unknown, not as quiet:"
+    )
+    return header + "\n" + "\n".join(blocks), sources

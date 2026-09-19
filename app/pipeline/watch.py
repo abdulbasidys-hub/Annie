@@ -348,16 +348,21 @@ async def enrich_qualified(
         metadata = found.get(mint)
         if metadata is not None and (metadata.name or metadata.symbol):
             # The links come from the same call that gives us the name, so
-            # capturing them here is free. What a launch shipped — a site, an
-            # X account, neither — is evidence about what is working, and it
-            # is unavailable later: these pages go dead within the week.
+            # capturing them is free. What a launch shipped — a site, an X
+            # account, neither — is evidence about what is working, and it is
+            # unavailable later: these pages go dead within the week.
+            #
+            # Telegram is deliberately not captured. Groups are private or
+            # invite-gated, so the link is unreadable, and an unreadable link
+            # is not evidence — it was a column that could only ever hold a
+            # string nothing would look at.
             links = metadata.other_links or {}
             db.execute(
                 "UPDATE sightings "
                 "   SET name = COALESCE(?, name), symbol = COALESCE(?, symbol), "
                 "       description = COALESCE(?, description), "
                 "       website = COALESCE(?, website), twitter = COALESCE(?, twitter), "
-                "       telegram = COALESCE(?, telegram), metadata_checked_at = ? "
+                "       metadata_checked_at = ? "
                 " WHERE mint = ?",
                 (
                     metadata.name,
@@ -365,7 +370,6 @@ async def enrich_qualified(
                     (metadata.description or "")[:2000] or None,
                     metadata.website or links.get("website"),
                     metadata.twitter or links.get("twitter") or links.get("x"),
-                    metadata.telegram or links.get("telegram"),
                     stamp,
                     mint,
                 ),

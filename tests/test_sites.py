@@ -139,3 +139,89 @@ class TestWhatGoesIntoThePrompt:
 
         assert "no readable text" in rendered
         assert "could not be read" not in rendered
+
+
+class TestReadingTheXAccount:
+    """X cannot be read without paid access, measured on 2026-09-19.
+
+    `x.com/solana` returns meta tags saying "Solana (@solana) on X" and no
+    posts, no bio; the syndication endpoint embeds used answers 429 to
+    everything. So this searches for the handle instead, and the honesty
+    about which of those two things it is doing is the point — a model handed
+    an empty result will otherwise conclude nobody is talking about the coin.
+    """
+
+    @staticmethod
+    def _registry(results=None, fail=False):
+        class Search:
+            def __init__(self):
+                self.queries = []
+
+            async def search(self, query, max_results=5, recency_days=None, **kw):
+                self.queries.append(query)
+                if fail:
+                    raise RuntimeError("tavily down")
+                return results or []
+
+        class Reg:
+            web_research = Search()
+
+        return Reg()
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("https://x.com/catlawyer", "catlawyer"),
+            ("https://twitter.com/catlawyer", "catlawyer"),
+            ("@catlawyer", "catlawyer"),
+            ("catlawyer", "catlawyer"),
+            ("https://x.com/catlawyer/status/123", "catlawyer"),
+            ("https://x.com/i/status/9", None),
+            ("", None),
+            (None, None),
+        ],
+    )
+    def test_the_handle_is_found_however_it_was_written(self, raw, expected):
+        assert sites.x_handle(raw) == expected
+
+    async def test_no_account_means_no_lookup(self):
+        registry = self._registry()
+
+        block, srcs = await sites.read_x(registry, None)
+
+        assert block == ""
+        assert registry.web_research.queries == []
+
+    async def test_it_searches_for_the_handle(self):
+        registry = self._registry()
+
+        await sites.read_x(registry, "https://x.com/catlawyer")
+
+        assert "catlawyer" in registry.web_research.queries[0]
+
+    async def test_nothing_indexed_is_reported_as_unknown_not_silence(self):
+        """The distinction that matters. A launch three hours old with no
+        coverage looks identical to one nobody cares about, and only one of
+        those is a finding about the token."""
+        block, _ = await sites.read_x(self._registry(), "@catlawyer")
+
+        assert "not evidence either way" in block
+
+    async def test_results_say_they_are_about_the_account_not_its_posts(self):
+        class R:
+            url = "https://example.com/a"
+            title = "Cat Lawyer is running"
+            snippet = "the courtroom cat coin"
+            published_at = None
+
+        block, srcs = await sites.read_x(self._registry([R()]), "@catlawyer")
+
+        assert "rather than its posts" in block
+        assert "paid API access" in block
+        assert srcs == ["https://example.com/a"]
+
+    async def test_a_failed_search_does_not_raise(self):
+        block, srcs = await sites.read_x(self._registry(fail=True), "@catlawyer")
+
+        assert "says nothing" in block
+        assert srcs == []

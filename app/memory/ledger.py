@@ -136,6 +136,9 @@ class Sighting:
     #: pages go dead within the week.
     website: str | None = None
     twitter: str | None = None
+    #: Retained for rows written before 2026-09-19 and no longer populated:
+    #: Telegram groups are private or invite-gated, so the link was never
+    #: readable and an unreadable link is not evidence.
     telegram: str | None = None
     #: When this token's market first existed. Older than the launch window
     #: means it is a revival rather than a launch — see :meth:`is_revival`.
