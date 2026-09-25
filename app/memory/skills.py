@@ -62,6 +62,11 @@ SKILLS: dict[str, tuple[str, str]] = {
         "06_trading_crypto_market_culture.md",
         "How traders actually talk and what reads as a scam to them.",
     ),
+    "tech-ideas": (
+        "annie-tech-launch-idea-generator.md",
+        "Generating a standalone technology product idea — a thing people "
+        "would use, play or return to, not tech wrapped around a meme.",
+    ),
     "meme-theory": (
         "meme.md",
         "What a meme actually is — recognition, contrast, timing, "
@@ -73,8 +78,8 @@ SKILLS: dict[str, tuple[str, str]] = {
 ROUTES: dict[str, tuple[str, ...]] = {
     # A meme launch. The operator's main use.
     "launch": (
-        "meme-theory", "web3-branding", "meme-naming", "social-copy",
-        "market-culture",
+        "meme-theory", "tech-ideas", "web3-branding", "meme-naming",
+        "social-copy", "market-culture",
     ),
     # Naming alone, when she is asked to iterate on a name or ticker.
     "naming": ("meme-theory", "meme-naming", "market-culture"),

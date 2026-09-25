@@ -84,17 +84,21 @@ IDEA_SCHEMA: dict[str, Any] = {
                     },
                     "kind": {
                         "type": "string",
-                        "enum": ["meme", "narrative", "event"],
+                        "enum": ["meme", "tech", "narrative", "event"],
                         "description": (
                             "What kind of idea this is. `meme` means it rests on an "
                             "actual meme — a recognisable image or format with a "
                             "punchline, that someone would send to a friend without "
                             "being asked to. `narrative` rides a theme that is "
                             "running. `event` is tied to something that just "
-                            "happened. Exactly one of your ideas must be `meme`, and "
-                            "it has to satisfy the meme method: recognition, "
-                            "contrast, timing, remixability. A joke is not a meme "
-                            "and an advert is certainly not."
+                            "happened. `tech` is a product someone would actually "
+                            "use, play or come back to, generated on its own terms "
+                            "rather than as technology wrapped around a meme. "
+                            "Of your three, exactly one must be `meme` and exactly "
+                            "one must be `tech`. The third is free. The meme has to "
+                            "satisfy the meme method — recognition, contrast, "
+                            "timing, remixability — because a joke is not a meme and "
+                            "an advert is certainly not."
                         ),
                     },
                     "angle": {
@@ -203,6 +207,13 @@ Rules:
   a real coin, put that coin's contract address in `derived_from` and say in
   `differs_by` how yours is not it — the operator will go and look at the
   original before deciding, and that is exactly what they should do.
+- **One of your ideas must be a tech idea.** Mark it `kind: "tech"`. It is a
+  product, system or experience that stands on its own — something a person
+  would use, play, explore or come back to even if no token were attached.
+  Generate it independently rather than reaching for technology that serves
+  a meme; "an AI agent that posts about our cat coin" is a meme with a
+  feature bolted on, not a tech idea. The `hook` for one of these is what
+  makes it worth opening twice.
 - **One of your ideas must be a real meme.** Not a joke, not a branded
   reference, not an advert with a character on it — a meme as the meme
   method defines one: a recognisable image or format, a punchline that lands

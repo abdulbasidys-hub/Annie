@@ -397,7 +397,35 @@ class TestOneIdeaIsAlwaysAMeme:
         item = ideas.IDEA_SCHEMA["properties"]["ideas"]["items"]
 
         assert "kind" in item["required"]
-        assert item["properties"]["kind"]["enum"] == ["meme", "narrative", "event"]
+        assert item["properties"]["kind"]["enum"] == [
+            "meme", "tech", "narrative", "event",
+        ]
+
+    def test_one_idea_must_be_tech(self):
+        """A meme and a tech idea are the two compulsory slots; the third is
+        free. Themes cycle but a product that stands on its own does not, so
+        the operator wanted one of each every day."""
+        item = ideas.IDEA_SCHEMA["properties"]["ideas"]["items"]
+
+        assert "tech" in item["properties"]["kind"]["enum"]
+        assert "exactly one must be `tech`" in item["properties"]["kind"]["description"]
+
+    def test_tech_means_standalone_not_a_meme_with_a_feature(self):
+        """"An AI agent that posts about our cat coin" is a meme with
+        technology bolted on, which is the thing the skill exists to rule
+        out."""
+        item = ideas.IDEA_SCHEMA["properties"]["ideas"]["items"]
+
+        assert "wrapped around a meme" in item["properties"]["kind"]["description"]
+        assert "even if no token were attached" in ideas.SYSTEM_PROMPT
+
+    def test_the_tech_skill_is_loaded_for_a_launch(self, isolated_memory):
+        from app.memory import skills
+
+        skills.seed()
+
+        assert "tech-ideas" in skills.ROUTES["launch"]
+        assert "Tech Launch Idea Generator" in skills.for_task("launch")
 
     def test_the_prompt_demands_one_and_forbids_faking_it(self):
         """A mislabelled meme is worse than an honest gap: it hides that the
