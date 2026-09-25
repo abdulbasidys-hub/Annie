@@ -556,7 +556,7 @@ class TestSignals:
         assert db.counters_today().get("firestore_writes", 0) == 0
 
         found = signals.listing(limit=50, include_thin=True)
-        assert any("animal" in (s["value"] or "") or "cat" in (s["name"] or "").lower()
+        assert any("animal_cat" in (s["value"] or "") or "cat" in (s["name"] or "").lower()
                    for s in found), "no theme signal was produced from the names"
 
     def test_thin_samples_are_labelled_not_hidden(self, isolated_memory):
@@ -634,4 +634,6 @@ class TestNarrativeClustering:
 
         assert run.qualified_tokens_scanned == 10
         assert upserted, "clustering produced no narratives from a clearly themed cohort"
-        assert any(n.slug == "animal" for n in upserted), "the seeded animal theme was not matched"
+        assert any(n.slug.startswith("animal") for n in upserted), (
+            "the seeded animal theme was not matched"
+        )

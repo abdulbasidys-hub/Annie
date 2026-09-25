@@ -25,12 +25,30 @@ from dataclasses import dataclass, field
 # Seed vocabulary (§16). Starting points, not the universe.
 # -----------------------------------------------------------------------------
 
+#: The vocabulary the whole launch breakdown is built on.
+#:
+#: Widened from nine themes to forty-odd on 2026-09-25 with the operator's
+#: own list. The nine were a starting point that never grew and were blind
+#: to most of what actually launches — sport, film, food, countries,
+#: religion, cars, anime, crime, nostalgia, none of it had a word — while
+#: "animal" was one bucket for a fifth of the market, so it is now five.
+#:
+#: The original nine are merged rather than replaced. The new list was asked
+#: for as *additions*, so installing it on its own silently deleted
+#: politics, ai and crypto_culture, which were three of the five themes
+#: doing any work at all.
+#:
+#: Matching is whole-word against name, ticker and description, so these are
+#: single lowercase tokens: a phrase can never match, and substrings would
+#: make "cat" fire on "catalog".
+#:
+#: Worth knowing what this alone does not fix. Measured against 200 real
+#: coins on the day it went in, nine themes categorised 11% and forty
+#: categorised 12%. The words were never the binding constraint — most
+#: stored coins had no description for any vocabulary to read, and 13 of
+#: every 20 of them turned out to have one available. The backfill in
+#: app/pipeline/watch.py is the half that matters.
 SEED_THEMES: dict[str, tuple[str, ...]] = {
-    "animal": (
-        "dog", "cat", "shiba", "inu", "doge", "pepe", "frog", "bear", "bull",
-        "monkey", "ape", "wolf", "cow", "duck", "hippo", "penguin", "goat",
-        "rat", "mouse", "fox", "owl", "shark", "whale", "snake", "bird",
-    ),
     "ai": (
         "ai", "gpt", "agent", "neural", "robot", "bot", "llm", "model",
         "singularity", "asi", "agi", "machine", "prompt", "token",
@@ -46,15 +64,260 @@ SEED_THEMES: dict[str, tuple[str, ...]] = {
         "wagmi", "ngmi", "hodl", "rekt", "moon", "lambo", "degen", "ser",
         "gm", "fren", "based", "cope", "jeet", "bags", "ape", "chad",
     ),
-    "gaming": ("game", "play", "quest", "pixel", "arcade", "level", "boss", "loot"),
-    "finance": ("bank", "fed", "rate", "yield", "bond", "dollar", "gold", "usd"),
+    "gaming": (
+        "game", "play", "quest", "pixel", "arcade", "level", "boss", "loot",
+    ),
+    "finance": (
+        "bank", "fed", "rate", "yield", "bond", "dollar", "gold", "usd",
+    ),
     "internet_meme": (
         "wojak", "chad", "sigma", "skibidi", "rizz", "gyatt", "npc", "sus",
         "brainrot", "goon", "mog",
     ),
-    "absurd": ("random", "nothing", "literally", "unemployed", "broke", "sad"),
+    "absurd": (
+        "random", "nothing", "literally", "unemployed", "broke", "sad",
+    ),
+    "animal_dog": (
+        "dog", "doge", "dogecoin", "shib", "shiba", "puppy", "pup", "pupper",
+        "doggo", "woof", "bark", "husky", "beagle", "poodle", "bulldog",
+        "corgi", "terrier", "retriever", "chihuahua", "dalmatian",
+    ),
+    "animal_cat": (
+        "cat", "kitty", "kitten", "kitteh", "meow", "meower", "purr",
+        "feline", "tomcat", "tabby", "siamese", "persian", "panther",
+        "tiger", "leopard", "cheetah", "cougar", "lynx", "pussy", "lion",
+    ),
+    "animal_birds": (
+        "bird", "birb", "chicken", "rooster", "hen", "duck", "goose", "swan",
+        "eagle", "hawk", "falcon", "owl", "parrot", "penguin", "peacock",
+        "pigeon", "crow", "raven", "turkey", "flamingo",
+    ),
+    "animal_aquatic": (
+        "fish", "whale", "shark", "dolphin", "octopus", "squid", "jellyfish",
+        "crab", "lobster", "shrimp", "prawn", "turtle", "tortoise", "seal",
+        "walrus", "otter", "orca", "salmon", "trout", "carp",
+    ),
+    "animal_wild": (
+        "bear", "bunny", "rabbit", "fox", "wolf", "monkey", "ape", "gorilla",
+        "chimp", "elephant", "rhino", "hippo", "giraffe", "zebra", "camel",
+        "deer", "moose", "koala", "panda", "sloth",
+    ),
+    "meme_formats": (
+        "wojak", "pepe", "frog", "trollface", "ragecomic", "nyan",
+        "rickroll", "rickrolled", "stonks", "stonk", "doomer", "bloomer",
+        "coomer", "zoomer", "boomer", "chad", "gigachad", "sigma",
+        "grumpycat", "harlemshake",
+    ),
+    "soccer": (
+        "soccer", "football", "fifa", "goalkeeper", "striker", "midfielder",
+        "defender", "offsides", "offside", "penalty", "freekick",
+        "cornerkick", "tackle", "dribble", "dribbler", "worldcup",
+        "champions", "cleats", "footballer", "goalie",
+    ),
+    "basketball": (
+        "basketball", "nba", "dunk", "dunker", "hoops", "hoop", "layup",
+        "rebound", "dribble", "crossover", "slam", "jordan", "lebron",
+        "curry", "kobe", "lakers", "celtics", "knicks", "warriors",
+    ),
+    "combat_sports": (
+        "boxing", "boxer", "mma", "ufc", "wrestling", "wwe", "fighter",
+        "fighting", "knockout", "ko", "punch", "jab", "uppercut", "hook",
+        "kick", "kicker", "grappler", "grappling", "octagon", "ringside",
+    ),
+    "american_football": (
+        "nfl", "touchdown", "quarterback", "qb", "runningback", "receiver",
+        "linebacker", "cornerback", "halftime", "superbowl", "gridiron",
+        "tackle", "punt", "kicker", "fieldgoal", "endzone", "blitz",
+        "huddle", "helmet", "football",
+    ),
+    "music": (
+        "musician", "singer", "rapper", "rap", "hiphop", "dj", "producer",
+        "album", "single", "mixtape", "concert", "tour", "verse", "chorus",
+        "beat", "bass", "drum", "guitar", "piano", "vocalist",
+    ),
+    "music_genres": (
+        "rock", "metal", "punk", "pop", "jazz", "blues", "country", "reggae",
+        "dancehall", "afrobeats", "afrobeat", "techno", "house", "trance",
+        "disco", "funk", "soul", "rnb", "classical", "opera",
+    ),
+    "film_tv": (
+        "movie", "film", "cinema", "actor", "actress", "hollywood",
+        "bollywood", "netflix", "sitcom", "series", "episode", "season",
+        "trailer", "screenplay", "script", "television", "superhero",
+        "villain", "blockbuster", "director",
+    ),
+    "food": (
+        "pizza", "burger", "hamburger", "fries", "taco", "burrito", "nacho",
+        "sushi", "ramen", "noodle", "pasta", "spaghetti", "lasagna",
+        "sandwich", "hotdog", "donut", "doughnut", "cookie", "cake",
+        "waffle", "pancake", "icecream", "chocolate", "candy", "popcorn",
+    ),
+    "drinks": (
+        "coffee", "espresso", "latte", "cappuccino", "tea", "matcha", "soda",
+        "cola", "coke", "pepsi", "lemonade", "juice", "smoothie",
+        "milkshake", "cocktail", "beer", "wine", "whiskey", "whisky",
+        "vodka", "rum", "tequila", "champagne",
+    ),
+    "countries": (
+        "usa", "america", "american", "canada", "mexico", "brazil",
+        "argentina", "uk", "britain", "england", "france", "germany",
+        "italy", "spain", "portugal", "russia", "ukraine", "china", "japan",
+        "korea", "india", "nigeria", "ghana", "kenya", "egypt", "turkey",
+        "australia",
+    ),
+    "cities": (
+        "newyork", "nyc", "losangeles", "miami", "chicago", "london",
+        "paris", "berlin", "tokyo", "seoul", "mumbai", "delhi", "lagos",
+        "abuja", "dubai", "cairo", "singapore", "toronto", "sydney",
+        "melbourne", "istanbul", "moscow", "kyiv", "lisbon", "johannesburg",
+    ),
+    "religion": (
+        "religion", "religious", "jesus", "christ", "christian",
+        "christianity", "islam", "muslim", "quran", "koran", "allah",
+        "prophet", "muhammad", "mosque", "hindu", "hinduism", "buddha",
+        "buddhist", "shiva", "ganesha", "krishna", "yahweh", "jewish",
+        "judaism", "torah",
+    ),
+    "science": (
+        "atom", "atomic", "molecule", "electron", "proton", "neutron",
+        "quantum", "physics", "chemistry", "dna", "rna", "genome",
+        "genetics", "evolution", "microscope", "laboratory", "cell",
+        "neuron", "gravity", "relativity", "thermodynamics", "particle",
+        "fission", "fusion",
+    ),
+    "space": (
+        "space", "nasa", "astronaut", "cosmos", "cosmic", "galaxy",
+        "universe", "planet", "mars", "lunar", "solar", "star", "asteroid",
+        "comet", "meteor", "meteorite", "rocket", "spacex", "satellite",
+        "orbit", "orbital", "alien", "extraterrestrial", "blackhole",
+    ),
+    "cars": (
+        "car", "automobile", "vehicle", "sedan", "coupe", "suv", "truck",
+        "supercar", "hypercar", "racecar", "racing", "drift", "drifting",
+        "turbo", "engine", "piston", "motor", "garage", "speedway",
+        "formula1", "f1", "nascar", "ferrari", "lamborghini", "porsche",
+        "bmw", "mercedes",
+    ),
+    "transport": (
+        "bus", "train", "railway", "subway", "metro", "tram", "taxi", "uber",
+        "airplane", "aircraft", "airport", "helicopter", "jet", "pilot",
+        "ship", "boat", "yacht", "sailor", "ferry", "cruise", "bicycle",
+        "bike", "motorcycle", "scooter",
+    ),
+    "fitness": (
+        "gym", "workout", "fitness", "bodybuilding", "bodybuilder", "muscle",
+        "protein", "cardio", "yoga", "pilates", "crossfit", "weightlifting",
+        "powerlifting", "calisthenics", "marathon", "sprinting", "jogging",
+        "runner", "treadmill", "dumbbell", "barbell", "squat", "benchpress",
+        "deadlift",
+    ),
+    "occupations": (
+        "doctor", "nurse", "surgeon", "dentist", "teacher", "professor",
+        "student", "farmer", "mechanic", "chef", "cook", "lawyer", "judge",
+        "police", "cop", "firefighter", "soldier", "pilot", "plumber",
+        "electrician", "carpenter", "scientist", "barber", "tailor",
+        "cashier",
+    ),
+    "drugs": (
+        "weed", "marijuana", "cannabis", "thc", "cbd", "joint", "blunt",
+        "420", "stoned", "stoner", "pothead", "cocaine", "coke", "heroin",
+        "meth", "ecstasy", "mdma", "lsd", "acid", "shrooms", "mushroom",
+        "psychedelic", "tripping",
+    ),
+    "dating": (
+        "love", "lover", "dating", "date", "romance", "romantic", "crush",
+        "kiss", "kissing", "kissed", "couple", "boyfriend", "girlfriend",
+        "husband", "wife", "marry", "married", "marriage", "heartbreak",
+        "single", "flirt", "flirting", "valentine", "valentines",
+    ),
+    "nostalgia_retro": (
+        "retro", "nostalgia", "nostalgic", "vintage", "classic", "oldschool",
+        "throwback", "childhood", "y2k", "millennial", "genx", "boomer",
+        "arcade", "cassette", "vhs", "walkman", "pager", "floppy",
+        "diskette", "gameboy", "nintendo", "sega", "atari", "polaroid",
+        "typewriter",
+    ),
+    "conspiracy": (
+        "conspiracy", "illuminati", "freemason", "freemasonry", "deepstate",
+        "shadowgovernment", "newworldorder", "nwo", "chemtrails",
+        "flatearth", "reptilian", "reptilians", "ufo", "alien",
+        "moonlanding", "moonhoax", "area51", "mkultra", "cabal", "coverup",
+    ),
+    "weather": (
+        "weather", "storm", "rain", "rainy", "snow", "snowy", "thunder",
+        "lightning", "hurricane", "tornado", "cyclone", "typhoon",
+        "blizzard", "hail", "flood", "flooding", "drought", "heatwave",
+        "wind", "windy", "cloud", "cloudy", "sunshine", "sunny", "fog",
+        "foggy",
+    ),
+    "disasters": (
+        "earthquake", "tsunami", "volcano", "eruption", "wildfire",
+        "firestorm", "avalanche", "landslide", "mudslide", "sinkhole",
+        "disaster", "catastrophe", "apocalypse", "doomsday", "nuclear",
+        "meltdown", "blackout", "pandemic", "outbreak", "plague",
+    ),
+    "brands": (
+        "mcdonalds", "mcdonald", "burgerking", "starbucks", "cocacola",
+        "coca", "pepsi", "nike", "adidas", "puma", "gucci", "prada",
+        "versace", "rolex", "disney", "marvel", "pokemon", "lego", "tesla",
+        "amazon", "google", "apple", "microsoft", "samsung", "walmart",
+    ),
+    "holidays": (
+        "christmas", "xmas", "halloween", "easter", "thanksgiving",
+        "valentine", "valentines", "newyear", "newyears", "birthday",
+        "anniversary", "hanukkah", "ramadan", "eid", "diwali", "holi",
+        "boxingday", "blackfriday", "cybermonday", "oktoberfest",
+    ),
+    "seasons": (
+        "spring", "summer", "autumn", "fall", "winter", "snow", "beach",
+        "sunshine", "sunny", "snowman", "snowflake", "leaves", "leaf",
+        "harvest", "pumpkin", "pumpkins", "sweater", "wintertime",
+        "springtime", "summertime",
+    ),
+    "luxury": (
+        "luxury", "rich", "wealthy", "millionaire", "billionaire", "yacht",
+        "mansion", "penthouse", "diamond", "diamonds", "gold", "platinum",
+        "lamborghini", "ferrari", "rolex", "cartier", "chanel", "hermes",
+        "versace", "gucci", "prada", "privatejet",
+    ),
+    "crime": (
+        "crime", "criminal", "thief", "thieves", "robber", "robbery",
+        "heist", "hacker", "gangster", "gang", "mafia", "mobster", "mob",
+        "cartel", "druglord", "outlaw", "wanted", "prison", "jail", "police",
+        "detective", "murder", "killer", "assassin",
+    ),
+    "anime_manga": (
+        "anime", "manga", "otaku", "kawaii", "senpai", "sensei", "waifu",
+        "husbando", "nani", "baka", "chibi", "shonen", "shojo", "isekai",
+        "mecha", "cosplay", "naruto", "onepiece", "bleach", "dragonball",
+        "pokemon", "sailormoon", "goku", "vegeta", "luffy", "saitama",
+        "gojo", "tanjiro",
+    ),
+    "fashion": (
+        "fashion", "stylish", "streetwear", "sneaker", "sneakers", "shoes",
+        "heels", "dress", "runway", "model", "designer", "couture", "denim",
+        "jeans", "hoodie", "jacket", "hat", "cap", "purse", "handbag",
+        "clothing", "outfit", "drip", "swag",
+    ),
+    "school": (
+        "school", "college", "university", "campus", "classroom", "student",
+        "teacher", "professor", "homework", "exam", "exams", "quiz",
+        "lecture", "degree", "graduate", "graduation", "principal",
+        "freshman", "sophomore", "junior", "senior", "prom",
+    ),
+    "military": (
+        "military", "army", "navy", "marine", "soldier", "war", "battle",
+        "combat", "weapon", "tank", "missile", "fighterjet", "airforce",
+        "general", "commander", "troop", "troops", "veteran", "commando",
+        "sniper", "ranger", "barracks",
+    ),
+    "pirates_fantasy": (
+        "pirate", "pirates", "piracy", "treasure", "sword", "swordsman",
+        "captain", "shipmate", "buccaneer", "corsair", "viking", "vikings",
+        "dragon", "dragons", "wizard", "witch", "warlock", "knight",
+        "kingdom", "castle", "dungeon", "goblin", "orc", "elf", "troll",
+    ),
 }
-
 #: Words too common to carry meaning in a memecoin name. Started life missing
 #: ordinary filler words ("you", "still", ...) that aren't articles/prepositions
 #: but are just as meaningless as a narrative signal — found 2026-08-25 when a

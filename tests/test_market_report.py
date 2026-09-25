@@ -56,7 +56,7 @@ class TestTheDescriptionIsWhatMakesThisWork:
         themes = {f.value for f in extract_all("LAWCAT", "LAWCAT", CAT) if f.key == "theme"}
 
         assert "uncategorised" not in themes
-        assert "animal" in themes
+        assert "animal_cat" in themes
 
 
 class TestTheBreakdown:
@@ -133,7 +133,7 @@ class TestWhatChanged:
 
         assert report.rising, "a category more than doubling its share was not noticed"
         name, was, now_share = report.rising[0]
-        assert name == "animal"
+        assert name == "animal_cat"
         assert now_share > was
 
     def test_thin_windows_do_not_produce_comparisons(self, isolated_memory):

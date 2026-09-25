@@ -323,10 +323,14 @@ async def enrich_qualified(
     rows = db.query(
         """
         SELECT mint FROM sightings
-         WHERE qualified_at IS NOT NULL
-           AND (name IS NULL OR name = '')
-           AND metadata_checked_at IS NULL
-         ORDER BY qualified_at DESC LIMIT ?
+         WHERE (name IS NULL OR name = '' OR description IS NULL)
+           AND (metadata_checked_at IS NULL OR offchain_checked_at IS NULL)
+         ORDER BY
+            -- Winners first, always. Then everything else young enough to
+            -- still count as "what is being launched right now".
+            CASE WHEN qualified_at IS NOT NULL THEN 0 ELSE 1 END,
+            first_seen DESC
+         LIMIT ?
         """,
         (limit,),
     )
@@ -373,7 +377,7 @@ async def enrich_qualified(
                 "   SET name = COALESCE(?, name), symbol = COALESCE(?, symbol), "
                 "       description = COALESCE(?, description), "
                 "       website = COALESCE(?, website), twitter = COALESCE(?, twitter), "
-                "       metadata_checked_at = ? "
+                "       metadata_checked_at = ?, offchain_checked_at = ? "
                 " WHERE mint = ?",
                 (
                     metadata.name,
@@ -386,14 +390,22 @@ async def enrich_qualified(
                     or links.get("x")
                     or offchain.get("twitter"),
                     stamp,
+                    stamp,
                     mint,
                 ),
             )
             enriched += 1
         else:
+            # Both stamps, or the row comes straight back on the next pass:
+            # the query selects on either being null, and a mint the indexer
+            # has nothing for will never fill a description either. This is
+            # the same failure `mark_checked` prevents in the pricing loop —
+            # the permanently unresolvable crowding out everything real.
             db.execute(
-                "UPDATE sightings SET metadata_checked_at = ? WHERE mint = ?",
-                (stamp, mint),
+                "UPDATE sightings "
+                "   SET metadata_checked_at = ?, offchain_checked_at = ? "
+                " WHERE mint = ?",
+                (stamp, stamp, mint),
             )
 
     log.info("qualified_enriched", enriched=enriched, considered=len(mints))

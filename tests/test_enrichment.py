@@ -114,17 +114,25 @@ class TestItAsksInBatches:
         assert first.name == "Quantum Cat 0"
         assert first.symbol == "QCAT0"
 
-    async def test_it_only_names_tokens_that_cleared_a_tier(self, isolated_memory, settings):
-        """Naming the thousands that never traded is the cost this system
-        exists to avoid."""
-        _qualified(2)
+    async def test_winners_are_named_before_everything_else(
+        self, isolated_memory, settings
+    ):
+        """Scope widened 2026-09-25: a breakdown of *what is being launched*
+        needs the losers too, and the description is where a token says what
+        it is. Affordable because the call batches a hundred mints, so a
+        day's ~32,000 launches is about 320 requests.
+
+        Winners still go first, so a backlog costs the long tail rather than
+        the tokens that matter."""
+        winners = _qualified(2)
         ledger.record_launch(mint="Mint" + "9" * 40, creator="W", launchpad="pumpfun")
         chain = FakeBlockchain()
 
         await watch.enrich_qualified(FakeRegistry(chain), settings)
 
-        assert len(chain.batch_calls[0]) == 2
-        assert not any(m.startswith("Mint999") for m in chain.batch_calls[0])
+        batch = chain.batch_calls[0]
+        assert set(winners) <= set(batch), "a tier-crosser was not enriched"
+        assert batch.index(winners[0]) < batch.index("Mint" + "9" * 40)
 
 
 class TestTokensItCannotResolve:
@@ -143,6 +151,9 @@ class TestTokensItCannotResolve:
         assert first["enriched"] == 1 and first["unresolvable"] == 2
         assert second == {"enriched": 0}, "it asked about the same dead mints again"
 
+        third = await watch.enrich_qualified(FakeRegistry(chain), settings)
+        assert third == {"enriched": 0}, "it never settles"
+
     async def test_a_provider_outage_does_not_stamp_anything(
         self, isolated_memory, settings
     ):
@@ -156,16 +167,43 @@ class TestTokensItCannotResolve:
         chain = FakeBlockchain({m: ("Recovered", "REC") for m in mints})
         assert (await watch.enrich_qualified(FakeRegistry(chain), settings))["enriched"] == 3
 
-    async def test_an_already_named_token_is_not_looked_up_again(
+    async def test_a_fully_read_token_is_not_looked_up_again(
         self, isolated_memory, settings
     ):
+        """Having a name is no longer enough to be finished with — the
+        description is the field categorisation actually needs, and a token
+        named before the launchpad's own document was being read has one
+        available. Both stamps are what say "done"."""
         mints = _qualified(2)
-        db.execute("UPDATE sightings SET name = 'Already' WHERE mint = ?", (mints[0],))
+        db.execute(
+            "UPDATE sightings SET name = 'Already', description = 'a cat', "
+            "       metadata_checked_at = '2026-01-01', offchain_checked_at = '2026-01-01' "
+            " WHERE mint = ?",
+            (mints[0],),
+        )
         chain = FakeBlockchain()
 
         await watch.enrich_qualified(FakeRegistry(chain), settings)
 
         assert chain.batch_calls[0] == [mints[1]]
+
+    async def test_a_named_token_with_no_description_is_revisited(
+        self, isolated_memory, settings
+    ):
+        """The backfill. Thirteen of every twenty stored coins turned out to
+        have a description available that had never been fetched, which is
+        why the launch breakdown could only read 12% of the market."""
+        mints = _qualified(1)
+        db.execute(
+            "UPDATE sightings SET name = 'Already', metadata_checked_at = '2026-01-01' "
+            " WHERE mint = ?",
+            (mints[0],),
+        )
+        chain = FakeBlockchain()
+
+        await watch.enrich_qualified(FakeRegistry(chain), settings)
+
+        assert mints[0] in chain.batch_calls[0]
 
 
 class TestTheColumnsThisNeeds:

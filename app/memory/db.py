@@ -308,6 +308,13 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         # tokens in the $1M cohort. The description is where a launch says
         # what it actually is, and it was being fetched and discarded.
         "description": "TEXT",
+        # Whether the launchpad's own metadata document has been read, as
+        # opposed to the indexer's summary of it. Separate from
+        # metadata_checked_at because that was already set on every row
+        # written before the document was being read at all — so without
+        # this, the coins whose descriptions were missed could never be
+        # revisited, and 13 of every 20 of them do have one.
+        "offchain_checked_at": "TEXT",
         "website": "TEXT",
         "twitter": "TEXT",
         "telegram": "TEXT",
